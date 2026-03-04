@@ -1,0 +1,8 @@
+{
+  "clause_id": "C-MIB-STORE",
+  "title": "Internal MIB Store",
+  "kind": "normative",
+  "status": "active",
+  "text": "The library MUST maintain an internal MIB store that holds all OID-to-value mappings. The store MUST preserve lexicographic ordering of OIDs to support efficient GETNEXT and GETBULK traversal.\n\nThe library MUST expose a public method on `Agent` to set a single OID's value. The method MUST use upsert semantics: if the OID already exists in the store, its value is updated; if it does not exist, a new entry is created.\n\nThe set method MUST be safe to call from any thread. The method MUST NOT require `&mut self`.\n\nInbound SNMP requests MUST be resolved against the internal MIB store.\n\nThe library MUST NOT expose any public API for removing OID entries from the store.\n\n**Rationale:**\nA push model where the application updates a library-owned MIB store is simpler to integrate than a pull model with a callback trait. The application controls when values change, and the library always has a consistent snapshot to serve. Thread-safe access via `&self` allows the application to update MIB values from any context (e.g. a synchronous monitoring loop). Lexicographic ordering is required by GETNEXT and GETBULK to walk the MIB tree efficiently.",
+  "since": "0.1.0"
+}

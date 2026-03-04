@@ -1,0 +1,15 @@
+[govctl]
+schema = 1
+id = "ADR-0019"
+title = "arch: Logging and observability"
+status = "proposed"
+date = "2026-03-04"
+refs = [
+    "RFC-0001",
+    "ADR-0009",
+]
+
+[content]
+context = "Multiple components need to emit diagnostic information: parse errors (ADR-0009), DTLS handshake events, session lifecycle, MIB updates, trap delivery. A logging framework choice and level policy are needed."
+decision = "TBD"
+consequences = "TBD"

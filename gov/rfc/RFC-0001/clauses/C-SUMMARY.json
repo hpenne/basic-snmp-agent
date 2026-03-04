@@ -1,0 +1,8 @@
+{
+  "clause_id": "C-SUMMARY",
+  "title": "Summary",
+  "kind": "informative",
+  "status": "active",
+  "text": "This RFC specifies the design and behaviour of `basic-snmp-agent`, a Rust library crate implementing an SNMPv3 agent over DTLS.\n\n**Scope:** Covers the library crate structure, DTLS transport, X.509 certificate authentication, inbound request handling (GET, GETNEXT, GETBULK), the internal MIB store with application-driven updates, and outbound trap sending. SNMPv1, SNMPv2c, USM, SET handling beyond error responses, MIB compilation, and SNMP Inform notifications are out of scope.\n\n**Rationale:** A library crate allows embedding applications to instrument themselves without running a separate agent process. SNMPv3 with DTLS provides strong, certificate-based security without the weaknesses of community strings. A push-based internal MIB store gives the application full control over when values change while keeping the library's request path simple and lock-free from the application's perspective.",
+  "since": "0.1.0"
+}

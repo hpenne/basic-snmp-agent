@@ -1,0 +1,23 @@
+[govctl]
+schema = 1
+id = "ADR-0012"
+title = "arch: Hand-rolled error types"
+status = "proposed"
+date = "2026-03-04"
+refs = [
+    "RFC-0001",
+    "ADR-0001",
+]
+
+[content]
+context = "Multiple crates need error types: codec for parse errors, transport for I/O and DTLS errors, agent for public API errors. A consistent error handling strategy is needed across the workspace."
+decision = "Define custom error types by hand in each crate. No error-handling crates (thiserror, anyhow, eyre) are used. Each crate defines its own error enum implementing std::fmt::Display and std::error::Error manually. Crate-boundary errors wrap inner errors as the source via std::error::Error::source()."
+consequences = "Zero additional dependencies for error handling. Error types are fully under our control and tailored to each crate's needs. The negative trade-off is more boilerplate per error type (manual Display and Error impls), but the number of error variants is small and the boilerplate is straightforward. Error chains are preserved via source(), so callers can inspect root causes."
+
+[[content.alternatives]]
+text = "thiserror: reduces boilerplate with derive macros but adds a proc-macro dependency for minimal benefit given the small number of error types"
+status = "considered"
+
+[[content.alternatives]]
+text = "anyhow: convenient for applications but inappropriate for a library crate — erases error types and prevents callers from matching on specific errors"
+status = "considered"

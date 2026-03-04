@@ -1,0 +1,23 @@
+[govctl]
+schema = 1
+id = "ADR-0009"
+title = "codec: Field-level parse error granularity"
+status = "proposed"
+date = "2026-03-04"
+refs = [
+    "RFC-0001",
+    "ADR-0005",
+]
+
+[content]
+context = 'When an incoming message fails to parse, the agent silently discards it per RFC-0001:C-TRANSPORT. However, operators need to diagnose why messages are being dropped. Generic "parse failed" errors are insufficient for troubleshooting; the error must identify which specific field caused the failure.'
+decision = 'Parse errors must include sufficient detail to identify the specific message field that failed. The codec crate must produce structured error types that name the field (e.g., "msgVersion", "contextEngineID", "variable-bindings[3].value") and describe the failure reason (e.g., unexpected tag, truncated data, invalid length). These errors are used for logging; the transport layer still silently discards the message on the wire.'
+consequences = "Operators can diagnose parse failures from log output without packet captures. The codec wraps rasn's decode errors with field-path context, adding a thin layer on top of rasn's built-in error reporting. The trade-off is a small amount of extra code in the decode path to annotate errors with field names, but this is straightforward with Rust's error chaining."
+
+[[content.alternatives]]
+text = "Opaque errors (pass through rasn errors directly): less effort but field names in rasn errors may not match SNMP field names, making diagnosis harder"
+status = "considered"
+
+[[content.alternatives]]
+text = "Byte-offset errors: precise but useless without a hex dump of the original message"
+status = "considered"

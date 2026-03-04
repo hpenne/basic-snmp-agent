@@ -1,0 +1,16 @@
+[govctl]
+schema = 1
+id = "ADR-0020"
+title = "agent: SNMPv3 message processing pipeline"
+status = "proposed"
+date = "2026-03-04"
+refs = [
+    "RFC-0001",
+    "ADR-0001",
+    "ADR-0005",
+]
+
+[content]
+context = "C-ENGINE requires contextEngineID and contextName validation with silent discard of mismatches. C-INBOUND defines request dispatch logic. The processing pipeline from raw DTLS payload to SNMP response needs a defined structure: where does message unwrapping, security model handling, context validation, and PDU dispatch occur, and in which crate?"
+decision = "TBD"
+consequences = "TBD"

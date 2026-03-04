@@ -1,0 +1,23 @@
+[govctl]
+schema = 1
+id = "ADR-0006"
+title = "codec: Supported SMI value types"
+status = "proposed"
+date = "2026-03-04"
+refs = [
+    "RFC-0001",
+    "ADR-0001",
+]
+
+[content]
+context = "The MIB store holds OID-to-value mappings, but the RFC does not specify which SNMP value types are supported. The set of supported types determines what monitoring data the application can expose and must be defined before implementation."
+decision = "Support the following SMI value types: Integer32, OctetString, Counter32, Counter64, Gauge32, TimeTicks, IpAddress, Opaque, and ObjectIdentifier. These cover the standard SMIv2 types defined in RFC 2578 and are sufficient for typical monitoring use cases."
+consequences = "The MIB store value type is a Rust enum with these nine variants. This covers the vast majority of SNMP monitoring scenarios. Unsigned32 is intentionally omitted as it is an alias for Gauge32 in SMIv2. Additional types can be added later if needed without breaking the existing API, by extending the enum."
+
+[[content.alternatives]]
+text = "Minimal set (Integer32, OctetString, ObjectIdentifier only): too restrictive for real monitoring — counters and gauges are essential"
+status = "considered"
+
+[[content.alternatives]]
+text = "Full SMIv2 plus extensions: includes BITS, Unsigned32, and textual conventions — adds complexity with little practical benefit for an agent"
+status = "considered"

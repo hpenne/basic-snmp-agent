@@ -1,0 +1,8 @@
+{
+  "clause_id": "C-TRANSPORT",
+  "title": "DTLS Transport",
+  "kind": "normative",
+  "status": "active",
+  "text": "The agent MUST transport all SNMP messages over DTLS as specified in RFC 6353. The initial implementation SHOULD use the `dimpl` crate (version 0.3.0 or later) as the DTLS engine.\n\nThe agent MUST support SNMPv3 only. After DTLS decryption, the agent MUST silently discard any payload that does not decode as a valid SNMPv3 message.\n\nThe agent MUST bind a UDP socket on port 161 by default. It MUST accept a configuration parameter to override the listen address and port.\n\nThe agent MUST support IPv4 and IPv6.\n\nThe agent MUST maintain a DTLS session per peer. The agent MUST handle DTLS handshake, record layer framing, and session teardown using the `dimpl` sans-IO engine integrated with the event loop.\n\n**Rationale:**\nRFC 6353 defines SNMP over DTLS, providing confidentiality and certificate-based peer authentication. Using `dimpl` as a sans-IO state machine allows the DTLS engine to be driven by the event loop without blocking.",
+  "since": "0.1.0"
+}

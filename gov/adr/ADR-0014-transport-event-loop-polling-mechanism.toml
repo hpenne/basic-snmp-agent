@@ -1,0 +1,15 @@
+[govctl]
+schema = 1
+id = "ADR-0014"
+title = "transport: Event loop polling mechanism"
+status = "proposed"
+date = "2026-03-04"
+refs = [
+    "RFC-0001",
+    "ADR-0002",
+]
+
+[content]
+context = "ADR-0002 establishes a single-threaded event loop but does not specify the polling mechanism. The loop must poll the UDP socket, drain command channels, and fire DTLS timers. The choice of mechanism affects CPU usage, latency, and timer precision."
+decision = "TBD"
+consequences = "TBD"

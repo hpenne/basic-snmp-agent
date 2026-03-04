@@ -1,0 +1,15 @@
+[govctl]
+schema = 1
+id = "ADR-0013"
+title = "transport: Certificate storage and runtime replacement"
+status = "proposed"
+date = "2026-03-04"
+refs = [
+    "RFC-0001",
+    "ADR-0002",
+]
+
+[content]
+context = "C-AUTH requires runtime certificate replacement without dropping existing sessions. In-flight handshakes must complete with the material active when they began. This requires a storage and lifecycle strategy for certificate material."
+decision = "TBD"
+consequences = "TBD"
