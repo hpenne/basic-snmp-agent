@@ -5,3 +5,24 @@ version = 4
 [[package]]
 name = "basic-snmp-agent"
 version = "0.1.0"
+dependencies = [
+ "codec",
+ "mib",
+ "transport",
+]
+
+[[package]]
+name = "codec"
+version = "0.1.0"
+
+[[package]]
+name = "mib"
+version = "0.1.0"
+
+[[package]]
+name = "transport"
+version = "0.1.0"
+dependencies = [
+ "codec",
+ "mib",
+]
