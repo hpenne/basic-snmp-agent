@@ -16,6 +16,7 @@ Review for:
 - Security vulnerabilities
 - Test completeness and quality
 - Performance issues
+- Potential technical debt (things that are not 100% and may have to be changed/fixed later).
 
 Output a structured review with: MUST FIX, SHOULD FIX, and SUGGESTIONS sections.
 Be specific — reference file names and line numbers.
