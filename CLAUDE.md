@@ -71,6 +71,7 @@ The project currently has a single binary entry point at `src/main.rs`. As SNMP 
 - Use Rust's type system to enforce correctness and avoid common errors.
 - Document crate and module public APIs with clear and concise (but not too verbose)documentation. Add examples to external APIs.
 - Use "given-when-then" naming and structure for tests (except for simple tests that do not set up any state)
+- Do not duplicate value literals between test setup and assertions. When a test inserts a value and later asserts it was returned, bind the value to a named variable and reference it in both places.
 - Tests may use the "mockall" crate for mocking when this makes tests easier to read.
 - Implement `std::error::Error` for all error types (including internal "kind" enums).
 - Place "impl" blocks immediately after the struct definition.
