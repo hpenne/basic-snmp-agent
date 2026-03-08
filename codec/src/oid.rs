@@ -35,7 +35,7 @@ use std::str::FromStr;
 /// assert_eq!(oid2.to_string(), "2.999");
 /// ```
 // `Vec<u32>` compares lexicographically, component by component, which matches
-// the ASN.1/SNMP OID ordering defined in RFC 2578 §3.1.  The derived `Ord` is
+// the ASN.1/SNMP OID ordering defined in RFC 2578 §3.1. The derived `Ord` is
 // therefore correct and intentional.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Oid(Vec<u32>);
@@ -47,11 +47,59 @@ enum OidErrorKind {
     LeadingDot,
     TrailingDot,
     ConsecutiveDots,
-    LeadingZero { part: String },
+    LeadingZero {
+        part: String,
+    },
     TooFewComponents(usize),
     InvalidFirstArc(u32),
-    InvalidSecondArc { first: u32, second: u32 },
-    InvalidComponent { part: String, source: std::num::ParseIntError },
+    InvalidSecondArc {
+        first: u32,
+        second: u32,
+    },
+    InvalidComponent {
+        part: String,
+        source: std::num::ParseIntError,
+    },
+}
+
+impl fmt::Display for OidErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyString => write!(f, "invalid OID: empty string"),
+            Self::LeadingDot => write!(f, "invalid OID: leading dot"),
+            Self::TrailingDot => write!(f, "invalid OID: trailing dot"),
+            Self::ConsecutiveDots => write!(f, "invalid OID: consecutive dots"),
+            Self::LeadingZero { part } => {
+                write!(f, "invalid OID: component {part:?} has a leading zero")
+            }
+            Self::TooFewComponents(n) => write!(
+                f,
+                "invalid OID: an OID must have at least two components, got {n}"
+            ),
+            Self::InvalidFirstArc(v) => write!(
+                f,
+                "invalid OID: first OID component must be 0, 1, or 2, got {v}"
+            ),
+            Self::InvalidSecondArc { first, second } => write!(
+                f,
+                "invalid OID: second OID component must be \u{2264} 39 when first is {first}, got {second}"
+            ),
+            Self::InvalidComponent { part, source } => {
+                write!(f, "invalid OID: invalid component {part:?}: {source}")
+            }
+        }
+    }
+}
+
+// Expose the wrapped ParseIntError via source() so that error chain
+// walkers can inspect the root cause without parsing the Display output.
+impl std::error::Error for OidErrorKind {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidComponent { source, .. } => Some(source),
+            _ => None,
+        }
+    }
 }
 
 /// Validates OID structural rules, returning an `OidErrorKind` on violation.
@@ -169,41 +217,14 @@ pub struct ParseOidError {
 
 impl fmt::Display for ParseOidError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.kind {
-            OidErrorKind::EmptyString => write!(f, "invalid OID: empty string"),
-            OidErrorKind::LeadingDot => write!(f, "invalid OID: leading dot"),
-            OidErrorKind::TrailingDot => write!(f, "invalid OID: trailing dot"),
-            OidErrorKind::ConsecutiveDots => write!(f, "invalid OID: consecutive dots"),
-            OidErrorKind::LeadingZero { part } => write!(
-                f,
-                "invalid OID: component {part:?} has a leading zero"
-            ),
-            OidErrorKind::TooFewComponents(n) => write!(
-                f,
-                "invalid OID: an OID must have at least two components, got {n}"
-            ),
-            OidErrorKind::InvalidFirstArc(v) => write!(
-                f,
-                "invalid OID: first OID component must be 0, 1, or 2, got {v}"
-            ),
-            OidErrorKind::InvalidSecondArc { first, second } => write!(
-                f,
-                "invalid OID: second OID component must be \u{2264} 39 when first is {first}, got {second}"
-            ),
-            OidErrorKind::InvalidComponent { part, source } => {
-                write!(f, "invalid OID: invalid component {part:?}: {source}")
-            }
-        }
+        self.kind.fmt(f)
     }
 }
 
+// Delegate to OidErrorKind::source() to avoid duplicating the match logic.
 impl std::error::Error for ParseOidError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        if let OidErrorKind::InvalidComponent { source, .. } = &self.kind {
-            Some(source)
-        } else {
-            None
-        }
+        self.kind.source()
     }
 }
 
@@ -257,7 +278,9 @@ impl FromStr for Oid {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.is_empty() {
-            return Err(ParseOidError { kind: OidErrorKind::EmptyString });
+            return Err(ParseOidError {
+                kind: OidErrorKind::EmptyString,
+            });
         }
         // Leading and trailing dot checks are intentionally ordered before the
         // consecutive-dot check.  This means ".." is reported as "leading dot"
@@ -265,13 +288,19 @@ impl FromStr for Oid {
         // "1.." is reported as "trailing dot" rather than "consecutive dots".
         // Each input is described by its first detected problem.
         if s.starts_with('.') {
-            return Err(ParseOidError { kind: OidErrorKind::LeadingDot });
+            return Err(ParseOidError {
+                kind: OidErrorKind::LeadingDot,
+            });
         }
         if s.ends_with('.') {
-            return Err(ParseOidError { kind: OidErrorKind::TrailingDot });
+            return Err(ParseOidError {
+                kind: OidErrorKind::TrailingDot,
+            });
         }
         if s.contains("..") {
-            return Err(ParseOidError { kind: OidErrorKind::ConsecutiveDots });
+            return Err(ParseOidError {
+                kind: OidErrorKind::ConsecutiveDots,
+            });
         }
 
         let components = s
@@ -281,7 +310,9 @@ impl FromStr for Oid {
                 // the behaviour of OpenSSL and Net-SNMP.  A bare "0" is fine.
                 if part.len() > 1 && part.starts_with('0') {
                     return Err(ParseOidError {
-                        kind: OidErrorKind::LeadingZero { part: part.to_string() },
+                        kind: OidErrorKind::LeadingZero {
+                            part: part.to_string(),
+                        },
                     });
                 }
                 part.parse::<u32>().map_err(|source| ParseOidError {
@@ -293,8 +324,7 @@ impl FromStr for Oid {
             })
             .collect::<Result<Vec<u32>, _>>()?;
 
-        validate_oid_components(&components)
-            .map_err(|kind| ParseOidError { kind })?;
+        validate_oid_components(&components).map_err(|kind| ParseOidError { kind })?;
 
         Ok(Self(components))
     }

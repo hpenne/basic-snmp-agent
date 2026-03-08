@@ -71,3 +71,4 @@ The project currently has a single binary entry point at `src/main.rs`. As SNMP 
 - Document crate and module public APIs with clear and concise (but not too verbose)documentation. Add examples to external APIs.
 - Use "given-when-then" naming and structure for tests (except for simple tests that do not set up any state)
 - Tests may use the "mockall" crate for mocking when this makes tests easier to read.
+- Implement `std::error::Error` for all error types (including internal "kind" enums).

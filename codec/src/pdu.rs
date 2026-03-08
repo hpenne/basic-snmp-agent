@@ -9,12 +9,12 @@
 
 use std::fmt;
 
+use rasn_smi::v2::{ApplicationSyntax, Counter64, ObjectSyntax, SimpleSyntax};
 use rasn_snmp::v2::{
     GetBulkRequest as RasnGetBulkRequest, GetNextRequest as RasnGetNextRequest,
     GetRequest as RasnGetRequest, Pdu as RasnPdu, Pdus, Response, SetRequest as RasnSetRequest,
     Trap, VarBind, VarBindValue as RasnVarBindValue,
 };
-use rasn_smi::v2::{ApplicationSyntax, Counter64, ObjectSyntax, SimpleSyntax};
 
 use crate::Oid;
 use crate::Value;
@@ -43,6 +43,8 @@ impl fmt::Display for DecodeErrorKind {
     }
 }
 
+impl std::error::Error for DecodeErrorKind {}
+
 // ── DecodeError ─────────────────────────────────────────────────────────────
 
 /// Error returned when BER-decoding an inbound SNMP PDU fails.
@@ -63,7 +65,10 @@ impl std::error::Error for DecodeError {}
 
 impl DecodeError {
     fn new(kind: DecodeErrorKind, msg: impl Into<String>) -> Self {
-        Self { kind, message: msg.into() }
+        Self {
+            kind,
+            message: msg.into(),
+        }
     }
 
     /// Returns the structured kind of this decode error.
@@ -92,7 +97,9 @@ impl std::error::Error for EncodeError {}
 
 impl EncodeError {
     fn new(msg: impl Into<String>) -> Self {
-        Self { message: msg.into() }
+        Self {
+            message: msg.into(),
+        }
     }
 }
 
@@ -408,22 +415,22 @@ fn value_to_object_syntax(value: &Value) -> ObjectSyntax {
         }
         Value::IpAddress(octets) => {
             let fixed = rasn::types::FixedOctetString::<4>::from(*octets);
-            ObjectSyntax::ApplicationWide(ApplicationSyntax::Address(
-                rasn_smi::v1::IpAddress(fixed),
-            ))
+            ObjectSyntax::ApplicationWide(ApplicationSyntax::Address(rasn_smi::v1::IpAddress(
+                fixed,
+            )))
         }
-        Value::Counter32(n) => ObjectSyntax::ApplicationWide(ApplicationSyntax::Counter(
-            rasn_smi::v1::Counter(*n),
-        )),
+        Value::Counter32(n) => {
+            ObjectSyntax::ApplicationWide(ApplicationSyntax::Counter(rasn_smi::v1::Counter(*n)))
+        }
         Value::Counter64(n) => {
             ObjectSyntax::ApplicationWide(ApplicationSyntax::BigCounter(Counter64(*n)))
         }
-        Value::Gauge32(n) => ObjectSyntax::ApplicationWide(ApplicationSyntax::Unsigned(
-            rasn_smi::v1::Gauge(*n),
-        )),
-        Value::TimeTicks(n) => ObjectSyntax::ApplicationWide(ApplicationSyntax::Ticks(
-            rasn_smi::v1::TimeTicks(*n),
-        )),
+        Value::Gauge32(n) => {
+            ObjectSyntax::ApplicationWide(ApplicationSyntax::Unsigned(rasn_smi::v1::Gauge(*n)))
+        }
+        Value::TimeTicks(n) => {
+            ObjectSyntax::ApplicationWide(ApplicationSyntax::Ticks(rasn_smi::v1::TimeTicks(*n)))
+        }
         Value::Opaque(bytes) => {
             ObjectSyntax::ApplicationWide(ApplicationSyntax::Arbitrary(bytes_to_opaque(bytes)))
         }
@@ -434,14 +441,12 @@ fn value_to_object_syntax(value: &Value) -> ObjectSyntax {
 fn value_from_object_syntax(syntax: ObjectSyntax) -> Result<Value, DecodeError> {
     match syntax {
         ObjectSyntax::Simple(SimpleSyntax::Integer(n)) => {
-            let n: i32 = n.try_into().map_err(|_| {
-                DecodeError::new(DecodeErrorKind::Ber, "Integer32 out of range")
-            })?;
+            let n: i32 = n
+                .try_into()
+                .map_err(|_| DecodeError::new(DecodeErrorKind::Ber, "Integer32 out of range"))?;
             Ok(Value::Integer32(n))
         }
-        ObjectSyntax::Simple(SimpleSyntax::String(bytes)) => {
-            Ok(Value::OctetString(bytes.to_vec()))
-        }
+        ObjectSyntax::Simple(SimpleSyntax::String(bytes)) => Ok(Value::OctetString(bytes.to_vec())),
         ObjectSyntax::Simple(SimpleSyntax::ObjectId(oid)) => {
             Ok(Value::ObjectIdentifier(oid_from_rasn(&oid)?))
         }
@@ -756,13 +761,25 @@ mod tests {
         assert_eq!(ErrorStatus::WrongEncoding.to_string(), "wrongEncoding(9)");
         assert_eq!(ErrorStatus::WrongValue.to_string(), "wrongValue(10)");
         assert_eq!(ErrorStatus::NoCreation.to_string(), "noCreation(11)");
-        assert_eq!(ErrorStatus::InconsistentValue.to_string(), "inconsistentValue(12)");
-        assert_eq!(ErrorStatus::ResourceUnavailable.to_string(), "resourceUnavailable(13)");
+        assert_eq!(
+            ErrorStatus::InconsistentValue.to_string(),
+            "inconsistentValue(12)"
+        );
+        assert_eq!(
+            ErrorStatus::ResourceUnavailable.to_string(),
+            "resourceUnavailable(13)"
+        );
         assert_eq!(ErrorStatus::CommitFailed.to_string(), "commitFailed(14)");
         assert_eq!(ErrorStatus::UndoFailed.to_string(), "undoFailed(15)");
-        assert_eq!(ErrorStatus::AuthorizationError.to_string(), "authorizationError(16)");
+        assert_eq!(
+            ErrorStatus::AuthorizationError.to_string(),
+            "authorizationError(16)"
+        );
         assert_eq!(ErrorStatus::NotWritable.to_string(), "notWritable(17)");
-        assert_eq!(ErrorStatus::InconsistentName.to_string(), "inconsistentName(18)");
+        assert_eq!(
+            ErrorStatus::InconsistentName.to_string(),
+            "inconsistentName(18)"
+        );
     }
 
     // ── GetResponse construction ───────────────────────────────────────────────
@@ -802,7 +819,10 @@ mod tests {
     #[test]
     fn decode_error_display() {
         let err = DecodeError::new(DecodeErrorKind::Ber, "something went wrong");
-        assert_eq!(err.to_string(), "SNMP decode error (BER decode failure): something went wrong");
+        assert_eq!(
+            err.to_string(),
+            "SNMP decode error (BER decode failure): something went wrong"
+        );
     }
 
     #[test]
@@ -947,9 +967,18 @@ mod tests {
             error_status: ErrorStatus::NoError,
             error_index: 0,
             varbinds: vec![
-                Varbind { oid: oid1, value: VarbindValue::NoSuchObject },
-                Varbind { oid: oid2, value: VarbindValue::NoSuchInstance },
-                Varbind { oid: oid3, value: VarbindValue::EndOfMibView },
+                Varbind {
+                    oid: oid1,
+                    value: VarbindValue::NoSuchObject,
+                },
+                Varbind {
+                    oid: oid2,
+                    value: VarbindValue::NoSuchInstance,
+                },
+                Varbind {
+                    oid: oid3,
+                    value: VarbindValue::EndOfMibView,
+                },
             ],
         };
         let bytes = encode_response(&pdu).unwrap();
@@ -986,7 +1015,10 @@ mod tests {
             varbinds: vec![],
         };
         let bytes = encode_response(&pdu).unwrap();
-        assert!(!bytes.is_empty(), "encoded bytes must not be empty even with no varbinds");
+        assert!(
+            !bytes.is_empty(),
+            "encoded bytes must not be empty even with no varbinds"
+        );
 
         // BER-decode back and check varbind count.
         let decoded: Pdus = rasn::ber::decode(&bytes).expect("must decode");
@@ -1022,9 +1054,9 @@ mod tests {
 
         // Encode a GetRequest using rasn-snmp directly, then decode via our function.
         let oid = "1.3.6.1.2.1.1.1.0".parse::<Oid>().unwrap();
-        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(
-            std::borrow::Cow::Owned(oid.as_slice().to_vec()),
-        );
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(std::borrow::Cow::Owned(
+            oid.as_slice().to_vec(),
+        ));
         let get_req = RasnGetRequest(Pdu {
             request_id: 42,
             error_status: 0,
@@ -1054,9 +1086,9 @@ mod tests {
         use rasn_snmp::v2::{GetNextRequest as RasnGetNextRequest, Pdu, VarBind, VarBindValue};
 
         let oid = "1.3.6.1.2.1.1.1.0".parse::<Oid>().unwrap();
-        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(
-            std::borrow::Cow::Owned(oid.as_slice().to_vec()),
-        );
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(std::borrow::Cow::Owned(
+            oid.as_slice().to_vec(),
+        ));
         let req = RasnGetNextRequest(Pdu {
             request_id: 7,
             error_status: 0,
@@ -1077,9 +1109,9 @@ mod tests {
         use rasn_snmp::v2::{BulkPdu, GetBulkRequest as RasnGetBulkRequest, VarBind, VarBindValue};
 
         let oid = "1.3.6.1.2.1.1.1.0".parse::<Oid>().unwrap();
-        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(
-            std::borrow::Cow::Owned(oid.as_slice().to_vec()),
-        );
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(std::borrow::Cow::Owned(
+            oid.as_slice().to_vec(),
+        ));
         let req = RasnGetBulkRequest(BulkPdu {
             request_id: 3,
             non_repeaters: 1,
@@ -1103,13 +1135,13 @@ mod tests {
 
     #[test]
     fn decode_pdu_set_request() {
-        use rasn_snmp::v2::{Pdu, SetRequest as RasnSetRequest, VarBind, VarBindValue};
         use rasn_smi::v2::{ObjectSyntax, SimpleSyntax};
+        use rasn_snmp::v2::{Pdu, SetRequest as RasnSetRequest, VarBind, VarBindValue};
 
         let oid = "1.3.6.1.2.1.1.4.0".parse::<Oid>().unwrap();
-        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(
-            std::borrow::Cow::Owned(oid.as_slice().to_vec()),
-        );
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(std::borrow::Cow::Owned(
+            oid.as_slice().to_vec(),
+        ));
         let req = RasnSetRequest(Pdu {
             request_id: 55,
             error_status: 0,
@@ -1157,7 +1189,10 @@ mod tests {
         let bytes = rasn::ber::encode(&resp).unwrap();
         let result = decode_pdu(&bytes);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind(), &DecodeErrorKind::UnsupportedPduType);
+        assert_eq!(
+            result.unwrap_err().kind(),
+            &DecodeErrorKind::UnsupportedPduType
+        );
     }
 
     // ── EncodeError Display ───────────────────────────────────────────────────
@@ -1167,7 +1202,10 @@ mod tests {
         let err = EncodeError::new("something failed badly");
         let s = err.to_string();
         assert!(s.contains("SNMP encode error"), "missing prefix in: {s}");
-        assert!(s.contains("something failed badly"), "missing message in: {s}");
+        assert!(
+            s.contains("something failed badly"),
+            "missing message in: {s}"
+        );
     }
 
     #[test]
