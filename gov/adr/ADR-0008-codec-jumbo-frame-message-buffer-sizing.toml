@@ -10,9 +10,20 @@ refs = [
 ]
 
 [content]
-context = "The event loop needs a receive buffer for incoming UDP datagrams. SNMP messages are typically small but the RFC does not constrain message size. The agent will not hold many buffers concurrently since it processes messages sequentially on a single thread."
-decision = "Size receive and send buffers to support jumbo frames (9000 bytes). This is the maximum payload of a jumbo Ethernet frame and accommodates any realistic SNMP message, including large GetBulkResponse PDUs."
-consequences = "A single 9000-byte buffer on the stack or event loop struct is trivial in terms of memory. Messages larger than 9000 bytes will be truncated by the UDP recv, which is acceptable since such messages would exceed Ethernet MTU anyway. The buffer is reused for each datagram, so total memory overhead is constant regardless of traffic."
+context = """
+The event loop needs a receive buffer for incoming UDP datagrams.
+SNMP messages are typically small but the RFC does not constrain message size.
+The agent will not hold many buffers concurrently since it processes messages sequentially on a single thread.
+"""
+decision = """
+Size receive and send buffers to support jumbo frames (9000 bytes).
+This is the maximum payload of a jumbo Ethernet frame and accommodates any realistic SNMP message, including large GetBulkResponse PDUs.
+"""
+consequences = """
+A single 9000-byte buffer on the stack or event loop struct is trivial in terms of memory.
+Messages larger than 9000 bytes will be truncated by the UDP recv, which is acceptable since such messages would exceed Ethernet MTU anyway.
+The buffer is reused for each datagram, so total memory overhead is constant regardless of traffic.
+"""
 
 [[content.alternatives]]
 text = "Standard MTU (1500 bytes): safe default but truncates legitimate large responses from GetBulkRequest with many varbinds"

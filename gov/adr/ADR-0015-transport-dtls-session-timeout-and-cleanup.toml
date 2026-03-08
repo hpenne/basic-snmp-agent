@@ -10,6 +10,9 @@ refs = [
 ]
 
 [content]
-context = "ADR-0004 uses a HashMap<SocketAddr, Dtls> for session routing but defers cleanup policy. Without a timeout mechanism, stale sessions from disconnected or NAT-rebound peers accumulate indefinitely."
+context = """
+ADR-0004 uses a HashMap<SocketAddr, Dtls> for session routing but defers cleanup policy.
+Without a timeout mechanism, stale sessions from disconnected or NAT-rebound peers accumulate indefinitely.
+"""
 decision = "TBD"
 consequences = "TBD"

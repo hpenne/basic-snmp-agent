@@ -10,6 +10,9 @@ refs = [
 ]
 
 [content]
-context = "Multiple components need to emit diagnostic information: parse errors (ADR-0009), DTLS handshake events, session lifecycle, MIB updates, trap delivery. A logging framework choice and level policy are needed."
+context = """
+Multiple components need to emit diagnostic information: parse errors (ADR-0009), DTLS handshake events, session lifecycle, MIB updates, trap delivery.
+A logging framework choice and level policy are needed.
+"""
 decision = "TBD"
 consequences = "TBD"

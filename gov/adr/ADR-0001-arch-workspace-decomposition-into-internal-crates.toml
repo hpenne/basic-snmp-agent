@@ -7,7 +7,11 @@ date = "2026-03-04"
 refs = ["RFC-0001"]
 
 [content]
-context = "The RFC specifies a library crate with several distinct concerns: DTLS transport, ASN.1/BER codec, MIB storage, and SNMP protocol logic. Putting everything in a single crate would couple unrelated concerns and make the codebase harder to navigate and test. The project needs a clear decomposition."
+context = """
+The RFC specifies a library crate with several distinct concerns: DTLS transport, ASN.1/BER codec, MIB storage, and SNMP protocol logic.
+Putting everything in a single crate would couple unrelated concerns and make the codebase harder to navigate and test.
+The project needs a clear decomposition.
+"""
 decision = """
 Decompose the project into a Cargo workspace with four internal crates:
 
@@ -17,7 +21,12 @@ Decompose the project into a Cargo workspace with four internal crates:
 - mib: MIB store (OID-to-value map, lexicographic ordering, upsert API).
 
 Dependencies flow inward: basic-snmp-agent depends on transport, codec, and mib. transport depends on codec and mib. codec and mib are independent of each other."""
-consequences = "Each crate can be compiled and tested independently. The dependency graph is acyclic and shallow. The codec and mib crates have no knowledge of transport or networking, making them easy to unit test. The trade-off is slightly more boilerplate (multiple Cargo.toml files, workspace configuration) but this is minimal for four crates."
+consequences = """
+Each crate can be compiled and tested independently.
+The dependency graph is acyclic and shallow.
+The codec and mib crates have no knowledge of transport or networking, making them easy to unit test.
+The trade-off is slightly more boilerplate (multiple Cargo.toml files, workspace configuration) but this is minimal for four crates.
+"""
 
 [[content.alternatives]]
 text = "Single crate with modules: simpler setup but couples all concerns; harder to enforce dependency boundaries"

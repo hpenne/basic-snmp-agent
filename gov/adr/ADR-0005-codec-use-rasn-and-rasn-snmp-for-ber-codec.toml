@@ -10,9 +10,22 @@ refs = [
 ]
 
 [content]
-context = "The codec crate needs an ASN.1/BER library to encode and decode SNMPv3 messages. The library must support BER (not just DER), implicit tagging, and SEQUENCE OF — all required by SNMP. Ideally it should have existing SNMP type definitions to avoid hand-rolling message structures."
-decision = "Use rasn as the ASN.1/BER codec and rasn-snmp for SNMPv3 message type definitions. rasn provides compile-time ASN.1 validation via derive macros, full BER encode/decode, implicit tagging, and no unsafe code. rasn-snmp provides ready-made SNMPv3, SMI, and MIB types covering RFC 3412 and RFC 3416."
-consequences = "We get correct SNMPv3 message parsing and serialization with minimal effort. rasn is a significant dependency but it is well-maintained (~8M downloads) and proven in SNMP use (snmp-sim-rust). The derive macro approach means the compiler catches ASN.1 structural errors at build time. The trade-off is that rasn's API style may not match hand-tuned code, but the reduction in hand-rolled BER logic far outweighs this."
+context = """
+The codec crate needs an ASN.1/BER library to encode and decode SNMPv3 messages.
+The library must support BER (not just DER), implicit tagging, and SEQUENCE OF — all required by SNMP.
+Ideally it should have existing SNMP type definitions to avoid hand-rolling message structures.
+"""
+decision = """
+Use rasn as the ASN.1/BER codec and rasn-snmp for SNMPv3 message type definitions.
+rasn provides compile-time ASN.1 validation via derive macros, full BER encode/decode, implicit tagging, and no unsafe code.
+rasn-snmp provides ready-made SNMPv3, SMI, and MIB types covering RFC 3412 and RFC 3416.
+"""
+consequences = """
+We get correct SNMPv3 message parsing and serialization with minimal effort.
+rasn is a significant dependency but it is well-maintained (~8M downloads) and proven in SNMP use (snmp-sim-rust).
+The derive macro approach means the compiler catches ASN.1 structural errors at build time.
+The trade-off is that rasn's API style may not match hand-tuned code, but the reduction in hand-rolled BER logic far outweighs this.
+"""
 
 [[content.alternatives]]
 text = "snmp-parser (asn1-rs/nom): zero-copy parsing, used in Suricata, but analysis-focused — lacks encoding support needed for building responses"

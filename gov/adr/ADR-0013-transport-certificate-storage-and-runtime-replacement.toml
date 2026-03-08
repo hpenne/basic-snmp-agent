@@ -10,6 +10,10 @@ refs = [
 ]
 
 [content]
-context = "C-AUTH requires runtime certificate replacement without dropping existing sessions. In-flight handshakes must complete with the material active when they began. This requires a storage and lifecycle strategy for certificate material."
+context = """
+C-AUTH requires runtime certificate replacement without dropping existing sessions.
+In-flight handshakes must complete with the material active when they began.
+This requires a storage and lifecycle strategy for certificate material.
+"""
 decision = "TBD"
 consequences = "TBD"

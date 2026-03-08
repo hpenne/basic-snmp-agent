@@ -11,6 +11,9 @@ refs = [
 ]
 
 [content]
-context = "dimpl's sans-IO model emits Output::Timeout(Instant) events requiring the caller to schedule timers and call handle_timeout() when they fire. With multiple concurrent DTLS sessions, the event loop needs a strategy for tracking and firing per-session timers efficiently."
+context = """
+dimpl's sans-IO model emits Output::Timeout(Instant) events requiring the caller to schedule timers and call handle_timeout() when they fire.
+With multiple concurrent DTLS sessions, the event loop needs a strategy for tracking and firing per-session timers efficiently.
+"""
 decision = "TBD"
 consequences = "TBD"

@@ -10,9 +10,22 @@ refs = [
 ]
 
 [content]
-context = "The event loop must route incoming UDP datagrams to the correct Dtls session instance. dimpl uses one Dtls instance per peer and does not provide its own session multiplexing. SNMP managers may be behind NAT, meaning multiple clients can share the same source IP."
-decision = "Maintain a HashMap<SocketAddr, Dtls> to map each peer to its DTLS session. SocketAddr captures both IP address and port, which uniquely identifies a peer even when multiple clients share an IP behind NAT. On receiving a datagram, look up the source SocketAddr; create a new Dtls instance if no session exists."
-consequences = "Each unique (IP, port) pair gets its own DTLS session, correctly handling NAT. If a client's NAT binding changes (new source port), a new DTLS handshake is required. Stale sessions from expired NAT bindings will accumulate unless cleaned up by a timeout mechanism. Session cleanup policy is out of scope for this ADR."
+context = """
+The event loop must route incoming UDP datagrams to the correct Dtls session instance.
+dimpl uses one Dtls instance per peer and does not provide its own session multiplexing.
+SNMP managers may be behind NAT, meaning multiple clients can share the same source IP.
+"""
+decision = """
+Maintain a HashMap<SocketAddr, Dtls> to map each peer to its DTLS session.
+SocketAddr captures both IP address and port, which uniquely identifies a peer even when multiple clients share an IP behind NAT.
+On receiving a datagram, look up the source SocketAddr; create a new Dtls instance if no session exists.
+"""
+consequences = """
+Each unique (IP, port) pair gets its own DTLS session, correctly handling NAT.
+If a client's NAT binding changes (new source port), a new DTLS handshake is required.
+Stale sessions from expired NAT bindings will accumulate unless cleaned up by a timeout mechanism.
+Session cleanup policy is out of scope for this ADR.
+"""
 
 [[content.alternatives]]
 text = "IP-only keying: fails when multiple clients share an IP behind NAT"

@@ -53,9 +53,21 @@ The project currently has a single binary entry point at `src/main.rs`. As SNMP 
 
 ## Coding rules
 
+### govctl ADRs
+
+- Use multi-line strings in the "[content]" section of ADRs. One sentence per line.
+
+### General
+
 - Write clean and neat code to be proud of. Always prefer simple and elegant solutions.
+- Names should be descriptive and allow for local reasoning (code should be self-documenting through naming).
+- Code comments should focus on rationale (the "why", not the "how").
+- Do *NOT* add external dependencies without permission.
+
+### Rust
+
 - Write idiomatic Rust code.
 - Use Rust's type system to enforce correctness and avoid common errors.
-- Names should be descriptive and allow for local reasoning (code should be self-documenting through naming).
 - Document crate and module public APIs with clear and concise (but not too verbose)documentation. Add examples to external APIs.
-- Code comments should focus on rationale (the "why", not the "how").
+- Use "given-when-then" naming and structure for tests (except for simple tests that do not set up any state)
+- Tests may use the "mockall" crate for mocking when this makes tests easier to read.

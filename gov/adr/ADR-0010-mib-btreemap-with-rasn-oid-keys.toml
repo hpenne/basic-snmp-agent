@@ -12,9 +12,22 @@ refs = [
 ]
 
 [content]
-context = "The MIB store must map OIDs to values, preserve lexicographic ordering for GETNEXT/GETBULK traversal, and support upsert. It lives on the event loop thread (ADR-0002) so no synchronization is needed. The store uses rasn's types directly (ADR-0007) and supports 9 SMI value types (ADR-0006)."
-decision = "Use BTreeMap<ObjectIdentifier, Value> where ObjectIdentifier is rasn's type and Value is a Rust enum with the 9 supported SMI variants (Integer32, OctetString, Counter32, Counter64, Gauge32, TimeTicks, IpAddress, Opaque, ObjectIdentifier). BTreeMap provides sorted order natively, O(log n) lookup and upsert, and efficient range queries for GETNEXT/GETBULK via standard library iterators."
-consequences = "The implementation is minimal — BTreeMap is in std and requires no additional dependencies. Using rasn's ObjectIdentifier as the key avoids conversion between OID representations. GETNEXT is a range(Excluded(oid)..).next() call. The BTreeMap is efficient for typical MIB sizes (hundreds to low thousands of entries). The trade-off is that BTreeMap has worse cache locality than a HashMap for point lookups, but GETNEXT/GETBULK traversal benefits from sorted storage, and point lookup performance is not a bottleneck at SNMP throughput levels."
+context = """
+The MIB store must map OIDs to values, preserve lexicographic ordering for GETNEXT/GETBULK traversal, and support upsert.
+It lives on the event loop thread (ADR-0002) so no synchronization is needed.
+The store uses rasn's types directly (ADR-0007) and supports 9 SMI value types (ADR-0006).
+"""
+decision = """
+Use BTreeMap<ObjectIdentifier, Value> where ObjectIdentifier is rasn's type and Value is a Rust enum with the 9 supported SMI variants (Integer32, OctetString, Counter32, Counter64, Gauge32, TimeTicks, IpAddress, Opaque, ObjectIdentifier).
+BTreeMap provides sorted order natively, O(log n) lookup and upsert, and efficient range queries for GETNEXT/GETBULK via standard library iterators.
+"""
+consequences = """
+The implementation is minimal — BTreeMap is in std and requires no additional dependencies.
+Using rasn's ObjectIdentifier as the key avoids conversion between OID representations.
+GETNEXT is a range(Excluded(oid)..).next() call.
+The BTreeMap is efficient for typical MIB sizes (hundreds to low thousands of entries).
+The trade-off is that BTreeMap has worse cache locality than a HashMap for point lookups, but GETNEXT/GETBULK traversal benefits from sorted storage, and point lookup performance is not a bottleneck at SNMP throughput levels.
+"""
 
 [[content.alternatives]]
 text = "HashMap plus sorted Vec: faster point lookups but requires maintaining a separate sorted index for GETNEXT/GETBULK, adding complexity"

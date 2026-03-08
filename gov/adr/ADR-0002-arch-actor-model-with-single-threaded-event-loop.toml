@@ -10,9 +10,25 @@ refs = [
 ]
 
 [content]
-context = "The agent needs an execution model to drive the dimpl DTLS sans-IO state machine, handle UDP I/O, process SNMP requests against the MIB store, and send traps. dimpl uses one Dtls instance per peer and is not Send/Sync, so the execution model must account for this. The agent must also accept MIB updates and trap requests from application threads."
-decision = "Use a single-threaded event loop running on a dedicated OS thread as an actor. The event loop owns the UDP socket, all Dtls session instances, and the MIB store. It polls the UDP socket for incoming datagrams, routes them to the appropriate Dtls instance, drains Dtls output (packets to send, timeouts to schedule, application data to process), and handles SNMP request dispatch. Commands from the application (MIB updates, trap requests, certificate replacements) arrive via channels and are drained between socket polls. No async runtime is used."
-consequences = "No locking is needed for the MIB store or DTLS sessions since they are owned by a single thread. dimpl instances can be used directly without Send/Sync wrappers. The event loop is simple to reason about and debug. The trade-off is that all SNMP processing is sequential, but SNMP workloads are low-throughput so this is acceptable. The application must interact with the agent exclusively through channels, which adds a small amount of latency to MIB updates but keeps the design clean."
+context = """
+The agent needs an execution model to drive the dimpl DTLS sans-IO state machine, handle UDP I/O, process SNMP requests against the MIB store, and send traps.
+dimpl uses one Dtls instance per peer and is not Send/Sync, so the execution model must account for this.
+The agent must also accept MIB updates and trap requests from application threads.
+"""
+decision = """
+Use a single-threaded event loop running on a dedicated OS thread as an actor.
+The event loop owns the UDP socket, all Dtls session instances, and the MIB store.
+It polls the UDP socket for incoming datagrams, routes them to the appropriate Dtls instance, drains Dtls output (packets to send, timeouts to schedule, application data to process), and handles SNMP request dispatch.
+Commands from the application (MIB updates, trap requests, certificate replacements) arrive via channels and are drained between socket polls.
+No async runtime is used.
+"""
+consequences = """
+No locking is needed for the MIB store or DTLS sessions since they are owned by a single thread.
+dimpl instances can be used directly without Send/Sync wrappers.
+The event loop is simple to reason about and debug.
+The trade-off is that all SNMP processing is sequential, but SNMP workloads are low-throughput so this is acceptable.
+The application must interact with the agent exclusively through channels, which adds a small amount of latency to MIB updates but keeps the design clean.
+"""
 
 [[content.alternatives]]
 text = "Tokio with single task: adds async runtime dependency for no benefit given the low-throughput SNMP workload and synchronous dimpl API"

@@ -10,6 +10,9 @@ refs = [
 ]
 
 [content]
-context = "C-CRATE, C-TRANSPORT, C-AUTH, and C-ENGINE all specify construction-time configuration (engine ID, certificates, listen address). The Agent type is the primary public API surface and needs a well-designed construction API."
+context = """
+C-CRATE, C-TRANSPORT, C-AUTH, and C-ENGINE all specify construction-time configuration (engine ID, certificates, listen address).
+The Agent type is the primary public API surface and needs a well-designed construction API.
+"""
 decision = "TBD"
 consequences = "TBD"

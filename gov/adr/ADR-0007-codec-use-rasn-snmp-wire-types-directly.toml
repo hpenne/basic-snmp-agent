@@ -10,9 +10,21 @@ refs = [
 ]
 
 [content]
-context = "SNMPv3 messages contain fields the agent does not need for its operation (e.g., USM security parameters are unused since we use DTLS-TSM). We considered defining lean custom structs that skip unneeded fields, but rasn-snmp already provides complete SNMPv3 type definitions."
-decision = "Use rasn-snmp's SNMPv3 types directly as the wire format for serialization and deserialization. Do not define custom lean structures. Unused fields are simply ignored in application logic. This leverages rasn-snmp's already correct and complete message definitions with zero additional effort."
-consequences = "Parsing and serialization are handled entirely by rasn-snmp with no custom BER logic. Unused fields (e.g., USM security parameters) consume a few extra bytes per message in memory, which is negligible for SNMP's low throughput. The trade-off is a slight coupling to rasn-snmp's type definitions, but this is acceptable given that they directly represent the wire protocol."
+context = """
+SNMPv3 messages contain fields the agent does not need for its operation (e.g., USM security parameters are unused since we use DTLS-TSM).
+We considered defining lean custom structs that skip unneeded fields, but rasn-snmp already provides complete SNMPv3 type definitions.
+"""
+decision = """
+Use rasn-snmp's SNMPv3 types directly as the wire format for serialization and deserialization.
+Do not define custom lean structures.
+Unused fields are simply ignored in application logic.
+This leverages rasn-snmp's already correct and complete message definitions with zero additional effort.
+"""
+consequences = """
+Parsing and serialization are handled entirely by rasn-snmp with no custom BER logic.
+Unused fields (e.g., USM security parameters) consume a few extra bytes per message in memory, which is negligible for SNMP's low throughput.
+The trade-off is a slight coupling to rasn-snmp's type definitions, but this is acceptable given that they directly represent the wire protocol.
+"""
 
 [[content.alternatives]]
 text = "Custom lean structs that skip unused fields: more effort to define and maintain, requires custom BER logic, saves negligible memory"
