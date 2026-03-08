@@ -144,6 +144,14 @@ impl FromStr for Oid {
         let components = s
             .split('.')
             .map(|part| {
+                // Parse first so that non-numeric input (e.g. "0 ") is caught as
+                // InvalidComponent before the leading-zero check ever runs.
+                let value = part.parse::<u32>().map_err(|source| ParseOidError {
+                    kind: OidErrorKind::InvalidComponent {
+                        part: part.to_string(),
+                        source,
+                    },
+                })?;
                 // Reject leading zeros (e.g. "06") as ambiguous; this matches
                 // the behaviour of OpenSSL and Net-SNMP.  A bare "0" is fine.
                 if part.len() > 1 && part.starts_with('0') {
@@ -153,12 +161,7 @@ impl FromStr for Oid {
                         },
                     });
                 }
-                part.parse::<u32>().map_err(|source| ParseOidError {
-                    kind: OidErrorKind::InvalidComponent {
-                        part: part.to_string(),
-                        source,
-                    },
-                })
+                Ok(value)
             })
             .collect::<Result<Vec<u32>, _>>()?;
 
@@ -549,6 +552,18 @@ mod tests {
     fn oid_parse_zero_components_are_valid() {
         // "1.0.0" has bare zero components, which are legitimate.
         assert!("1.0.0".parse::<Oid>().is_ok());
+    }
+
+    // --- Leading-zero vs. invalid-component priority ---
+
+    #[test]
+    fn oid_parse_zero_followed_by_space_reports_invalid_component_not_leading_zero() {
+        let err = "1.3.0 .1".parse::<Oid>().unwrap_err();
+        assert_eq!(err.category(), OidErrorCategory::InvalidComponent);
+        assert!(
+            err.to_string().contains("\"0 \""),
+            "expected offending component in error, got: {err}"
+        );
     }
 
     // --- OidErrorCategory tests ---
