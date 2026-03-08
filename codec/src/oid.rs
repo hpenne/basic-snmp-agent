@@ -40,88 +40,6 @@ use std::str::FromStr;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Oid(Vec<u32>);
 
-/// Structured error kind for OID validation failures.
-#[derive(Debug)]
-enum OidErrorKind {
-    EmptyString,
-    LeadingDot,
-    TrailingDot,
-    ConsecutiveDots,
-    LeadingZero {
-        part: String,
-    },
-    TooFewComponents(usize),
-    InvalidFirstArc(u32),
-    InvalidSecondArc {
-        first: u32,
-        second: u32,
-    },
-    InvalidComponent {
-        part: String,
-        source: std::num::ParseIntError,
-    },
-}
-
-impl fmt::Display for OidErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::EmptyString => write!(f, "invalid OID: empty string"),
-            Self::LeadingDot => write!(f, "invalid OID: leading dot"),
-            Self::TrailingDot => write!(f, "invalid OID: trailing dot"),
-            Self::ConsecutiveDots => write!(f, "invalid OID: consecutive dots"),
-            Self::LeadingZero { part } => {
-                write!(f, "invalid OID: component {part:?} has a leading zero")
-            }
-            Self::TooFewComponents(n) => write!(
-                f,
-                "invalid OID: an OID must have at least two components, got {n}"
-            ),
-            Self::InvalidFirstArc(v) => write!(
-                f,
-                "invalid OID: first OID component must be 0, 1, or 2, got {v}"
-            ),
-            Self::InvalidSecondArc { first, second } => write!(
-                f,
-                "invalid OID: second OID component must be \u{2264} 39 when first is {first}, got {second}"
-            ),
-            Self::InvalidComponent { part, source } => {
-                write!(f, "invalid OID: invalid component {part:?}: {source}")
-            }
-        }
-    }
-}
-
-// Expose the wrapped ParseIntError via source() so that error chain
-// walkers can inspect the root cause without parsing the Display output.
-impl std::error::Error for OidErrorKind {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidComponent { source, .. } => Some(source),
-            _ => None,
-        }
-    }
-}
-
-/// Validates OID structural rules, returning an `OidErrorKind` on violation.
-fn validate_oid_components(components: &[u32]) -> Result<(), OidErrorKind> {
-    if components.len() < 2 {
-        return Err(OidErrorKind::TooFewComponents(components.len()));
-    }
-    let first = components[0];
-    let second = components[1];
-    if first > 2 {
-        return Err(OidErrorKind::InvalidFirstArc(first));
-    }
-    // When first is 0 or 1, the second arc must be <= 39 (X.660).
-    // When first is 2, BER encodes the combined value 40*first+second as a
-    // base-128 variable-length integer (X.690 §8.19.4), so there is no
-    // single-byte limit; any u32 value is valid.
-    if first <= 1 && second > 39 {
-        return Err(OidErrorKind::InvalidSecondArc { first, second });
-    }
-    Ok(())
-}
-
 impl Oid {
     /// Creates an `Oid` from a slice of component values.
     ///
@@ -193,86 +111,6 @@ impl TryFrom<Vec<u32>> for Oid {
     }
 }
 
-impl fmt::Display for Oid {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut iter = self.0.iter();
-        // The construction invariant guarantees at least two components, so
-        // `iter.next()` will never actually return `None`.  The guard is kept
-        // for defensive completeness in case the invariant is ever weakened.
-        if let Some(first) = iter.next() {
-            write!(f, "{first}")?;
-            for component in iter {
-                write!(f, ".{component}")?;
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Error returned when parsing a dotted-decimal OID string fails.
-#[derive(Debug)]
-pub struct ParseOidError {
-    kind: OidErrorKind,
-}
-
-impl fmt::Display for ParseOidError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.kind.fmt(f)
-    }
-}
-
-// Delegate to OidErrorKind::source() to avoid duplicating the match logic.
-impl std::error::Error for ParseOidError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.kind.source()
-    }
-}
-
-/// A fieldless mirror of [`OidErrorKind`] that callers can match on without
-/// inspecting error message strings.
-///
-/// Obtain a value via [`ParseOidError::category`].
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum OidErrorCategory {
-    /// The input string was empty.
-    EmptyString,
-    /// The input string started with a dot.
-    LeadingDot,
-    /// The input string ended with a dot.
-    TrailingDot,
-    /// The input string contained two consecutive dots (`..`).
-    ConsecutiveDots,
-    /// A component had a leading zero (e.g. `"06"`).
-    LeadingZero,
-    /// The OID had fewer than two components.
-    TooFewComponents,
-    /// The first arc was not `0`, `1`, or `2`.
-    InvalidFirstArc,
-    /// The second arc was `> 39` when the first arc was `0` or `1`.
-    InvalidSecondArc,
-    /// A component could not be parsed as a `u32`.
-    InvalidComponent,
-}
-
-impl ParseOidError {
-    /// Returns the [`OidErrorCategory`] for this error, allowing callers to
-    /// distinguish error kinds programmatically without string matching.
-    #[must_use]
-    pub fn category(&self) -> OidErrorCategory {
-        match &self.kind {
-            OidErrorKind::EmptyString => OidErrorCategory::EmptyString,
-            OidErrorKind::LeadingDot => OidErrorCategory::LeadingDot,
-            OidErrorKind::TrailingDot => OidErrorCategory::TrailingDot,
-            OidErrorKind::ConsecutiveDots => OidErrorCategory::ConsecutiveDots,
-            OidErrorKind::LeadingZero { .. } => OidErrorCategory::LeadingZero,
-            OidErrorKind::TooFewComponents(_) => OidErrorCategory::TooFewComponents,
-            OidErrorKind::InvalidFirstArc(_) => OidErrorCategory::InvalidFirstArc,
-            OidErrorKind::InvalidSecondArc { .. } => OidErrorCategory::InvalidSecondArc,
-            OidErrorKind::InvalidComponent { .. } => OidErrorCategory::InvalidComponent,
-        }
-    }
-}
-
 impl FromStr for Oid {
     type Err = ParseOidError;
 
@@ -328,6 +166,168 @@ impl FromStr for Oid {
 
         Ok(Self(components))
     }
+}
+
+impl fmt::Display for Oid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut iter = self.0.iter();
+        // The construction invariant guarantees at least two components, so
+        // `iter.next()` will never actually return `None`.  The guard is kept
+        // for defensive completeness in case the invariant is ever weakened.
+        if let Some(first) = iter.next() {
+            write!(f, "{first}")?;
+            for component in iter {
+                write!(f, ".{component}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Error returned when parsing a dotted-decimal OID string fails.
+#[derive(Debug)]
+pub struct ParseOidError {
+    kind: OidErrorKind,
+}
+
+impl ParseOidError {
+    /// Returns the [`OidErrorCategory`] for this error, allowing callers to
+    /// distinguish error kinds programmatically without string matching.
+    #[must_use]
+    pub fn category(&self) -> OidErrorCategory {
+        match &self.kind {
+            OidErrorKind::EmptyString => OidErrorCategory::EmptyString,
+            OidErrorKind::LeadingDot => OidErrorCategory::LeadingDot,
+            OidErrorKind::TrailingDot => OidErrorCategory::TrailingDot,
+            OidErrorKind::ConsecutiveDots => OidErrorCategory::ConsecutiveDots,
+            OidErrorKind::LeadingZero { .. } => OidErrorCategory::LeadingZero,
+            OidErrorKind::TooFewComponents(_) => OidErrorCategory::TooFewComponents,
+            OidErrorKind::InvalidFirstArc(_) => OidErrorCategory::InvalidFirstArc,
+            OidErrorKind::InvalidSecondArc { .. } => OidErrorCategory::InvalidSecondArc,
+            OidErrorKind::InvalidComponent { .. } => OidErrorCategory::InvalidComponent,
+        }
+    }
+}
+
+impl fmt::Display for ParseOidError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.kind.fmt(f)
+    }
+}
+
+// Delegate to OidErrorKind::source() to avoid duplicating the match logic.
+impl std::error::Error for ParseOidError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.kind.source()
+    }
+}
+
+/// A fieldless mirror of [`OidErrorKind`] that callers can match on without
+/// inspecting error message strings.
+///
+/// Obtain a value via [`ParseOidError::category`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum OidErrorCategory {
+    /// The input string was empty.
+    EmptyString,
+    /// The input string started with a dot.
+    LeadingDot,
+    /// The input string ended with a dot.
+    TrailingDot,
+    /// The input string contained two consecutive dots (`..`).
+    ConsecutiveDots,
+    /// A component had a leading zero (e.g. `"06"`).
+    LeadingZero,
+    /// The OID had fewer than two components.
+    TooFewComponents,
+    /// The first arc was not `0`, `1`, or `2`.
+    InvalidFirstArc,
+    /// The second arc was `> 39` when the first arc was `0` or `1`.
+    InvalidSecondArc,
+    /// A component could not be parsed as a `u32`.
+    InvalidComponent,
+}
+
+/// Structured error kind for OID validation failures.
+#[derive(Debug)]
+enum OidErrorKind {
+    EmptyString,
+    LeadingDot,
+    TrailingDot,
+    ConsecutiveDots,
+    LeadingZero {
+        part: String,
+    },
+    TooFewComponents(usize),
+    InvalidFirstArc(u32),
+    InvalidSecondArc {
+        first: u32,
+        second: u32,
+    },
+    InvalidComponent {
+        part: String,
+        source: std::num::ParseIntError,
+    },
+}
+
+impl fmt::Display for OidErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyString => write!(f, "invalid OID: empty string"),
+            Self::LeadingDot => write!(f, "invalid OID: leading dot"),
+            Self::TrailingDot => write!(f, "invalid OID: trailing dot"),
+            Self::ConsecutiveDots => write!(f, "invalid OID: consecutive dots"),
+            Self::LeadingZero { part } => {
+                write!(f, "invalid OID: component {part:?} has a leading zero")
+            }
+            Self::TooFewComponents(n) => write!(
+                f,
+                "invalid OID: an OID must have at least two components, got {n}"
+            ),
+            Self::InvalidFirstArc(v) => write!(
+                f,
+                "invalid OID: first OID component must be 0, 1, or 2, got {v}"
+            ),
+            Self::InvalidSecondArc { first, second } => write!(
+                f,
+                "invalid OID: second OID component must be ≤ 39 when first is {first}, got {second}"
+            ),
+            Self::InvalidComponent { part, source } => {
+                write!(f, "invalid OID: invalid component {part:?}: {source}")
+            }
+        }
+    }
+}
+
+// Expose the wrapped ParseIntError via source() so that error chain
+// walkers can inspect the root cause without parsing the Display output.
+impl std::error::Error for OidErrorKind {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidComponent { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+/// Validates OID structural rules, returning an `OidErrorKind` on violation.
+fn validate_oid_components(components: &[u32]) -> Result<(), OidErrorKind> {
+    if components.len() < 2 {
+        return Err(OidErrorKind::TooFewComponents(components.len()));
+    }
+    let first = components[0];
+    let second = components[1];
+    if first > 2 {
+        return Err(OidErrorKind::InvalidFirstArc(first));
+    }
+    // When first is 0 or 1, the second arc must be <= 39 (X.660).
+    // When first is 2, BER encodes the combined value 40*first+second as a
+    // base-128 variable-length integer (X.690 §8.19.4), so there is no
+    // single-byte limit; any u32 value is valid.
+    if first <= 1 && second > 39 {
+        return Err(OidErrorKind::InvalidSecondArc { first, second });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

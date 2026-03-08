@@ -19,90 +19,6 @@ use rasn_snmp::v2::{
 use crate::Oid;
 use crate::Value;
 
-// ── DecodeErrorKind ──────────────────────────────────────────────────────────
-
-/// Structured category of a [`DecodeError`], per ADR-0009 (field-level
-/// parse-error granularity).
-#[derive(Debug, PartialEq, Eq)]
-pub enum DecodeErrorKind {
-    /// rasn BER decode failure.
-    Ber,
-    /// PDU type received that is not a recognised inbound type.
-    UnsupportedPduType,
-    /// An OID in a varbind could not be converted.
-    InvalidOid,
-}
-
-impl fmt::Display for DecodeErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Ber => write!(f, "BER decode failure"),
-            Self::UnsupportedPduType => write!(f, "unsupported PDU type"),
-            Self::InvalidOid => write!(f, "invalid OID"),
-        }
-    }
-}
-
-impl std::error::Error for DecodeErrorKind {}
-
-// ── DecodeError ─────────────────────────────────────────────────────────────
-
-/// Error returned when BER-decoding an inbound SNMP PDU fails.
-#[derive(Debug)]
-pub struct DecodeError {
-    kind: DecodeErrorKind,
-    /// Human-readable description of what went wrong.
-    pub message: String,
-}
-
-impl fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "SNMP decode error ({}): {}", self.kind, self.message)
-    }
-}
-
-impl std::error::Error for DecodeError {}
-
-impl DecodeError {
-    fn new(kind: DecodeErrorKind, msg: impl Into<String>) -> Self {
-        Self {
-            kind,
-            message: msg.into(),
-        }
-    }
-
-    /// Returns the structured kind of this decode error.
-    #[must_use]
-    pub fn kind(&self) -> &DecodeErrorKind {
-        &self.kind
-    }
-}
-
-// ── EncodeError ──────────────────────────────────────────────────────────────
-
-/// Error returned when BER-encoding an outbound SNMP PDU fails.
-#[derive(Debug)]
-pub struct EncodeError {
-    /// Human-readable description of what went wrong.
-    pub message: String,
-}
-
-impl fmt::Display for EncodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "SNMP encode error: {}", self.message)
-    }
-}
-
-impl std::error::Error for EncodeError {}
-
-impl EncodeError {
-    fn new(msg: impl Into<String>) -> Self {
-        Self {
-            message: msg.into(),
-        }
-    }
-}
-
 // ── VarbindValue ─────────────────────────────────────────────────────────────
 
 /// The value carried by a single varbind, which may be a concrete `SMIv2`
@@ -292,6 +208,21 @@ pub struct SetRequest {
     pub varbinds: Vec<Varbind>,
 }
 
+// ── InboundPdu ────────────────────────────────────────────────────────────────
+
+/// Union of all PDU types that an SNMP agent may receive from a manager.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InboundPdu {
+    /// A [`GetRequest`].
+    GetRequest(GetRequest),
+    /// A [`GetNextRequest`].
+    GetNextRequest(GetNextRequest),
+    /// A [`GetBulkRequest`].
+    GetBulkRequest(GetBulkRequest),
+    /// A [`SetRequest`].
+    SetRequest(SetRequest),
+}
+
 // ── Outbound PDU structs ──────────────────────────────────────────────────────
 
 /// An `SNMPv2` Response PDU (outbound), used to answer Get/GetNext/GetBulk/Set requests.
@@ -320,20 +251,215 @@ pub struct TrapPdu {
     pub varbinds: Vec<Varbind>,
 }
 
-// ── InboundPdu ────────────────────────────────────────────────────────────────
+// ── decode_pdu ────────────────────────────────────────────────────────────────
 
-/// Union of all PDU types that an SNMP agent may receive from a manager.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum InboundPdu {
-    /// A [`GetRequest`].
-    GetRequest(GetRequest),
-    /// A [`GetNextRequest`].
-    GetNextRequest(GetNextRequest),
-    /// A [`GetBulkRequest`].
-    GetBulkRequest(GetBulkRequest),
-    /// A [`SetRequest`].
-    SetRequest(SetRequest),
+/// BER-decode a raw SNMP PDU byte slice into an [`InboundPdu`].
+///
+/// The bytes must contain a BER-encoded `Pdus` value as defined in RFC 3416.
+/// Only inbound PDU types (`GetRequest`, `GetNextRequest`, `GetBulkRequest`,
+/// `SetRequest`) are accepted; any other PDU type yields a [`DecodeError`].
+///
+/// # Errors
+///
+/// Returns a [`DecodeError`] if the bytes are not valid BER, contain an
+/// unrecognised PDU type, or contain malformed OID or value data.
+///
+/// # Examples
+///
+/// ```no_run
+/// use codec::decode_pdu;
+///
+/// let bytes: &[u8] = &[/* raw BER PDU bytes */];
+/// match decode_pdu(bytes) {
+///     Ok(pdu) => println!("{pdu:?}"),
+///     Err(e) => eprintln!("decode failed: {e}"),
+/// }
+/// ```
+pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
+    let pdus: Pdus = rasn::ber::decode(bytes)
+        .map_err(|e| DecodeError::new(DecodeErrorKind::Ber, format!("BER decode failed: {e}")))?;
+
+    match pdus {
+        Pdus::GetRequest(RasnGetRequest(pdu)) => Ok(InboundPdu::GetRequest(GetRequest {
+            request_id: pdu.request_id,
+            varbinds: varbinds_from_rasn(pdu.variable_bindings)?,
+        })),
+        Pdus::GetNextRequest(RasnGetNextRequest(pdu)) => {
+            Ok(InboundPdu::GetNextRequest(GetNextRequest {
+                request_id: pdu.request_id,
+                varbinds: varbinds_from_rasn(pdu.variable_bindings)?,
+            }))
+        }
+        Pdus::GetBulkRequest(RasnGetBulkRequest(bulk)) => {
+            Ok(InboundPdu::GetBulkRequest(GetBulkRequest {
+                request_id: bulk.request_id,
+                non_repeaters: bulk.non_repeaters,
+                max_repetitions: bulk.max_repetitions,
+                varbinds: varbinds_from_rasn(bulk.variable_bindings)?,
+            }))
+        }
+        Pdus::SetRequest(RasnSetRequest(pdu)) => Ok(InboundPdu::SetRequest(SetRequest {
+            request_id: pdu.request_id,
+            varbinds: varbinds_from_rasn(pdu.variable_bindings)?,
+        })),
+        other => Err(DecodeError::new(
+            DecodeErrorKind::UnsupportedPduType,
+            format!("unexpected outbound PDU type: {other:?}"),
+        )),
+    }
 }
+
+// ── encode_response ───────────────────────────────────────────────────────────
+
+/// BER-encode a [`GetResponse`] PDU for transmission.
+///
+/// Returns the raw BER bytes ready to be wrapped in an `SNMPv3` message.
+///
+/// # Errors
+///
+/// Returns an [`EncodeError`] if `rasn` fails to BER-encode the PDU.
+///
+/// # Examples
+///
+/// ```
+/// use codec::{Oid, Value, ErrorStatus, GetResponse, Varbind, VarbindValue, encode_response};
+///
+/// let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+/// let pdu = GetResponse {
+///     request_id: 1,
+///     error_status: ErrorStatus::NoError,
+///     error_index: 0,
+///     varbinds: vec![Varbind { oid, value: VarbindValue::Value(Value::Integer32(42)) }],
+/// };
+/// let bytes = encode_response(&pdu).unwrap();
+/// assert!(!bytes.is_empty());
+/// ```
+pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
+    let rasn_pdu = Response(RasnPdu {
+        request_id: pdu.request_id,
+        error_status: pdu.error_status as u32,
+        error_index: pdu.error_index,
+        variable_bindings: pdu.varbinds.iter().map(varbind_to_rasn).collect(),
+    });
+    rasn::ber::encode(&rasn_pdu)
+        .map_err(|e| EncodeError::new(format!("BER encoding of GetResponse failed: {e}")))
+}
+
+// ── encode_trap ───────────────────────────────────────────────────────────────
+
+/// BER-encode a [`TrapPdu`] for transmission.
+///
+/// Returns the raw BER bytes ready to be wrapped in an `SNMPv3` message.
+///
+/// # Errors
+///
+/// Returns an [`EncodeError`] if `rasn` fails to BER-encode the PDU.
+///
+/// # Examples
+///
+/// ```
+/// use codec::{Oid, Value, TrapPdu, Varbind, VarbindValue, encode_trap};
+///
+/// let oid: Oid = "1.3.6.1.6.3.1.1.4.1.0".parse().unwrap();
+/// let pdu = TrapPdu {
+///     request_id: 1,
+///     varbinds: vec![Varbind { oid, value: VarbindValue::Value(Value::TimeTicks(0)) }],
+/// };
+/// let bytes = encode_trap(&pdu).unwrap();
+/// assert!(!bytes.is_empty());
+/// ```
+pub fn encode_trap(pdu: &TrapPdu) -> Result<Vec<u8>, EncodeError> {
+    let rasn_pdu = Trap(RasnPdu {
+        request_id: pdu.request_id,
+        error_status: 0,
+        error_index: 0,
+        variable_bindings: pdu.varbinds.iter().map(varbind_to_rasn).collect(),
+    });
+    rasn::ber::encode(&rasn_pdu)
+        .map_err(|e| EncodeError::new(format!("BER encoding of TrapPdu failed: {e}")))
+}
+
+// ── DecodeError ─────────────────────────────────────────────────────────────
+
+/// Error returned when BER-decoding an inbound SNMP PDU fails.
+#[derive(Debug)]
+pub struct DecodeError {
+    kind: DecodeErrorKind,
+    /// Human-readable description of what went wrong.
+    pub message: String,
+}
+
+impl DecodeError {
+    fn new(kind: DecodeErrorKind, msg: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: msg.into(),
+        }
+    }
+
+    /// Returns the structured kind of this decode error.
+    #[must_use]
+    pub fn kind(&self) -> &DecodeErrorKind {
+        &self.kind
+    }
+}
+
+impl fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SNMP decode error ({}): {}", self.kind, self.message)
+    }
+}
+
+impl std::error::Error for DecodeError {}
+
+/// Structured category of a [`DecodeError`], per ADR-0009 (field-level
+/// parse-error granularity).
+#[derive(Debug, PartialEq, Eq)]
+pub enum DecodeErrorKind {
+    /// rasn BER decode failure.
+    Ber,
+    /// PDU type received that is not a recognised inbound type.
+    UnsupportedPduType,
+    /// An OID in a varbind could not be converted.
+    InvalidOid,
+}
+
+impl fmt::Display for DecodeErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ber => write!(f, "BER decode failure"),
+            Self::UnsupportedPduType => write!(f, "unsupported PDU type"),
+            Self::InvalidOid => write!(f, "invalid OID"),
+        }
+    }
+}
+
+impl std::error::Error for DecodeErrorKind {}
+
+// ── EncodeError ──────────────────────────────────────────────────────────────
+
+/// Error returned when BER-encoding an outbound SNMP PDU fails.
+#[derive(Debug)]
+pub struct EncodeError {
+    /// Human-readable description of what went wrong.
+    pub message: String,
+}
+
+impl EncodeError {
+    fn new(msg: impl Into<String>) -> Self {
+        Self {
+            message: msg.into(),
+        }
+    }
+}
+
+impl fmt::Display for EncodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SNMP encode error: {}", self.message)
+    }
+}
+
+impl std::error::Error for EncodeError {}
 
 // ── OID conversions ──────────────────────────────────────────────────────────
 
@@ -516,134 +642,6 @@ fn varbind_from_rasn(varbind: VarBind) -> Result<Varbind, DecodeError> {
 /// Converts a list of rasn-snmp `VarBind`s into our `Vec<Varbind>`.
 fn varbinds_from_rasn(list: Vec<VarBind>) -> Result<Vec<Varbind>, DecodeError> {
     list.into_iter().map(varbind_from_rasn).collect()
-}
-
-// ── decode_pdu ────────────────────────────────────────────────────────────────
-
-/// BER-decode a raw SNMP PDU byte slice into an [`InboundPdu`].
-///
-/// The bytes must contain a BER-encoded `Pdus` value as defined in RFC 3416.
-/// Only inbound PDU types (`GetRequest`, `GetNextRequest`, `GetBulkRequest`,
-/// `SetRequest`) are accepted; any other PDU type yields a [`DecodeError`].
-///
-/// # Errors
-///
-/// Returns a [`DecodeError`] if the bytes are not valid BER, contain an
-/// unrecognised PDU type, or contain malformed OID or value data.
-///
-/// # Examples
-///
-/// ```no_run
-/// use codec::decode_pdu;
-///
-/// let bytes: &[u8] = &[/* raw BER PDU bytes */];
-/// match decode_pdu(bytes) {
-///     Ok(pdu) => println!("{pdu:?}"),
-///     Err(e) => eprintln!("decode failed: {e}"),
-/// }
-/// ```
-pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
-    let pdus: Pdus = rasn::ber::decode(bytes)
-        .map_err(|e| DecodeError::new(DecodeErrorKind::Ber, format!("BER decode failed: {e}")))?;
-
-    match pdus {
-        Pdus::GetRequest(RasnGetRequest(pdu)) => Ok(InboundPdu::GetRequest(GetRequest {
-            request_id: pdu.request_id,
-            varbinds: varbinds_from_rasn(pdu.variable_bindings)?,
-        })),
-        Pdus::GetNextRequest(RasnGetNextRequest(pdu)) => {
-            Ok(InboundPdu::GetNextRequest(GetNextRequest {
-                request_id: pdu.request_id,
-                varbinds: varbinds_from_rasn(pdu.variable_bindings)?,
-            }))
-        }
-        Pdus::GetBulkRequest(RasnGetBulkRequest(bulk)) => {
-            Ok(InboundPdu::GetBulkRequest(GetBulkRequest {
-                request_id: bulk.request_id,
-                non_repeaters: bulk.non_repeaters,
-                max_repetitions: bulk.max_repetitions,
-                varbinds: varbinds_from_rasn(bulk.variable_bindings)?,
-            }))
-        }
-        Pdus::SetRequest(RasnSetRequest(pdu)) => Ok(InboundPdu::SetRequest(SetRequest {
-            request_id: pdu.request_id,
-            varbinds: varbinds_from_rasn(pdu.variable_bindings)?,
-        })),
-        other => Err(DecodeError::new(
-            DecodeErrorKind::UnsupportedPduType,
-            format!("unexpected outbound PDU type: {other:?}"),
-        )),
-    }
-}
-
-// ── encode_response ───────────────────────────────────────────────────────────
-
-/// BER-encode a [`GetResponse`] PDU for transmission.
-///
-/// Returns the raw BER bytes ready to be wrapped in an `SNMPv3` message.
-///
-/// # Errors
-///
-/// Returns an [`EncodeError`] if `rasn` fails to BER-encode the PDU.
-///
-/// # Examples
-///
-/// ```
-/// use codec::{Oid, Value, ErrorStatus, GetResponse, Varbind, VarbindValue, encode_response};
-///
-/// let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
-/// let pdu = GetResponse {
-///     request_id: 1,
-///     error_status: ErrorStatus::NoError,
-///     error_index: 0,
-///     varbinds: vec![Varbind { oid, value: VarbindValue::Value(Value::Integer32(42)) }],
-/// };
-/// let bytes = encode_response(&pdu).unwrap();
-/// assert!(!bytes.is_empty());
-/// ```
-pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
-    let rasn_pdu = Response(RasnPdu {
-        request_id: pdu.request_id,
-        error_status: pdu.error_status as u32,
-        error_index: pdu.error_index,
-        variable_bindings: pdu.varbinds.iter().map(varbind_to_rasn).collect(),
-    });
-    rasn::ber::encode(&rasn_pdu)
-        .map_err(|e| EncodeError::new(format!("BER encoding of GetResponse failed: {e}")))
-}
-
-// ── encode_trap ───────────────────────────────────────────────────────────────
-
-/// BER-encode a [`TrapPdu`] for transmission.
-///
-/// Returns the raw BER bytes ready to be wrapped in an `SNMPv3` message.
-///
-/// # Errors
-///
-/// Returns an [`EncodeError`] if `rasn` fails to BER-encode the PDU.
-///
-/// # Examples
-///
-/// ```
-/// use codec::{Oid, Value, TrapPdu, Varbind, VarbindValue, encode_trap};
-///
-/// let oid: Oid = "1.3.6.1.6.3.1.1.4.1.0".parse().unwrap();
-/// let pdu = TrapPdu {
-///     request_id: 1,
-///     varbinds: vec![Varbind { oid, value: VarbindValue::Value(Value::TimeTicks(0)) }],
-/// };
-/// let bytes = encode_trap(&pdu).unwrap();
-/// assert!(!bytes.is_empty());
-/// ```
-pub fn encode_trap(pdu: &TrapPdu) -> Result<Vec<u8>, EncodeError> {
-    let rasn_pdu = Trap(RasnPdu {
-        request_id: pdu.request_id,
-        error_status: 0,
-        error_index: 0,
-        variable_bindings: pdu.varbinds.iter().map(varbind_to_rasn).collect(),
-    });
-    rasn::ber::encode(&rasn_pdu)
-        .map_err(|e| EncodeError::new(format!("BER encoding of TrapPdu failed: {e}")))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

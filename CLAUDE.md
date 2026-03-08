@@ -59,6 +59,7 @@ The project currently has a single binary entry point at `src/main.rs`. As SNMP 
 
 ### General
 
+- Language: Oxford English
 - Write clean and neat code to be proud of. Always prefer simple and elegant solutions.
 - Names should be descriptive and allow for local reasoning (code should be self-documenting through naming).
 - Code comments should focus on rationale (the "why", not the "how").
@@ -72,3 +73,7 @@ The project currently has a single binary entry point at `src/main.rs`. As SNMP 
 - Use "given-when-then" naming and structure for tests (except for simple tests that do not set up any state)
 - Tests may use the "mockall" crate for mocking when this makes tests easier to read.
 - Implement `std::error::Error` for all error types (including internal "kind" enums).
+- Place "impl" blocks immediately after the struct definition.
+- Keep trait implementations close to the data structure but after the "impl" block.
+- Order code so that a reader starting from the top understands the high-level intent, with details filled in below.
+- Keep Related Things Together: Group related structs, enums, and trait implementations, rather than splitting them arbitrarily across the file.

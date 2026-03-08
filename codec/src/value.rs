@@ -4,18 +4,6 @@ use std::fmt;
 
 use crate::Oid;
 
-/// Formats a byte slice as an uppercase hex string without separators.
-///
-/// Used internally by [`Value::OctetString`] and [`Value::Opaque`] Display impls.
-/// An empty slice intentionally produces an empty string, consistent with
-/// zero-length SNMP OCTET STRING values.
-fn fmt_hex(bytes: &[u8], f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    for byte in bytes {
-        write!(f, "{byte:02X}")?;
-    }
-    Ok(())
-}
-
 /// An `SMIv2` value carried in an SNMP varbind.
 ///
 /// Covers all nine standard `SMIv2` types defined in RFC 2578.
@@ -118,6 +106,18 @@ impl From<&str> for Value {
     fn from(s: &str) -> Self {
         Value::OctetString(s.as_bytes().to_vec())
     }
+}
+
+/// Formats a byte slice as an uppercase hex string without separators.
+///
+/// Used internally by [`Value::OctetString`] and [`Value::Opaque`] Display impls.
+/// An empty slice intentionally produces an empty string, consistent with
+/// zero-length SNMP OCTET STRING values.
+fn fmt_hex(bytes: &[u8], f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    for byte in bytes {
+        write!(f, "{byte:02X}")?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
