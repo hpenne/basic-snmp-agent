@@ -1,2 +1,5 @@
 /target
 .govctl.lock
+/mutants.out/
+/mutants.out.old/
+/.idea

@@ -14,9 +14,10 @@ Review for:
 - Code comments to document the "why" (as opposed to the "how")
 - Correctness and edge cases
 - Security vulnerabilities
-- Test completeness and quality
+- Test completeness and quality: tests should assert specific values (not just `is_ok()` or `is_some()`), cover boundary conditions, and be structured to catch logic mutations
 - Performance issues
-- Potential technical debt (things that are not 100% and may have to be changed/fixed later).
+- Potential technical debt (things that are not 100% and may have to be changed/fixed later)
+- Conformance to CLAUDE.md coding conventions: descriptive names, "why" comments, documented public APIs with examples, no unnecessary complexity, no docstrings or comments added to unchanged code
 
 Output a structured review with: MUST FIX, SHOULD FIX, and SUGGESTIONS sections.
 Be specific — reference file names and line numbers.
