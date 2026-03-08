@@ -11,5 +11,21 @@ refs = [
 
 [content]
 context = "ADR-0002 establishes a single-threaded event loop but does not specify the polling mechanism. The loop must poll the UDP socket, drain command channels, and fire DTLS timers. The choice of mechanism affects CPU usage, latency, and timer precision."
-decision = "TBD"
-consequences = "TBD"
+decision = "Use libc::poll() to multiplex the UDP socket and a self-pipe for command wakeup. The event loop waits on two file descriptors: the UDP socket and the read end of an OS pipe created with pipe(). The Agent handle holds the mpsc::Sender and the write end of the pipe. When the application calls set(), send_trap(), or replace_certs(), it pushes a command to the mpsc channel and writes one byte to the pipe to wake the event loop immediately. The event loop drains the pipe byte(s) and the mpsc channel, processes commands, and sends results back via a std::sync::mpsc channel used as a oneshot. No additional crate dependencies beyond libc (already a transitive dependency)."
+consequences = "Near-instant wakeup on external API calls (set, send_trap, replace_certs) with no polling latency. The event loop blocks in poll() when idle, consuming no CPU. The self-pipe pattern is well-established and portable across Unix platforms. The negative trade-off is platform-specificity: pipe() and poll() are POSIX, so Windows support would require a different wakeup mechanism (e.g., a loopback UDP socket). This is acceptable since the target deployment is Unix/Linux. A minor additional complexity is managing the pipe lifecycle and ensuring the pipe buffer does not fill under extreme command rates, but a single byte per wakeup with non-blocking writes handles this."
+
+[[content.alternatives]]
+text = "Socket timeout + try_recv: simple but adds up to 10ms latency on every external API call, unacceptable for trap sending and cert replacement"
+status = "considered"
+
+[[content.alternatives]]
+text = "crossbeam-channel select: can multiplex channels but still cannot wait on a socket fd simultaneously without a wrapper; adds a dependency"
+status = "considered"
+
+[[content.alternatives]]
+text = "polling crate: clean epoll/kqueue wrapper but adds a dependency for something achievable with a single poll() call"
+status = "considered"
+
+[[content.alternatives]]
+text = "UDP loopback socket as command channel: avoids the two-source problem but serializes commands over UDP, adding encode/decode overhead and packet size limits"
+status = "considered"
