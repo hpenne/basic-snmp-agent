@@ -8,12 +8,47 @@ refs = [
     "RFC-0001",
     "ADR-0002",
     "ADR-0004",
+    "ADR-0013",
+    "ADR-0014",
 ]
 
 [content]
 context = """
-dimpl's sans-IO model emits Output::Timeout(Instant) events requiring the caller to schedule timers and call handle_timeout() when they fire.
-With multiple concurrent DTLS sessions, the event loop needs a strategy for tracking and firing per-session timers efficiently.
+dimpl's sans-IO model emits Output::Timeout(Instant) events requiring the caller \
+to schedule timers and call handle_timeout() when they fire.
+With multiple concurrent DTLS sessions, the event loop needs a strategy for tracking \
+and firing per-session timers efficiently.
+ADR-0014 uses poll() with a timeout parameter that controls how long the event loop blocks.
 """
-decision = "TBD"
-consequences = "TBD"
+decision = """
+Store the dimpl-requested timeout Instant on each Session when dimpl emits Output::Timeout.
+Before calling poll(), scan all sessions for the earliest timeout and use the duration \
+until that Instant as the poll() timeout.
+When poll() returns, scan all sessions whose stored timeout has passed and call \
+handle_timeout() on each.
+If no session has a pending timeout, poll() blocks indefinitely until socket activity \
+or a command wakeup (ADR-0014).
+"""
+consequences = """
+No separate timer infrastructure is needed; poll()'s timeout parameter drives all DTLS timers.
+The linear scan over sessions runs twice per iteration (once for the deadline, once for expired timers).
+This is acceptable for an SNMP agent with a modest number of concurrent sessions.
+Timer precision depends on how long event loop processing takes between poll() calls, \
+which is negligible for typical SNMP workloads.
+"""
+
+[[content.alternatives]]
+text = """
+BinaryHeap of (Instant, SocketAddr) for O(log n) next-timeout lookup.
+Rejected because the linear scan is simpler and the expected session count does not \
+justify the added complexity.
+"""
+status = "considered"
+
+[[content.alternatives]]
+text = """
+Per-session OS timer (timerfd or similar).
+Rejected because it adds OS-level resources per session and complicates the poll() fd set, \
+with no benefit at the expected scale.
+"""
+status = "considered"

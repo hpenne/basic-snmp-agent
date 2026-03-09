@@ -7,6 +7,7 @@ date = "2026-03-04"
 refs = [
     "RFC-0001",
     "ADR-0002",
+    "ADR-0004",
 ]
 
 [content]
@@ -14,6 +15,60 @@ context = """
 C-AUTH requires runtime certificate replacement without dropping existing sessions.
 In-flight handshakes must complete with the material active when they began.
 This requires a storage and lifecycle strategy for certificate material.
+CRLs must be refreshable independently of certificates and trust anchors.
+ADR-0004 routes sessions via HashMap<SocketAddr, Dtls>, but sessions also need \
+to track certificate material and activity time.
 """
-decision = "TBD"
-consequences = "TBD"
+decision = """
+Certificate material is split into two categories with different lifecycle rules:
+
+CertMaterial (server certificate, private key, CA trust anchors) is reference-counted \
+with Rc and pinned per session.
+The event loop owns the current Rc<CertMaterial>.
+When a new session is created, it clones the Rc, pinning the material that was active \
+at session creation time.
+Certificate replacement swaps the event loop's Rc<CertMaterial> to a new allocation.
+Existing sessions retain their original Rc and are unaffected.
+When all sessions referencing old material are cleaned up, the old allocation is freed \
+automatically by reference counting.
+
+CRLs are owned directly by the event loop and are not pinned per session.
+On CRL update, the event loop checks all active sessions against the new CRLs \
+and tears down any whose peer certificate has been revoked.
+
+A Session struct bundles a Dtls instance, an Rc<CertMaterial>, and a last-activity timestamp.
+The session map from ADR-0004 becomes HashMap<SocketAddr, Session>.
+
+Rc is used rather than Arc because the event loop is single-threaded (ADR-0002).
+"""
+consequences = """
+Existing sessions complete with the certificate material they started with.
+Revoked peer certificates are caught immediately on CRL update, not deferred to session expiry.
+CRL refresh does not require certificate replacement and vice versa.
+No generation counters or versioning scheme is needed; Rc handles cert material lifecycle automatically.
+Session cleanup (ADR-0015) is the only mechanism that frees old cert material.
+A Session struct supersedes the bare Dtls value in ADR-0004's HashMap.
+"""
+
+[[content.alternatives]]
+text = """
+Use Arc instead of Rc.
+Rejected because the event loop is single-threaded (ADR-0002) and Arc's atomic \
+overhead is unnecessary.
+"""
+status = "considered"
+
+[[content.alternatives]]
+text = """
+Pin CRLs per session with a separate Rc<CrlList>.
+Rejected because CRL updates must take effect immediately across all sessions \
+to revoke compromised peer certificates.
+"""
+status = "considered"
+
+[[content.alternatives]]
+text = """
+Track material versions with a generation counter and copy-on-read.
+Rejected because Rc reference counting provides the same lifecycle semantics with less complexity.
+"""
+status = "considered"

@@ -7,6 +7,7 @@ date = "2026-03-04"
 refs = [
     "RFC-0001",
     "ADR-0002",
+    "ADR-0013",
 ]
 
 [content]
@@ -16,9 +17,9 @@ dimpl uses one Dtls instance per peer and does not provide its own session multi
 SNMP managers may be behind NAT, meaning multiple clients can share the same source IP.
 """
 decision = """
-Maintain a HashMap<SocketAddr, Dtls> to map each peer to its DTLS session.
+Maintain a HashMap<SocketAddr, Session> to map each peer to its DTLS session (see ADR-0013 for the Session struct).
 SocketAddr captures both IP address and port, which uniquely identifies a peer even when multiple clients share an IP behind NAT.
-On receiving a datagram, look up the source SocketAddr; create a new Dtls instance if no session exists.
+On receiving a datagram, look up the source SocketAddr; create a new Session if none exists.
 """
 consequences = """
 Each unique (IP, port) pair gets its own DTLS session, correctly handling NAT.

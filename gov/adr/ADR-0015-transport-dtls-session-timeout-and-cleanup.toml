@@ -7,12 +7,39 @@ date = "2026-03-04"
 refs = [
     "RFC-0001",
     "ADR-0004",
+    "ADR-0013",
 ]
 
 [content]
 context = """
-ADR-0004 uses a HashMap<SocketAddr, Dtls> for session routing but defers cleanup policy.
+ADR-0004 uses a HashMap<SocketAddr, Session> for session routing but defers cleanup policy.
 Without a timeout mechanism, stale sessions from disconnected or NAT-rebound peers accumulate indefinitely.
+Each Session carries a last-activity timestamp (ADR-0013).
 """
-decision = "TBD"
-consequences = "TBD"
+decision = """
+On every event loop iteration, scan the session map and remove any Session \
+whose last-activity timestamp is older than the timeout threshold.
+The timeout is a compile-time constant of 30 minutes.
+Timed-out sessions are closed and dropped from the HashMap<SocketAddr, Session>.
+The last-activity timestamp is updated whenever a session sends or receives data.
+"""
+consequences = """
+Stale sessions are cleaned up without needing a separate timer or background task.
+The scan runs on every iteration, which is simple but scales linearly with session count.
+This is acceptable for an SNMP agent, which typically has a small number of concurrent sessions.
+The timeout value is not configurable at runtime; changing it requires recompilation.
+"""
+
+[[content.alternatives]]
+text = """
+Timer-based cleanup with a separate timer per session.
+Rejected because it adds complexity for no practical benefit given the expected low session count.
+"""
+status = "considered"
+
+[[content.alternatives]]
+text = """
+Configurable timeout via agent configuration.
+Deferred; a compile-time constant is sufficient for now and can be made configurable later if needed.
+"""
+status = "considered"
