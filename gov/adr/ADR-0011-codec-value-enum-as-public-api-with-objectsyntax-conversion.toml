@@ -2,7 +2,7 @@
 schema = 1
 id = "ADR-0011"
 title = "codec: Value enum as public API with ObjectSyntax conversion"
-status = "proposed"
+status = "accepted"
 date = "2026-03-04"
 refs = [
     "RFC-0001",

@@ -2,7 +2,7 @@
 schema = 1
 id = "ADR-0012"
 title = "arch: Hand-rolled error types"
-status = "proposed"
+status = "accepted"
 date = "2026-03-04"
 refs = [
     "RFC-0001",
