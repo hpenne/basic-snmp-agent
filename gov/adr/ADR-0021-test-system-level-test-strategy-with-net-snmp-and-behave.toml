@@ -21,8 +21,11 @@ Use Python with behave (BDD framework) as the system test runner, shelling out t
 
 The test infrastructure consists of four components:
 
-1. A test agent binary: a small Rust binary in a dedicated crate (tests/test-agent/) that constructs an Agent, populates a known set of MIB values, and runs.
-Behave starts it as a subprocess per scenario and stops it afterwards.
+1. A test agent binary: a small Rust binary in a dedicated crate (tests/test-agent/) that constructs an Agent, populates a known set of MIB values, optionally sends traps, and runs.
+The binary accepts a command-line argument pointing to a trap definition file.
+If provided, it reads the file, sends the specified traps at startup, and then continues serving inbound requests.
+The trap file uses a simple text format listing trap OID, destination addresses, and varbinds.
+Behave starts the binary as a subprocess per scenario (with or without a trap file) and stops it afterwards.
 
 2. A custom net-snmp Docker image: built from a Dockerfile checked into the repository (tests/docker/).
 net-snmp is compiled with --with-security-modules=tsm and --with-transports=TLSTCP to enable TLS support.
@@ -39,7 +42,9 @@ environment.py manages the lifecycle of the test agent subprocess, the Docker co
 For trap testing, snmptrapd runs inside the same Docker container, configured to receive plain UDP traps and log them to a file.
 Behave reads the log file after each trap scenario to verify receipt.
 
-The test agent binary exposes trap sending via a simple mechanism (e.g. a trigger file or a small TCP control socket) so that behave steps can command the agent to send a trap on demand.
+For trap scenarios, behave writes a trap definition file and starts the test agent binary with it.
+The agent sends the traps at startup before entering its main loop.
+This avoids the need for a runtime control mechanism; each scenario gets a fresh agent process with the exact traps it needs.
 
 To run locally: docker build the image once, cargo build the test agent, then run behave.
 In GitHub Actions: the ubuntu-latest runner provides Docker natively; the workflow builds the image, the test agent, installs behave via pip, and runs the test suite."""
