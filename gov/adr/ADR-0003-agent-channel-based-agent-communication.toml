@@ -19,17 +19,14 @@ decision = """
 The public Agent type holds channel senders (std::sync::mpsc::Sender) for communicating with the event loop actor.
 Agent::set() sends a MIB update command through the channel.
 Trap sending sends a trap command and receives per-destination results back through a oneshot channel.
-Certificate replacement follows the same pattern.
 The Agent type is Clone + Send + Sync since it only holds channel senders.
-The event loop drains the command channel between socket polls.
-"""
+The event loop drains the command channel between socket polls."""
 consequences = """
 No shared mutable state between the application and the event loop.
 Agent::set() is a non-blocking channel send, callable from any thread without &mut self, satisfying RFC-0001:C-MIB-STORE.
-Trap sending and certificate replacement get results back via oneshot channels, allowing the caller to block until completion.
+Trap sending gets results back via a oneshot channel, allowing the caller to block until completion.
 The trade-off is that MIB updates are not immediately visible to SNMP requests; there is a small delay until the event loop drains the channel.
-This is acceptable for monitoring workloads.
-"""
+This is acceptable for monitoring workloads."""
 
 [[content.alternatives]]
 text = "Arc<RwLock<MibStore>> shared between threads: simpler API but introduces lock contention on the SNMP request path"

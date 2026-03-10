@@ -14,7 +14,6 @@ refs = [
 context = """
 C-ENGINE requires contextEngineID and contextName validation with silent discard of mismatches.
 C-INBOUND defines request dispatch logic.
-The processing pipeline from raw DTLS payload to SNMP response needs a defined structure: where does message unwrapping, security model handling, context validation, and PDU dispatch occur, and in which crate?
-"""
+The processing pipeline from raw TLS payload to SNMP response needs a defined structure: where does message unwrapping, security model handling, context validation, and PDU dispatch occur, and in which crate?"""
 decision = "TBD"
 consequences = "TBD"

@@ -1,39 +1,34 @@
 [govctl]
 schema = 1
 id = "ADR-0015"
-title = "transport: DTLS session timeout and cleanup"
+title = "transport: TLS connection idle timeout and cleanup"
 status = "proposed"
 date = "2026-03-04"
 refs = [
     "RFC-0001",
-    "ADR-0004",
-    "ADR-0013",
+    "ADR-0002",
 ]
 
 [content]
 context = """
-ADR-0004 uses a HashMap<SocketAddr, Session> for session routing but defers cleanup policy.
-Without a timeout mechanism, stale sessions from disconnected or NAT-rebound peers accumulate indefinitely.
-Each Session carries a last-activity timestamp (ADR-0013).
-"""
+The event loop accepts inbound TLS connections from SNMP managers.
+Without a timeout mechanism, idle connections from disconnected or forgotten peers accumulate indefinitely.
+Each connection consumes a file descriptor and TLS session state."""
 decision = """
-On every event loop iteration, scan the session map and remove any Session \
-whose last-activity timestamp is older than the timeout threshold.
+On every event loop iteration, scan all TLS connections and close any whose last-activity timestamp is older than the timeout threshold.
 The timeout is a compile-time constant of 30 minutes.
-Timed-out sessions are closed and dropped from the HashMap<SocketAddr, Session>.
-The last-activity timestamp is updated whenever a session sends or receives data.
-"""
+Timed-out connections are closed and dropped.
+The last-activity timestamp is updated whenever a connection sends or receives data."""
 consequences = """
-Stale sessions are cleaned up without needing a separate timer or background task.
-The scan runs on every iteration, which is simple but scales linearly with session count.
-This is acceptable for an SNMP agent, which typically has a small number of concurrent sessions.
-The timeout value is not configurable at runtime; changing it requires recompilation.
-"""
+Idle TLS connections are cleaned up without needing a separate timer or background task.
+The scan runs on every iteration, which is simple but scales linearly with connection count.
+This is acceptable for an SNMP agent, which typically has a small number of concurrent connections.
+The timeout value is not configurable at runtime; changing it requires recompilation."""
 
 [[content.alternatives]]
 text = """
-Timer-based cleanup with a separate timer per session.
-Rejected because it adds complexity for no practical benefit given the expected low session count.
+Timer-based cleanup with a separate timer per connection.
+Rejected because it adds complexity for no practical benefit given the expected low connection count.
 """
 status = "considered"
 

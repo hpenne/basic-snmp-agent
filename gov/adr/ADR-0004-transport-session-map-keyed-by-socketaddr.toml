@@ -2,7 +2,7 @@
 schema = 1
 id = "ADR-0004"
 title = "transport: Session map keyed by SocketAddr"
-status = "proposed"
+status = "rejected"
 date = "2026-03-04"
 refs = [
     "RFC-0001",

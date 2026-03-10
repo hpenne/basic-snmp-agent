@@ -1,7 +1,7 @@
 [govctl]
 schema = 1
 id = "ADR-0008"
-title = "codec: Jumbo frame message buffer sizing"
+title = "codec: Trap UDP send buffer sizing"
 status = "proposed"
 date = "2026-03-04"
 refs = [
@@ -11,22 +11,19 @@ refs = [
 
 [content]
 context = """
-The event loop needs a receive buffer for incoming UDP datagrams.
-SNMP messages are typically small but the RFC does not constrain message size.
-The agent will not hold many buffers concurrently since it processes messages sequentially on a single thread.
-"""
+The agent sends outbound trap PDUs over plain UDP.
+The send buffer must be large enough to hold any realistic trap PDU.
+Trap PDUs are typically small (a handful of varbinds), but the RFC does not constrain message size."""
 decision = """
-Size receive and send buffers to support jumbo frames (9000 bytes).
-This is the maximum payload of a jumbo Ethernet frame and accommodates any realistic SNMP message, including large GetBulkResponse PDUs.
-"""
+Size the UDP send buffer for outbound traps to 1500 bytes (standard Ethernet MTU).
+Trap PDUs that exceed this size will fail to send and the error will be reported per-destination as specified in C-TRAPS."""
 consequences = """
-A single 9000-byte buffer on the stack or event loop struct is trivial in terms of memory.
-Messages larger than 9000 bytes will be truncated by the UDP recv, which is acceptable since such messages would exceed Ethernet MTU anyway.
-The buffer is reused for each datagram, so total memory overhead is constant regardless of traffic.
-"""
+A 1500-byte buffer accommodates any realistic trap PDU within a single Ethernet frame.
+Traps exceeding the MTU would be fragmented or dropped by the network anyway, so capping at 1500 bytes avoids sending traps that are unlikely to arrive intact.
+Memory overhead is trivial."""
 
 [[content.alternatives]]
-text = "Standard MTU (1500 bytes): safe default but truncates legitimate large responses from GetBulkRequest with many varbinds"
+text = "9000 bytes (jumbo frame): unnecessarily large for trap PDUs which are typically small"
 status = "considered"
 
 [[content.alternatives]]

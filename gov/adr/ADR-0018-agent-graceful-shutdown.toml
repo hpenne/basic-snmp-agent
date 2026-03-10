@@ -14,7 +14,6 @@ refs = [
 context = """
 C-RUNTIME runs the event loop on a dedicated OS thread.
 When the Agent is dropped or the application shuts down, the event loop thread must be stopped.
-The shutdown strategy affects in-flight trap sends, pending MIB updates, and DTLS session teardown.
-"""
+The shutdown strategy affects in-flight trap sends, pending MIB updates, and TLS connection teardown."""
 decision = "TBD"
 consequences = "TBD"

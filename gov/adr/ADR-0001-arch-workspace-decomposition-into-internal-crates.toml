@@ -16,7 +16,7 @@ decision = """
 Decompose the project into a Cargo workspace with four internal crates:
 
 - basic-snmp-agent: Top-level library crate. Exposes the public Agent type, ties together the other crates, owns the event loop thread.
-- transport: UDP socket I/O, DTLS session management (dimpl integration), certificate handling, event loop implementation.
+- transport: TCP listener, TLS session management (rustls), UDP socket for outbound traps, certificate handling, event loop implementation.
 - codec: ASN.1/BER encoding and decoding, SNMPv3 message framing, PDU type definitions.
 - mib: MIB store (OID-to-value map, lexicographic ordering, upsert API).
 
