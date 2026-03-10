@@ -53,6 +53,10 @@ The project currently has a single binary entry point at `src/main.rs`. As SNMP 
 
 ## Coding rules
 
+### govctl in general
+
+- *ALWAYS* use govctl to edit RFCs and ADRs. Never edit files directly.
+
 ### govctl ADRs
 
 - Use multi-line strings in the "[content]" section of ADRs. One sentence per line.
@@ -64,6 +68,7 @@ The project currently has a single binary entry point at `src/main.rs`. As SNMP 
 - Names should be descriptive and allow for local reasoning (code should be self-documenting through naming).
 - Code comments should focus on rationale (the "why", not the "how").
 - Do *NOT* add external dependencies without permission.
+- Follow strict RFC compliance when implementing SNMP. Do not assume behavior — verify against the relevant RFC text. Wait for user confirmation before deviating from RFC specifications.
 
 ### Rust
 

@@ -8,7 +8,7 @@ refs = ["RFC-0001"]
 
 [content]
 context = """
-The RFC specifies a library crate with several distinct concerns: DTLS transport, ASN.1/BER codec, MIB storage, and SNMP protocol logic.
+The RFC specifies a library crate with several distinct concerns: TLS transport, ASN.1/BER codec, MIB storage, and SNMP protocol logic.
 Putting everything in a single crate would couple unrelated concerns and make the codebase harder to navigate and test.
 The project needs a clear decomposition.
 """
