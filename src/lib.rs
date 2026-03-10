@@ -6,8 +6,11 @@
 //!
 //! The agent runs its event loop on a dedicated OS thread spawned at construction
 //! time. Application threads communicate with the event loop through channel-based
-//! commands: MIB value updates, trap sends, and certificate replacements. [`Agent`]
-//! is `Clone + Send + Sync` and holds only channel senders, so it can be shared
-//! freely across threads.
+//! commands: MIB value updates and trap sends. [`Agent`] is `Clone + Send + Sync`
+//! and holds only channel senders, so it can be shared freely across threads.
+
+mod error;
+
+pub use error::{AgentError, SetError, TrapError};
 
 pub struct Agent;

@@ -1,17 +1,23 @@
-//! DTLS transport layer and event loop.
+//! TLS transport layer and event loop for the SNMP agent.
 //!
 //! Responsibilities:
 //!
-//! - **UDP I/O**: binds and polls the UDP socket; reads incoming datagrams and
-//!   writes outgoing ones.
-//! - **DTLS session management**: maintains one `dimpl` [`Dtls`] instance per peer,
-//!   keyed by [`SocketAddr`]. Drives the sans-IO state machine in response to socket
-//!   readiness and timer events.
-//! - **Certificate handling**: stores the agent's own certificate/key and the set of
-//!   trusted CA certificates; supports runtime replacement without dropping existing
-//!   sessions.
-//! - **Event loop**: the central poll loop that sequences socket I/O, DTLS state
-//!   machine steps, command channel draining, and timer management.
+//! - **Inbound connections**: accepts TLS-over-TCP connections on port 10161
+//!   (IANA SNMP-over-TLS), using `rustls` for the TLS engine. Frames inbound
+//!   messages per RFC 6353.
+//! - **Outbound traps**: sends plain UDP datagrams to trap destinations on
+//!   port 162. No encryption or authentication is applied to traps.
+//! - **Certificate handling**: stores the agent's own certificate/key and the
+//!   set of trusted CA certificates, provided at construction time. Replacing
+//!   certificates requires restarting the agent.
+//! - **Event loop**: the central poll loop driven by `mio` (epoll/kqueue).
+//!   Sequences TCP listener events, TLS connection I/O, command channel
+//!   draining (via self-pipe wakeup), and MIB request dispatch.
 //!
-//! This crate depends on [`codec`] for SNMPv3 message framing and [`mib`] for OID
-//! resolution during request handling.
+//! This crate depends on [`codec`] for SNMPv3 message framing and [`mib`] for
+//! OID resolution during request handling.
+
+pub mod event_loop;
+pub mod request;
+
+pub use request::ApiTrapPdu as TrapPdu;
