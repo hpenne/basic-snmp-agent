@@ -130,7 +130,10 @@ mod tests {
     #[test]
     fn agent_error_bind_display_contains_address_and_cause() {
         let addr: SocketAddr = "127.0.0.1:10161".parse().unwrap();
-        let err = AgentError::Bind { addr, source: io_err() };
+        let err = AgentError::Bind {
+            addr,
+            source: io_err(),
+        };
         let msg = err.to_string();
         assert!(msg.contains("127.0.0.1:10161"), "{msg}");
         assert!(msg.contains("test"), "{msg}");
@@ -159,7 +162,10 @@ mod tests {
     #[test]
     fn agent_error_bind_source_returns_inner_io_error() {
         let addr: SocketAddr = "127.0.0.1:10161".parse().unwrap();
-        let err = AgentError::Bind { addr, source: io_err() };
+        let err = AgentError::Bind {
+            addr,
+            source: io_err(),
+        };
         let source = err.source().expect("source should be Some");
         assert!(source.to_string().contains("test"));
     }
