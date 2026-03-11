@@ -2,7 +2,7 @@
 schema = 1
 id = "ADR-0008"
 title = "codec: Trap UDP send buffer sizing"
-status = "proposed"
+status = "accepted"
 date = "2026-03-04"
 refs = [
     "RFC-0001",

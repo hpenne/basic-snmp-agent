@@ -2,7 +2,7 @@
 schema = 1
 id = "ADR-0018"
 title = "agent: Graceful shutdown"
-status = "proposed"
+status = "accepted"
 date = "2026-03-04"
 refs = [
     "RFC-0001",
@@ -15,5 +15,15 @@ context = """
 C-RUNTIME runs the event loop on a dedicated OS thread.
 When the Agent is dropped or the application shuts down, the event loop thread must be stopped.
 The shutdown strategy affects in-flight trap sends, pending MIB updates, and TLS connection teardown."""
-decision = "TBD"
-consequences = "TBD"
+decision = """
+Expose a `Command::Shutdown` variant in the command enum, sent via `CommandSender::send()`.
+The event loop breaks its main loop upon receiving `Shutdown` and returns `Ok(())`.
+Disconnecting all `CommandSender` handles (i.e. dropping them all) also triggers shutdown via mpsc channel disconnect detection, providing implicit shutdown when the Agent is dropped.
+Commands already queued ahead of `Shutdown` are processed normally; any commands enqueued after `Shutdown` are discarded.
+All owned resources (accepted connections, self-pipe fd) are freed when the `EventLoop` value is consumed on return.
+The calling thread must join the event loop thread handle to confirm clean termination."""
+consequences = """
+Shutdown is deterministic: the event loop always processes any commands ahead of `Shutdown` in the queue before exiting.
+No special teardown code is needed for connections or the self-pipe; Rust's drop machinery handles cleanup automatically.
+Implicit shutdown on `Agent` drop (via channel disconnect) means callers are not required to send `Shutdown` explicitly.
+The trade-off is that commands sent concurrently with `Shutdown` may or may not be processed depending on channel ordering, but this is acceptable since the application is shutting down."""

@@ -14,14 +14,11 @@
 
 use std::collections::HashMap;
 use std::io::{self, Read};
-use std::net::SocketAddr;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
-
-use crate::request::ApiTrapPdu;
 
 /// mio token for the TCP listener.
 const LISTENER_TOKEN: Token = Token(0);
@@ -32,15 +29,6 @@ const PIPE_TOKEN: Token = Token(1);
 /// First token index available for accepted client connections.
 const FIRST_CONN_TOKEN: usize = 2;
 
-/// Per-destination outcome of a trap send attempt.
-#[derive(Debug)]
-pub struct TrapResult {
-    /// The destination address this result pertains to.
-    pub destination: SocketAddr,
-    /// `Ok(())` if the datagram was sent, `Err` with I/O detail otherwise.
-    pub outcome: Result<(), io::Error>,
-}
-
 /// Commands sent from application threads to the event loop.
 ///
 /// Send commands via [`CommandSender::send`], which also wakes the poll loop.
@@ -50,12 +38,6 @@ pub enum Command {
     SetValue {
         oid: codec::Oid,
         value: codec::Value,
-    },
-    /// Send a trap to all listed destinations and report per-destination results.
-    SendTrap {
-        pdu: ApiTrapPdu,
-        destinations: Vec<SocketAddr>,
-        reply: mpsc::SyncSender<Vec<TrapResult>>,
     },
     /// Shut down the event loop cleanly.
     Shutdown,
@@ -152,13 +134,13 @@ impl Clone for CommandSender {
 ///
 /// ```no_run
 /// use std::net::SocketAddr;
-/// use transport::event_loop::{Command, EventLoop};
+/// use transport::event_loop::EventLoop;
 ///
 /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
 /// let (event_loop, bound_addr, sender) = EventLoop::new(addr).unwrap();
 ///
 /// let handle = std::thread::spawn(move || event_loop.run());
-/// sender.send(Command::Shutdown).unwrap();
+/// sender.send(transport::event_loop::Command::Shutdown).unwrap();
 /// handle.join().unwrap().unwrap();
 /// ```
 pub struct EventLoop {
@@ -195,7 +177,9 @@ impl EventLoop {
     /// let (event_loop, bound_addr, sender) = EventLoop::new(addr).unwrap();
     /// println!("listening on {bound_addr}");
     /// ```
-    pub fn new(addr: SocketAddr) -> io::Result<(Self, SocketAddr, CommandSender)> {
+    pub fn new(
+        addr: std::net::SocketAddr,
+    ) -> io::Result<(Self, std::net::SocketAddr, CommandSender)> {
         let poll = Poll::new()?;
         let registry = poll.registry();
 
@@ -315,16 +299,6 @@ impl EventLoop {
             match self.rx.try_recv() {
                 Ok(Command::SetValue { oid, value }) => {
                     eprintln!("[event_loop] SetValue: oid={oid:?} value={value:?}");
-                }
-                Ok(Command::SendTrap {
-                    pdu,
-                    destinations,
-                    reply: _,
-                }) => {
-                    eprintln!(
-                        "[event_loop] SendTrap: request_id={} destinations={destinations:?}",
-                        pdu.request_id
-                    );
                 }
                 Ok(Command::Shutdown) => {
                     eprintln!("[event_loop] received Shutdown, exiting");
@@ -457,6 +431,7 @@ fn drain_pipe(fd: RawFd) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::SocketAddr;
     use std::thread;
     use std::time::Duration;
 
@@ -515,5 +490,33 @@ mod tests {
         // Then: the loop processes both commands and exits cleanly.
         let result = handle.join().expect("event loop thread panicked");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn given_running_event_loop_when_set_value_sent_then_loop_remains_alive_for_shutdown() {
+        // Given: a running event loop.
+        let (event_loop, _bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let handle = thread::spawn(move || event_loop.run());
+
+        // When: a SetValue command is sent and the loop is given time to process it.
+        let oid: codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        sender
+            .send(Command::SetValue {
+                oid,
+                value: codec::Value::Integer32(42),
+            })
+            .unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        // Then: the loop has NOT exited — SetValue must not trigger shutdown.
+        // If drain_commands always returned true, send() here would fail with BrokenPipe.
+        let send_result = sender.send(Command::Shutdown);
+        assert!(
+            send_result.is_ok(),
+            "expected loop to still be running after SetValue, but send returned: {send_result:?}"
+        );
+
+        let join_result = handle.join().expect("event loop thread panicked");
+        assert!(join_result.is_ok());
     }
 }

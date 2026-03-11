@@ -2,7 +2,7 @@
 schema = 1
 id = "ADR-0003"
 title = "agent: Channel-based agent communication"
-status = "proposed"
+status = "accepted"
 date = "2026-03-04"
 refs = [
     "RFC-0001",
@@ -12,19 +12,21 @@ refs = [
 [content]
 context = """
 The RFC requires that Agent::set() is callable from any thread without &mut self, and that trap sending returns per-destination results.
-With the single-threaded actor model (ADR-0002), the MIB store and DTLS sessions live inside the event loop thread.
+With the single-threaded actor model (ADR-0002), the MIB store and TLS connections live inside the event loop thread.
 The application needs a way to send commands to the actor without shared mutable state or locking.
-"""
+The UDP trap socket is send-only and never needs to be polled by mio (ADR-0014), making it a poor fit for the event loop channel pattern."""
 decision = """
 The public Agent type holds channel senders (std::sync::mpsc::Sender) for communicating with the event loop actor.
 Agent::set() sends a MIB update command through the channel.
-Trap sending sends a trap command and receives per-destination results back through a oneshot channel.
-The Agent type is Clone + Send + Sync since it only holds channel senders.
+Trap sending is handled directly by Agent without involving the event loop: Agent owns the UDP socket and the agent start time (Instant) needed for sysUpTime.
+Agent::send_trap() is a synchronous call: encode the PDU, send_to each destination, collect per-destination results, and return them.
+The Agent type is Clone + Send + Sync since it holds only channel senders, a cloneable UDP socket wrapper, and a copied Instant.
 The event loop drains the command channel between socket polls."""
 consequences = """
 No shared mutable state between the application and the event loop.
 Agent::set() is a non-blocking channel send, callable from any thread without &mut self, satisfying RFC-0001:C-MIB-STORE.
-Trap sending gets results back via a oneshot channel, allowing the caller to block until completion.
+Trap sending is a simple synchronous call with no channel round-trip, no self-pipe wakeup, and no reply channel.
+Per-destination results are returned directly to the caller.
 The trade-off is that MIB updates are not immediately visible to SNMP requests; there is a small delay until the event loop drains the channel.
 This is acceptable for monitoring workloads."""
 
@@ -34,4 +36,8 @@ status = "considered"
 
 [[content.alternatives]]
 text = "Callback/trait-based pull model: application registers a callback to resolve OIDs on demand; more flexible but harder to integrate and the RFC specifies a push model"
+status = "considered"
+
+[[content.alternatives]]
+text = '{"text": "Command::SendTrap via event loop channel: adds an unnecessary round-trip and reply channel; the UDP socket is never polled by mio so routing trap sends through the event loop provides no benefit over a direct synchronous call", "status": "rejected"}'
 status = "considered"

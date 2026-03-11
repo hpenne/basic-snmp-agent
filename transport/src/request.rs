@@ -6,8 +6,8 @@
 //! test without spinning up a socket.
 
 use codec::{
-    ErrorStatus, GetBulkRequest, GetNextRequest, GetRequest, GetResponse, Oid, SetRequest, TrapPdu,
-    Value, Varbind, VarbindValue,
+    ErrorStatus, GetBulkRequest, GetNextRequest, GetRequest, GetResponse, Oid, SetRequest, Value,
+    Varbind, VarbindValue,
 };
 use mib::Store;
 use std::sync::LazyLock;
@@ -25,9 +25,39 @@ static SYS_UP_TIME_OID: LazyLock<Oid> =
 static SNMP_TRAP_OID_OID: LazyLock<Oid> =
     LazyLock::new(|| Oid::from_slice(&[1, 3, 6, 1, 6, 3, 1, 1, 4, 1, 0]));
 
+/// The trap PDU supplied by callers to send a trap notification.
+///
+/// Contains only the trap OID and caller-provided varbinds. The agent
+/// automatically prepends the mandatory `sysUpTime.0` and `snmpTrapOID.0`
+/// varbinds before encoding per RFC 3416 §4.2.6.
+///
+/// This type is re-exported from the `transport` crate root and from `basic_snmp_agent`.
+///
+/// # Examples
+///
+/// ```
+/// use transport::TrapPdu;
+///
+/// let pdu = TrapPdu {
+///     request_id: 1,
+///     trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
+///     varbinds: vec![],
+/// };
+/// ```
+#[derive(Clone, Debug)]
+pub struct TrapPdu {
+    /// Request identifier for correlating notifications.
+    pub request_id: i32,
+    /// The trap OID (`snmpTrapOID.0` value), identifying the notification type.
+    pub trap_oid: Oid,
+    /// Additional varbinds describing the trap payload.
+    pub varbinds: Vec<Varbind>,
+}
+
 /// Handles a `GetRequest` by looking up each OID in the store.
 ///
 /// Missing OIDs yield `NoSuchObject`; present OIDs yield their current value.
+#[must_use]
 pub fn handle_get(req: &GetRequest, store: &Store) -> GetResponse {
     let varbinds = req
         .varbinds
@@ -55,6 +85,7 @@ pub fn handle_get(req: &GetRequest, store: &Store) -> GetResponse {
 /// Handles a `GetNextRequest` by looking up the lexicographic successor of each OID.
 ///
 /// If no successor exists for an OID, the varbind carries `EndOfMibView`.
+#[must_use]
 pub fn handle_get_next(req: &GetNextRequest, store: &Store) -> GetResponse {
     let varbinds = req
         .varbinds
@@ -94,6 +125,7 @@ pub fn handle_get_next(req: &GetNextRequest, store: &Store) -> GetResponse {
 /// `max-repetitions` therefore never reaches this function; it is dropped at the
 /// `decode_pdu` call site in the event loop. The cap is still applied here as a
 /// defence-in-depth measure against large positive values.
+#[must_use]
 pub fn handle_get_bulk(
     req: &GetBulkRequest,
     store: &Store,
@@ -172,6 +204,7 @@ pub fn handle_get_bulk(
 ///
 /// This agent does not support writes; all Set requests are rejected per
 /// RFC 3416 with error-status `notWritable` and error-index 1.
+#[must_use]
 pub fn handle_set(req: &SetRequest) -> GetResponse {
     GetResponse {
         request_id: req.request_id,
@@ -187,7 +220,7 @@ pub fn handle_set(req: &SetRequest) -> GetResponse {
 /// Per RFC 3416 §4.2.6, every Trap-PDU must begin with these two varbinds in order.
 /// The public API `TrapPdu` omits them; the event loop inserts them here so that
 /// callers never have to manage `sysUpTime`.
-pub fn build_wire_trap(api_pdu: &ApiTrapPdu, start_time: Instant) -> TrapPdu {
+pub fn build_wire_trap(api_pdu: &TrapPdu, start_time: Instant) -> codec::TrapPdu {
     let sys_up_time = elapsed_hundredths(start_time);
 
     let mut varbinds = vec![
@@ -202,7 +235,7 @@ pub fn build_wire_trap(api_pdu: &ApiTrapPdu, start_time: Instant) -> TrapPdu {
     ];
     varbinds.extend_from_slice(&api_pdu.varbinds);
 
-    TrapPdu {
+    codec::TrapPdu {
         request_id: api_pdu.request_id,
         varbinds,
     }
@@ -210,45 +243,18 @@ pub fn build_wire_trap(api_pdu: &ApiTrapPdu, start_time: Instant) -> TrapPdu {
 
 /// Returns the time elapsed since `start_time` in hundredths of a second,
 /// saturating at `u32::MAX`.
-pub fn elapsed_hundredths(start_time: Instant) -> u32 {
+#[must_use]
+pub(crate) fn elapsed_hundredths(start_time: Instant) -> u32 {
     let elapsed = start_time.elapsed();
     let hundredths = elapsed.as_millis() / 10;
     // Saturate at u32::MAX; the min ensures the final cast is lossless.
     u32::try_from(hundredths.min(u128::from(u32::MAX))).unwrap_or(u32::MAX)
 }
 
-/// The trap PDU supplied by callers to send a trap notification.
-///
-/// Contains only the trap OID and caller-provided varbinds. The agent
-/// automatically prepends the mandatory `sysUpTime.0` and `snmpTrapOID.0`
-/// varbinds before encoding per RFC 3416 §4.2.6.
-///
-/// This type is re-exported from the root crate as `basic_snmp_agent::TrapPdu`.
-///
-/// # Examples
-///
-/// ```
-/// use transport::TrapPdu;
-///
-/// let pdu = TrapPdu {
-///     request_id: 1,
-///     trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
-///     varbinds: vec![],
-/// };
-/// ```
-#[derive(Clone, Debug)]
-pub struct ApiTrapPdu {
-    /// Request identifier for correlating notifications.
-    pub request_id: i32,
-    /// The trap OID (`snmpTrapOID.0` value), identifying the notification type.
-    pub trap_oid: Oid,
-    /// Additional varbinds describing the trap payload.
-    pub varbinds: Vec<Varbind>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn oid(s: &str) -> Oid {
         s.parse().unwrap()
@@ -490,7 +496,7 @@ mod tests {
 
     #[test]
     fn given_api_trap_pdu_when_built_then_prepends_sys_up_time_and_trap_oid() {
-        let api_pdu = ApiTrapPdu {
+        let api_pdu = TrapPdu {
             request_id: 5,
             trap_oid: oid("1.3.6.1.6.3.1.1.5.1"),
             varbinds: vec![Varbind {
@@ -514,5 +520,44 @@ mod tests {
         // Remaining varbind from caller.
         assert_eq!(wire.varbinds.len(), 3);
         assert_eq!(wire.varbinds[2].oid, oid("1.3.6.1.2.1.1.5.0"));
+    }
+
+    // ── elapsed_hundredths ────────────────────────────────────────────────────
+
+    #[test]
+    fn given_start_time_just_now_when_elapsed_hundredths_then_returns_near_zero() {
+        // A start time of Instant::now() has elapsed only nanoseconds, so the
+        // result must be well below 5 hundredths.
+        let start = Instant::now();
+
+        let hundredths = elapsed_hundredths(start);
+
+        assert!(hundredths < 5, "expected < 5, got {hundredths}");
+    }
+
+    #[test]
+    fn given_start_time_one_second_ago_when_elapsed_hundredths_then_returns_around_100() {
+        // 1 second = 100 hundredths; allow generous headroom for slow CI runners.
+        let start = Instant::now() - Duration::from_secs(1);
+
+        let hundredths = elapsed_hundredths(start);
+
+        assert!(
+            (100..=200).contains(&hundredths),
+            "expected 100..=200, got {hundredths}"
+        );
+    }
+
+    #[test]
+    fn given_start_time_ten_seconds_ago_when_elapsed_hundredths_then_returns_around_1000() {
+        // 10 seconds = 1000 hundredths; allow generous headroom for slow CI runners.
+        let start = Instant::now() - Duration::from_secs(10);
+
+        let hundredths = elapsed_hundredths(start);
+
+        assert!(
+            (1000..=1100).contains(&hundredths),
+            "expected 1000..=1100, got {hundredths}"
+        );
     }
 }

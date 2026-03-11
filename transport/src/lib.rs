@@ -14,10 +14,12 @@
 //!   Sequences TCP listener events, TLS connection I/O, command channel
 //!   draining (via self-pipe wakeup), and MIB request dispatch.
 //!
-//! This crate depends on [`codec`] for SNMPv3 message framing and [`mib`] for
+//! This crate depends on [`codec`] for `SNMPv3` message framing and [`mib`] for
 //! OID resolution during request handling.
 
 pub mod event_loop;
 pub mod request;
+pub mod trap;
 
-pub use request::ApiTrapPdu as TrapPdu;
+pub use request::TrapPdu;
+pub use trap::{TrapResult, TrapSender};
