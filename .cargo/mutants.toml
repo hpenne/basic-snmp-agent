@@ -1,0 +1,7 @@
+exclude_re = [
+    # Compile-time Send+Sync assertion bodies cannot be caught by runtime tests.
+    # The assertion fails at compile time if a field addition breaks the contract;
+    # replacing the body with () still compiles, so there is nothing to test at runtime.
+    "trap\\.rs.* replace check with \\(\\)",
+    "event_loop\\.rs.* replace check with \\(\\)",
+]
