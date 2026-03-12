@@ -65,10 +65,16 @@ The project currently has a single binary entry point at `src/main.rs`. As SNMP 
 
 - Language: Oxford English
 - Write clean and neat code to be proud of. Always prefer simple and elegant solutions.
-- Names should be descriptive and allow for local reasoning (code should be self-documenting through naming).
+- Names should be descriptive and allow for local reasoning (code should be self-documenting through naming). Avoid generic names such as `bytes`, `buf`, `data`, `result`, `n`, or single letters — name variables after what they represent in the domain (e.g., `encoded_pdu`, `recv_buf`, `bytes_received`).
 - Code comments should focus on rationale (the "why", not the "how").
 - Do *NOT* add external dependencies without permission.
 - Follow strict RFC compliance when implementing SNMP. Do not assume behavior — verify against the relevant RFC text. Wait for user confirmation before deviating from RFC specifications.
+
+### Gherkin / BDD
+
+- OID strings and other technical identifiers are acceptable in feature files when they are the actual subject under test.
+- Name entities that cross step boundaries. When a `Then` step captures a result (e.g., a received trap), give it an explicit name in the step text. Subsequent `And` steps must reference that same name. The name must appear verbatim in both the step that creates the entity and every step that inspects it — never rely on implicit context state.
+- Step definitions are the right place for all implementation detail (how to send a trap, how to retrieve and parse the result). Feature files express what is being tested, not how.
 
 ### Rust
 
@@ -83,3 +89,7 @@ The project currently has a single binary entry point at `src/main.rs`. As SNMP 
 - Keep trait implementations close to the data structure but after the "impl" block.
 - Order code so that a reader starting from the top understands the high-level intent, with details filled in below.
 - Keep Related Things Together: Group related structs, enums, and trait implementations, rather than splitting them arbitrarily across the file.
+
+## Testing
+
+Gherkin feature files are in `tests/system/features/`. See `tests/system/features/CLAUDE.md` for authoring guidelines.

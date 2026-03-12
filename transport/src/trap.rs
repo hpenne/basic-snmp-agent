@@ -127,18 +127,18 @@ impl TrapSender {
     pub fn send_trap(&self, pdu: &TrapPdu, destinations: &[SocketAddr]) -> Vec<TrapResult> {
         let wire_pdu = build_wire_trap(pdu, self.start_time);
 
-        let bytes = match codec::encode_trap(&wire_pdu) {
-            Ok(b) => b,
+        let encoded_pdu = match codec::encode_trap(&wire_pdu) {
+            Ok(encoded_pdu) => encoded_pdu,
             Err(e) => {
                 let msg = format!("trap PDU encoding failed: {e}");
                 return encode_error_for_all(destinations, &msg);
             }
         };
 
-        if bytes.len() > TRAP_MTU_BYTES {
+        if encoded_pdu.len() > TRAP_MTU_BYTES {
             let msg = format!(
                 "encoded trap PDU ({} bytes) exceeds MTU ({TRAP_MTU_BYTES} bytes)",
-                bytes.len()
+                encoded_pdu.len()
             );
             return encode_error_for_all(destinations, &msg);
         }
@@ -146,7 +146,7 @@ impl TrapSender {
         destinations
             .iter()
             .map(|&dest| {
-                let outcome = self.socket.send_to(&bytes, dest).map(|_| ());
+                let outcome = self.socket.send_to(&encoded_pdu, dest).map(|_| ());
                 TrapResult {
                     destination: dest,
                     outcome,
@@ -217,11 +217,11 @@ mod tests {
         // And: the receiver socket actually received a non-empty datagram that
         // matches the encoded bytes for the same PDU.
         let wire_pdu = crate::request::build_wire_trap(&pdu, sender.start_time);
-        let expected_bytes = codec::encode_trap(&wire_pdu).unwrap();
-        let mut buf = vec![0u8; TRAP_MTU_BYTES];
-        let (n, _src) = receiver.recv_from(&mut buf).unwrap();
-        assert!(n > 0, "expected non-empty datagram");
-        assert_eq!(&buf[..n], expected_bytes.as_slice());
+        let expected_encoded_pdu = codec::encode_trap(&wire_pdu).unwrap();
+        let mut recv_buf = vec![0u8; TRAP_MTU_BYTES];
+        let (bytes_received, _src) = receiver.recv_from(&mut recv_buf).unwrap();
+        assert!(bytes_received > 0, "expected non-empty datagram");
+        assert_eq!(&recv_buf[..bytes_received], expected_encoded_pdu.as_slice());
     }
 
     #[test]
