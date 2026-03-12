@@ -4,7 +4,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends snmptrapd snmp && \
     rm -rf /var/lib/apt/lists/*
 
-COPY snmptrapd.conf /etc/snmp/snmptrapd.conf
+COPY tests/system/docker/snmptrapd/snmptrapd.conf /etc/snmp/snmptrapd.conf
 
 EXPOSE 162/udp
 

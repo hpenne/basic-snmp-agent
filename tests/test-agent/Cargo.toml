@@ -1,0 +1,12 @@
+[package]
+name = "test-agent"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# serde and serde_json are intentionally scoped to this test-only binary crate
+# and must not be added as dependencies to any library crate in the workspace.
+[dependencies]
+basic-snmp-agent = { path = "../.." }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -13,8 +13,8 @@ pub enum AgentError {
     Bind { addr: SocketAddr, source: io::Error },
     /// A TCP listener configuration call (`set_nonblocking`, `local_addr`) failed.
     Socket(io::Error),
-    /// The self-pipe could not be created.
-    Pipe(io::Error),
+    /// The UDP socket for trap sending could not be created.
+    UdpSocket(io::Error),
     /// The event loop thread could not be spawned.
     Spawn(io::Error),
 }
@@ -26,7 +26,7 @@ impl fmt::Display for AgentError {
                 write!(f, "failed to bind TCP listener to {addr}: {source}")
             }
             Self::Socket(e) => write!(f, "failed to configure TCP listener: {e}"),
-            Self::Pipe(e) => write!(f, "failed to create self-pipe: {e}"),
+            Self::UdpSocket(e) => write!(f, "failed to create UDP trap socket: {e}"),
             Self::Spawn(e) => write!(f, "failed to spawn event loop thread: {e}"),
         }
     }
@@ -36,7 +36,7 @@ impl std::error::Error for AgentError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Bind { source, .. } => Some(source),
-            Self::Socket(e) | Self::Pipe(e) | Self::Spawn(e) => Some(e),
+            Self::Socket(e) | Self::UdpSocket(e) | Self::Spawn(e) => Some(e),
         }
     }
 }
@@ -44,6 +44,9 @@ impl std::error::Error for AgentError {
 // ── SetError ──────────────────────────────────────────────────────────────────
 
 /// Error returned when [`Agent::set`](crate::Agent::set) fails.
+///
+/// Kept as an enum (rather than a unit struct) to allow additional variants
+/// in the future without a breaking API change.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SetError {
     /// The event loop has terminated; the command channel is disconnected.
@@ -63,19 +66,19 @@ impl std::error::Error for SetError {}
 // ── TrapError ─────────────────────────────────────────────────────────────────
 
 /// Error returned when [`Agent::send_trap`](crate::Agent::send_trap) fails.
+///
+/// Kept as an enum (rather than a unit struct) to allow additional variants
+/// in the future without a breaking API change.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TrapError {
     /// No destination addresses were provided.
     EmptyDestinations,
-    /// The event loop has terminated; the command channel is disconnected.
-    Disconnected,
 }
 
 impl fmt::Display for TrapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyDestinations => write!(f, "trap destination list is empty"),
-            Self::Disconnected => write!(f, "agent event loop has terminated"),
         }
     }
 }
@@ -112,9 +115,9 @@ mod tests {
     }
 
     #[test]
-    fn agent_error_pipe_display_mentions_self_pipe() {
-        let err = AgentError::Pipe(io_err());
-        assert!(err.to_string().contains("self-pipe"));
+    fn agent_error_udp_socket_display_mentions_udp_trap_socket() {
+        let err = AgentError::UdpSocket(io_err());
+        assert!(err.to_string().contains("UDP trap socket"));
     }
 
     #[test]
@@ -139,40 +142,34 @@ mod tests {
     #[test]
     fn agent_error_socket_source_returns_inner_io_error() {
         let err = AgentError::Socket(io_err());
-        assert!(err.source().is_some());
+        assert!(err.source().expect("source should be Some").to_string().contains("test"));
     }
 
     #[test]
-    fn agent_error_pipe_source_returns_inner_io_error() {
-        let err = AgentError::Pipe(io_err());
-        assert!(err.source().is_some());
+    fn agent_error_udp_socket_source_returns_inner_io_error() {
+        let err = AgentError::UdpSocket(io_err());
+        assert!(err.source().expect("source should be Some").to_string().contains("test"));
     }
 
     #[test]
     fn agent_error_spawn_source_returns_inner_io_error() {
         let err = AgentError::Spawn(io_err());
-        assert!(err.source().is_some());
+        assert!(err.source().expect("source should be Some").to_string().contains("test"));
     }
 
     // ── SetError Display ─────────────────────────────────────────────────
 
     #[test]
-    fn set_error_display_is_non_empty() {
+    fn set_error_disconnected_display_mentions_event_loop() {
         let err = SetError::Disconnected;
-        assert!(!err.to_string().is_empty());
+        assert!(err.to_string().contains("event loop"), "{}", err);
     }
 
     // ── TrapError Display ────────────────────────────────────────────────
 
     #[test]
-    fn trap_error_empty_destinations_display_is_non_empty() {
+    fn trap_error_empty_destinations_display_mentions_destination() {
         let err = TrapError::EmptyDestinations;
-        assert!(!err.to_string().is_empty());
-    }
-
-    #[test]
-    fn trap_error_disconnected_display_is_non_empty() {
-        let err = TrapError::Disconnected;
-        assert!(!err.to_string().is_empty());
+        assert!(err.to_string().contains("destination"), "{}", err);
     }
 }

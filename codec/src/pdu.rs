@@ -5,7 +5,7 @@
 //! - Clean public PDU types decoupled from the `rasn`/`rasn-snmp` wire types.
 //! - [`decode_pdu`]: BER-decode inbound SNMP PDU bytes into an [`InboundPdu`].
 //! - [`encode_response`]: BER-encode a [`GetResponse`] for sending.
-//! - [`encode_trap`]: BER-encode a [`TrapPdu`] for sending.
+//! - [`encode_trap`]: BER-encode a [`WireTrapPdu`] for sending.
 
 use std::fmt;
 
@@ -15,6 +15,7 @@ use rasn_snmp::v2::{
     GetRequest as RasnGetRequest, Pdu as RasnPdu, Pdus, Response, SetRequest as RasnSetRequest,
     Trap, VarBind, VarBindValue as RasnVarBindValue,
 };
+use rasn_snmp::v2c::Message as V2cMessage;
 
 use crate::Oid;
 use crate::Value;
@@ -244,7 +245,7 @@ pub struct GetResponse {
 /// The trap PDU carries the same structure as a response PDU but has zero
 /// `error_status` and `error_index` on the wire.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TrapPdu {
+pub struct WireTrapPdu {
     /// Request identifier for correlating notifications.
     pub request_id: i32,
     /// Variable bindings describing the trap payload.
@@ -347,9 +348,11 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
 
 // ── encode_trap ───────────────────────────────────────────────────────────────
 
-/// BER-encode a [`TrapPdu`] for transmission.
+/// BER-encode a [`WireTrapPdu`] for transmission as a plain UDP datagram.
 ///
-/// Returns the raw BER bytes ready to be wrapped in an `SNMPv3` message.
+/// Wraps the SNMPv2-Trap-PDU in an `SNMPv2c` message (RFC 1901) with an empty
+/// community string. This is the format expected by `snmptrapd` and compatible
+/// trap receivers for plain UDP trap delivery.
 ///
 /// # Errors
 ///
@@ -358,25 +361,34 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
 /// # Examples
 ///
 /// ```
-/// use codec::{Oid, Value, TrapPdu, Varbind, VarbindValue, encode_trap};
+/// use codec::{Oid, Value, WireTrapPdu, Varbind, VarbindValue, encode_trap};
 ///
 /// let oid: Oid = "1.3.6.1.6.3.1.1.4.1.0".parse().unwrap();
-/// let pdu = TrapPdu {
+/// let pdu = WireTrapPdu {
 ///     request_id: 1,
 ///     varbinds: vec![Varbind { oid, value: VarbindValue::Value(Value::TimeTicks(0)) }],
 /// };
 /// let bytes = encode_trap(&pdu).unwrap();
 /// assert!(!bytes.is_empty());
 /// ```
-pub fn encode_trap(pdu: &TrapPdu) -> Result<Vec<u8>, EncodeError> {
+pub fn encode_trap(pdu: &WireTrapPdu) -> Result<Vec<u8>, EncodeError> {
     let rasn_pdu = Trap(RasnPdu {
         request_id: pdu.request_id,
         error_status: 0,
         error_index: 0,
         variable_bindings: pdu.varbinds.iter().map(varbind_to_rasn).collect(),
     });
-    rasn::ber::encode(&rasn_pdu)
-        .map_err(|e| EncodeError::new(format!("BER encoding of TrapPdu failed: {e}")))
+    let msg = V2cMessage {
+        version: V2cMessage::<Pdus>::VERSION.into(),
+        // An empty community string is intentional: this agent does not
+        // implement SNMPv2c community-based authentication. Trap receivers
+        // used in this project are configured with `disableAuthorization yes`
+        // to accept unauthenticated traps.
+        community: rasn::types::OctetString::from(vec![]),
+        data: Pdus::Trap(rasn_pdu),
+    };
+    rasn::ber::encode(&msg)
+        .map_err(|e| EncodeError::new(format!("BER encoding of WireTrapPdu failed: {e}")))
 }
 
 // ── DecodeError ─────────────────────────────────────────────────────────────
@@ -873,9 +885,9 @@ mod tests {
     }
 
     #[test]
-    fn encode_trap_produces_non_empty_bytes() {
+    fn encode_trap_produces_valid_ber() {
         let oid: Oid = "1.3.6.1.6.3.1.1.4.1.0".parse().unwrap();
-        let pdu = TrapPdu {
+        let pdu = WireTrapPdu {
             request_id: 1,
             varbinds: vec![Varbind {
                 oid,
@@ -883,7 +895,14 @@ mod tests {
             }],
         };
         let bytes = encode_trap(&pdu).unwrap();
-        assert!(!bytes.is_empty());
+        // Verify the output is valid BER by decoding it back as a full SNMPv2c message.
+        let decoded: V2cMessage<Pdus> =
+            rasn::ber::decode(&bytes).expect("encode_trap must produce valid BER");
+        assert!(
+            matches!(decoded.data, Pdus::Trap(_)),
+            "expected Trap PDU, got {:?}",
+            decoded.data
+        );
     }
 
     #[test]
@@ -920,7 +939,7 @@ mod tests {
     fn encode_trap_round_trip_via_decode() {
         let trap_oid: Oid = "1.3.6.1.6.3.1.1.4.1.0".parse().unwrap();
         let sysname: Oid = "1.3.6.1.2.1.1.5.0".parse().unwrap();
-        let pdu = TrapPdu {
+        let pdu = WireTrapPdu {
             request_id: 77,
             varbinds: vec![
                 Varbind {
@@ -935,18 +954,19 @@ mod tests {
         };
         let bytes = encode_trap(&pdu).unwrap();
 
-        // BER-decode back via rasn to verify structural validity.
-        let decoded: Pdus = rasn::ber::decode(&bytes).expect("must decode");
-        match decoded {
-            Pdus::InformRequest(_) | Pdus::Trap(_) => {
-                // rasn may decode SNMPv2-Trap as Trap variant
+        // BER-decode back as a full SNMPv2c message to verify structural validity.
+        let decoded: V2cMessage<Pdus> = rasn::ber::decode(&bytes).expect("must decode");
+        assert_eq!(u64::try_from(decoded.version).unwrap(), V2cMessage::<Pdus>::VERSION);
+        match decoded.data {
+            Pdus::Trap(inner) => {
+                assert_eq!(inner.0.request_id, 77, "request_id must survive round-trip");
+                assert_eq!(
+                    inner.0.variable_bindings.len(),
+                    2,
+                    "both varbinds must survive round-trip"
+                );
             }
-            Pdus::Response(_) => panic!("decoded as Response, expected Trap"),
-            other => {
-                // Accept any PDU variant that rasn decodes to: the important
-                // thing is that the BER itself is well-formed.
-                let _ = other;
-            }
+            other => panic!("expected Trap PDU in message, got {other:?}"),
         }
 
         // Also verify round-trip by re-encoding and checking it's stable.

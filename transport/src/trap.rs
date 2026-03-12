@@ -76,6 +76,9 @@ impl TrapSender {
     /// Binds a UDP socket to `0.0.0.0:0` (OS-assigned port). The same socket
     /// is reused for all subsequent [`send_trap`][`TrapSender::send_trap`] calls.
     ///
+    /// **Limitation:** Only IPv4 destinations are supported. Sending to an IPv6
+    /// address will produce an I/O error for that destination.
+    ///
     /// # Errors
     ///
     /// Returns an error if the UDP socket cannot be bound.

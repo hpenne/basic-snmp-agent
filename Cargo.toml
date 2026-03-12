@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "transport", "codec", "mib"]
+members = [".", "transport", "codec", "mib", "tests/test-agent"]
 resolver = "2"
 
 [package]

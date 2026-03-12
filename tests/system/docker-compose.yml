@@ -1,0 +1,26 @@
+networks:
+  # Shared bridge network so test-agent containers can reach snmptrapd by hostname.
+  snmp-test:
+    driver: bridge
+
+services:
+  snmptrapd:
+    build:
+      context: ../../
+      dockerfile: tests/system/docker/snmptrapd/Dockerfile
+    image: snmptrapd-test
+    networks:
+      - snmp-test
+
+  # test-agent is run on-demand by behave (docker run --rm), not as a
+  # long-running service. This entry only declares the build so that
+  # `docker compose build` produces the image.
+  test-agent:
+    build:
+      context: ../../
+      dockerfile: tests/system/docker/test-agent/Dockerfile
+    image: test-agent-test
+    networks:
+      - snmp-test
+    profiles:
+      - build-only

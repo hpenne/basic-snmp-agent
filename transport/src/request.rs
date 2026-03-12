@@ -220,7 +220,7 @@ pub fn handle_set(req: &SetRequest) -> GetResponse {
 /// Per RFC 3416 §4.2.6, every Trap-PDU must begin with these two varbinds in order.
 /// The public API `TrapPdu` omits them; the event loop inserts them here so that
 /// callers never have to manage `sysUpTime`.
-pub fn build_wire_trap(api_pdu: &TrapPdu, start_time: Instant) -> codec::TrapPdu {
+pub fn build_wire_trap(api_pdu: &TrapPdu, start_time: Instant) -> codec::WireTrapPdu {
     let sys_up_time = elapsed_hundredths(start_time);
 
     let mut varbinds = vec![
@@ -235,7 +235,7 @@ pub fn build_wire_trap(api_pdu: &TrapPdu, start_time: Instant) -> codec::TrapPdu
     ];
     varbinds.extend_from_slice(&api_pdu.varbinds);
 
-    codec::TrapPdu {
+    codec::WireTrapPdu {
         request_id: api_pdu.request_id,
         varbinds,
     }

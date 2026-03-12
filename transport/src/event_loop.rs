@@ -364,8 +364,11 @@ impl EventLoop {
         loop {
             let candidate = self.next_token;
             self.next_token = self.next_token.wrapping_add(1);
+            // Defensive wrap: `next_token` starts at `FIRST_CONN_TOKEN` so the
+            // check below fires only after `usize::MAX` wrapping, which is
+            // effectively unreachable in practice. It exists to guarantee
+            // correctness even under theoretical token exhaustion.
             if self.next_token < FIRST_CONN_TOKEN {
-                // Wrapped around; skip past the reserved range.
                 self.next_token = FIRST_CONN_TOKEN;
             }
             if candidate >= FIRST_CONN_TOKEN {
