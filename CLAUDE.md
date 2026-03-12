@@ -72,6 +72,7 @@ The project currently has a single binary entry point at `src/main.rs`. As SNMP 
 
 ### Rust
 
+- No compiler warnings: Code must compile without warnings. Do not suppress warnings with `#[expect(...)]` unless there is a compelling reason; prefer fixing the underlying issue instead.
 - Write idiomatic Rust code.
 - Use Rust's type system to enforce correctness and avoid common errors.
 - Document crate and module public APIs with clear and concise (but not too verbose)documentation. Add examples to external APIs.

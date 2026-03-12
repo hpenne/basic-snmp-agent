@@ -19,24 +19,6 @@ pub enum AgentError {
     Spawn(io::Error),
 }
 
-impl AgentError {
-    pub(crate) fn bind(addr: SocketAddr, source: io::Error) -> Self {
-        Self::Bind { addr, source }
-    }
-
-    pub(crate) fn socket(source: io::Error) -> Self {
-        Self::Socket(source)
-    }
-
-    pub(crate) fn pipe(source: io::Error) -> Self {
-        Self::Pipe(source)
-    }
-
-    pub(crate) fn spawn(source: io::Error) -> Self {
-        Self::Spawn(source)
-    }
-}
-
 impl fmt::Display for AgentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -68,12 +50,6 @@ pub enum SetError {
     Disconnected,
 }
 
-impl SetError {
-    pub(crate) fn disconnected() -> Self {
-        Self::Disconnected
-    }
-}
-
 impl fmt::Display for SetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -93,16 +69,6 @@ pub enum TrapError {
     EmptyDestinations,
     /// The event loop has terminated; the command channel is disconnected.
     Disconnected,
-}
-
-impl TrapError {
-    pub(crate) fn empty_destinations() -> Self {
-        Self::EmptyDestinations
-    }
-
-    pub(crate) fn disconnected() -> Self {
-        Self::Disconnected
-    }
 }
 
 impl fmt::Display for TrapError {

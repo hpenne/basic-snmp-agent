@@ -24,10 +24,11 @@ The test infrastructure consists of four components:
 1. A test agent binary: a small Rust binary in a dedicated crate (tests/test-agent/) that constructs an Agent, populates a known set of MIB values, optionally sends traps, and runs.
 The binary accepts a command-line argument pointing to a trap definition file.
 If provided, it reads the file, sends the specified traps at startup, and then continues serving inbound requests.
-The trap file uses a simple text format listing trap OID, destination addresses, and varbinds.
+The trap file uses JSON format; the binary deserialises it using serde_json, scoped as a dev-dependency of the test-agent crate only.
+The binary uses only the public API types of the workspace crates (transport::TrapSender, transport::TrapPdu, codec::Oid, codec::Value, codec::Varbind, and related types).
 Behave starts the binary as a subprocess per scenario (with or without a trap file) and stops it afterwards.
 
-2. A custom net-snmp Docker image: built from a Dockerfile checked into the repository (tests/docker/).
+2. A custom net-snmp Docker image: built from a Dockerfile checked into the repository (tests/system/docker/).
 net-snmp is compiled with --with-security-modules=tsm and --with-transports=TLSTCP to enable TLS support.
 The image includes snmpget, snmpwalk, snmpbulkget, snmptrapd, and net-snmp-cert.
 The container is started once per test run and kept alive; behave invokes tools via docker exec.
@@ -35,14 +36,14 @@ The container is started once per test run and kept alive; behave invokes tools 
 3. Pre-generated test certificates: a self-signed CA, agent certificate, and client certificate checked into the repository (tests/certs/).
 These are test-only certificates with no secret value.
 
-4. Behave test suite: feature files in tests/features/ covering inbound requests (GET, GETNEXT, GETBULK, SET), TLS authentication (valid client, untrusted client), and outbound traps.
+4. Behave test suite: feature files in tests/system/features/ covering inbound requests (GET, GETNEXT, GETBULK, SET), TLS authentication (valid client, untrusted client), and outbound traps.
 Step definitions shell out to docker exec to run net-snmp commands and assert on their output.
 environment.py manages the lifecycle of the test agent subprocess, the Docker container, and snmptrapd.
 
-For trap testing, snmptrapd runs inside the same Docker container, configured to receive plain UDP traps and log them to a file.
-Behave reads the log file after each trap scenario to verify receipt.
+For trap testing, snmptrapd runs inside the same Docker container, configured to receive plain UDP traps and log them to stdout.
+Behave reads snmptrapd's container logs after each trap scenario to verify receipt.
 
-For trap scenarios, behave writes a trap definition file and starts the test agent binary with it.
+For trap scenarios, behave writes a trap definition JSON file and starts the test agent binary with it.
 The agent sends the traps at startup before entering its main loop.
 This avoids the need for a runtime control mechanism; each scenario gets a fresh agent process with the exact traps it needs.
 
