@@ -956,7 +956,10 @@ mod tests {
 
         // BER-decode back as a full SNMPv2c message to verify structural validity.
         let decoded: V2cMessage<Pdus> = rasn::ber::decode(&bytes).expect("must decode");
-        assert_eq!(u64::try_from(decoded.version).unwrap(), V2cMessage::<Pdus>::VERSION);
+        assert_eq!(
+            u64::try_from(decoded.version).unwrap(),
+            V2cMessage::<Pdus>::VERSION
+        );
         match decoded.data {
             Pdus::Trap(inner) => {
                 assert_eq!(inner.0.request_id, 77, "request_id must survive round-trip");

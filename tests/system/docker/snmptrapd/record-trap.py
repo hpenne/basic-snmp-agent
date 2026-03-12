@@ -24,6 +24,13 @@ import sys
 
 lines = [line.rstrip("\n") for line in sys.stdin.readlines()]
 
+if len(lines) < 2:
+    print(
+        f"record-trap.py: warning: expected at least 2 lines (hostname + source) "
+        f"but received {len(lines)}",
+        file=sys.stderr,
+    )
+
 hostname = lines[0] if lines else ""
 source = lines[1] if len(lines) > 1 else ""
 

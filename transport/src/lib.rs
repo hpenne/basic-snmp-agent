@@ -21,5 +21,6 @@ pub mod event_loop;
 pub mod request;
 pub mod trap;
 
+pub use event_loop::EventLoopError;
 pub use request::TrapPdu;
 pub use trap::{TrapResult, TrapSender};

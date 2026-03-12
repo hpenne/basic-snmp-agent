@@ -80,14 +80,19 @@ def _poll_for_trap(
     container: str,
     attempts: int = 10,
     interval: float = 0.5,
-) -> dict | None:
-    """Poll *container*'s trap store until at least one trap appears."""
+    min_count: int = 1,
+) -> list[dict]:
+    """Poll *container*'s trap store until at least *min_count* traps appear.
+
+    Returns all traps received so far once the threshold is met, or the last
+    (possibly empty) snapshot after exhausting all attempts.
+    """
     for _ in range(attempts):
         traps = _read_traps(container)
-        if traps:
-            return traps[0]
+        if len(traps) >= min_count:
+            return traps
         time.sleep(interval)
-    return None
+    return _read_traps(container)
 
 
 # ---------------------------------------------------------------------------
@@ -206,20 +211,20 @@ def step_send_oversized_trap(context, trap_oid):
 
 @then(r'snmptrapd receives a trap named "(?P<name>[^"]+)"')
 def step_snmptrapd_receives_trap(context, name):
-    trap = _poll_for_trap(context.snmptrapd_container)
-    assert trap is not None, "snmptrapd did not receive any trap within the timeout"
-    context.named_traps[name] = trap
+    traps = _poll_for_trap(context.snmptrapd_container)
+    assert traps, "snmptrapd did not receive any trap within the timeout"
+    context.named_traps[name] = traps[0]
 
 
 @then(r'"(?P<receiver_name>[^"]+)" receives a trap named "(?P<name>[^"]+)"')
 def step_receiver_receives_trap(context, receiver_name, name):
     container = context.extra_container_map[receiver_name]
-    trap = _poll_for_trap(container)
-    assert trap is not None, (
+    traps = _poll_for_trap(container)
+    assert traps, (
         f"Receiver '{receiver_name}' (container '{container}') did not receive "
         "any trap within the timeout"
     )
-    context.named_traps[name] = trap
+    context.named_traps[name] = traps[0]
 
 
 @then(r'trap "(?P<name>[^"]+)" has varbind "(?P<oid>[^"]+)"')
@@ -243,6 +248,9 @@ def step_trap_has_varbind_with_value(context, name, oid, expected_value):
         f"Trap '{name}' has no varbind with OID '{dot_oid}'.\n"
         f"Varbinds present: {trap['varbinds']}"
     )
+    # Substring match: snmptrapd may prefix the value with type information
+    # (e.g. "OID: .1.3.6.1..." or "INTEGER: 42"), so we check containment
+    # rather than equality.
     assert any(dot_val in v["value"] for v in matching), (
         f"Trap '{name}' varbind '{dot_oid}' does not contain value '{dot_val}'.\n"
         f"Actual values: {[v['value'] for v in matching]}"

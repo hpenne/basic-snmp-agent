@@ -13,7 +13,9 @@
 //! event loop drains the mpsc channel promptly.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::io::{self, Read};
+use std::net::SocketAddr;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::mpsc::{self, Receiver, Sender};
 
@@ -29,6 +31,46 @@ const PIPE_TOKEN: Token = Token(1);
 /// First token index available for accepted client connections.
 const FIRST_CONN_TOKEN: usize = 2;
 
+// ── EventLoopError ───────────────────────────────────────────────────────────
+
+/// Error returned when [`EventLoop::new`] fails.
+///
+/// Each variant identifies precisely which operation failed, letting callers
+/// map failures to appropriate higher-level errors without relying on
+/// `io::ErrorKind` heuristics.
+#[derive(Debug)]
+pub enum EventLoopError {
+    /// TCP listener could not be bound to the requested address.
+    Bind { addr: SocketAddr, source: io::Error },
+    /// Self-pipe creation or configuration failed.
+    Pipe(io::Error),
+    /// mio token registration for the listener or self-pipe failed.
+    Registration(io::Error),
+}
+
+impl fmt::Display for EventLoopError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bind { addr, source } => {
+                write!(f, "failed to bind TCP listener to {addr}: {source}")
+            }
+            Self::Pipe(e) => write!(f, "self-pipe creation failed: {e}"),
+            Self::Registration(e) => write!(f, "mio token registration failed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for EventLoopError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Bind { source, .. } => Some(source),
+            Self::Pipe(e) | Self::Registration(e) => Some(e),
+        }
+    }
+}
+
+// ── Command ──────────────────────────────────────────────────────────────────
+
 /// Commands sent from application threads to the event loop.
 ///
 /// Send commands via [`CommandSender::send`], which also wakes the poll loop.
@@ -42,6 +84,8 @@ pub enum Command {
     /// Shut down the event loop cleanly.
     Shutdown,
 }
+
+// ── CommandSender ────────────────────────────────────────────────────────────
 
 /// A cloneable handle for sending [`Command`]s to the event loop.
 ///
@@ -124,6 +168,8 @@ impl Clone for CommandSender {
     }
 }
 
+// ── EventLoop ────────────────────────────────────────────────────────────────
+
 /// The mio-driven event loop that owns the TCP listener, accepted connections,
 /// and the self-pipe read end.
 ///
@@ -164,8 +210,9 @@ impl EventLoop {
     ///
     /// # Errors
     ///
-    /// Returns an error if the TCP listener cannot be bound, the self-pipe
-    /// cannot be created, or mio registration fails.
+    /// Returns [`EventLoopError::Bind`] if the TCP listener cannot be bound,
+    /// [`EventLoopError::Pipe`] if the self-pipe cannot be created, or
+    /// [`EventLoopError::Registration`] if mio token registration fails.
     ///
     /// # Examples
     ///
@@ -177,27 +224,32 @@ impl EventLoop {
     /// let (event_loop, bound_addr, sender) = EventLoop::new(addr).unwrap();
     /// println!("listening on {bound_addr}");
     /// ```
-    pub fn new(
-        addr: std::net::SocketAddr,
-    ) -> io::Result<(Self, std::net::SocketAddr, CommandSender)> {
-        let poll = Poll::new()?;
+    pub fn new(addr: SocketAddr) -> Result<(Self, SocketAddr, CommandSender), EventLoopError> {
+        let poll = Poll::new().map_err(EventLoopError::Registration)?;
         let registry = poll.registry();
 
         // Bind the TCP listener and record the real address before handing it
         // to mio so callers (tests) know which port was chosen.
-        let mut listener = mio::net::TcpListener::bind(addr)?;
-        let bound_addr = listener.local_addr()?;
-        registry.register(&mut listener, LISTENER_TOKEN, Interest::READABLE)?;
+        let mut listener = mio::net::TcpListener::bind(addr)
+            .map_err(|e| EventLoopError::Bind { addr, source: e })?;
+        let bound_addr = listener
+            .local_addr()
+            .map_err(|e| EventLoopError::Bind { addr, source: e })?;
+        registry
+            .register(&mut listener, LISTENER_TOKEN, Interest::READABLE)
+            .map_err(EventLoopError::Registration)?;
 
         // Allocate a Unix self-pipe for waking the poll loop from other threads.
         // `create_pipe` returns `OwnedFd` values, so partial failures inside it
         // automatically close any already-created fds.
-        let (pipe_read_fd, pipe_write_fd) = create_pipe()?;
+        let (pipe_read_fd, pipe_write_fd) = create_pipe().map_err(EventLoopError::Pipe)?;
 
         // Register the pipe read end. If this fails the OwnedFd values are
         // dropped here, which closes the fds without leaking them.
         let mut source = SourceFd(&pipe_read_fd.as_raw_fd());
-        registry.register(&mut source, PIPE_TOKEN, Interest::READABLE)?;
+        registry
+            .register(&mut source, PIPE_TOKEN, Interest::READABLE)
+            .map_err(EventLoopError::Registration)?;
 
         let (tx, rx) = mpsc::channel::<Command>();
 
@@ -359,7 +411,9 @@ impl EventLoop {
     /// Allocate the next unique connection token, skipping reserved values.
     ///
     /// Wraps safely around `usize::MAX` and skips `LISTENER_TOKEN` and
-    /// `PIPE_TOKEN` to avoid collisions with reserved tokens.
+    /// `PIPE_TOKEN` to avoid collisions with reserved tokens. After wrap-around,
+    /// also skips any token already present in the connection map to prevent
+    /// silent entry overwrites under theoretical token exhaustion.
     fn next_connection_token(&mut self) -> Token {
         loop {
             let candidate = self.next_token;
@@ -371,7 +425,7 @@ impl EventLoop {
             if self.next_token < FIRST_CONN_TOKEN {
                 self.next_token = FIRST_CONN_TOKEN;
             }
-            if candidate >= FIRST_CONN_TOKEN {
+            if candidate >= FIRST_CONN_TOKEN && !self.connections.contains_key(&Token(candidate)) {
                 return Token(candidate);
             }
         }
@@ -521,5 +575,101 @@ mod tests {
 
         let join_result = handle.join().expect("event loop thread panicked");
         assert!(join_result.is_ok());
+    }
+
+    #[test]
+    fn given_already_used_token_when_next_connection_token_called_then_token_is_skipped() {
+        // Given: an event loop whose connection map already contains token 2
+        // (the first candidate after FIRST_CONN_TOKEN). Bind a listener so we
+        // can connect to it and get a real mio::net::TcpStream for the map.
+        let listener_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let std_listener = std::net::TcpListener::bind(listener_addr).unwrap();
+        let bound = std_listener.local_addr().unwrap();
+
+        let mut event_loop = EventLoop {
+            poll: Poll::new().unwrap(),
+            listener: mio::net::TcpListener::bind("127.0.0.1:0".parse().unwrap()).unwrap(),
+            pipe_read_fd: {
+                // Create a real pipe so OwnedFd is valid.
+                let mut fds: [libc::c_int; 2] = [0; 2];
+                unsafe { libc::pipe(fds.as_mut_ptr()) };
+                unsafe { OwnedFd::from_raw_fd(fds[0]) }
+            },
+            rx: mpsc::channel::<Command>().1,
+            next_token: FIRST_CONN_TOKEN,
+            connections: HashMap::new(),
+        };
+
+        // Connect to the std listener so the TcpStream is valid. mio's
+        // connect is non-blocking and always returns Ok immediately on Unix.
+        let dummy_stream = mio::net::TcpStream::connect(bound).unwrap();
+        event_loop
+            .connections
+            .insert(Token(FIRST_CONN_TOKEN), dummy_stream);
+
+        // When: the next token is requested.
+        let token = event_loop.next_connection_token();
+
+        // Then: the returned token must not be the one already in the map.
+        assert_ne!(
+            token,
+            Token(FIRST_CONN_TOKEN),
+            "expected token to skip the occupied slot"
+        );
+        assert!(token.0 >= FIRST_CONN_TOKEN);
+    }
+
+    #[test]
+    fn given_event_loop_error_bind_when_display_then_contains_address_and_source() {
+        let addr: SocketAddr = "127.0.0.1:10161".parse().unwrap();
+        let err = EventLoopError::Bind {
+            addr,
+            source: io::Error::new(io::ErrorKind::AddrInUse, "already in use"),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("127.0.0.1:10161"), "{msg}");
+        assert!(msg.contains("already in use"), "{msg}");
+    }
+
+    #[test]
+    fn given_event_loop_error_pipe_when_display_then_mentions_self_pipe() {
+        let err = EventLoopError::Pipe(io::Error::other("pipe failed"));
+        assert!(err.to_string().contains("self-pipe"), "{}", err);
+    }
+
+    #[test]
+    fn given_event_loop_error_registration_when_display_then_mentions_registration() {
+        let err = EventLoopError::Registration(io::Error::other("registration failed"));
+        assert!(err.to_string().contains("registration"), "{}", err);
+    }
+
+    #[test]
+    fn given_event_loop_error_when_source_then_returns_inner_io_error() {
+        use std::error::Error;
+
+        let addr: SocketAddr = "127.0.0.1:10161".parse().unwrap();
+        let bind_err = EventLoopError::Bind {
+            addr,
+            source: io::Error::new(io::ErrorKind::AddrInUse, "bind source"),
+        };
+        assert!(
+            bind_err
+                .source()
+                .unwrap()
+                .to_string()
+                .contains("bind source")
+        );
+
+        let pipe_err = EventLoopError::Pipe(io::Error::other("pipe source"));
+        assert!(
+            pipe_err
+                .source()
+                .unwrap()
+                .to_string()
+                .contains("pipe source")
+        );
+
+        let reg_err = EventLoopError::Registration(io::Error::other("reg source"));
+        assert!(reg_err.source().unwrap().to_string().contains("reg source"));
     }
 }

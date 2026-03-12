@@ -10,4 +10,4 @@ Follow this loop (max 3 iterations):
 
 If you encounter a situation where a design decision is unclear or the right approach requires trade-offs between alternatives, ask the user before proceeding.
 
-At the end, summarize what was built, how many iterations it took, and any unresolved suggestions.
+At the end, summarize what was built and how many iterations it took. Then list all reviewer suggestions that were not fixed — grouped by category (MUST FIX, SHOULD FIX, SUGGESTION) — with the exact suggestion text and the reason it was not addressed (e.g. not flagged as must-fix, deferred by user, out of scope). If there are no unresolved suggestions, state that explicitly.

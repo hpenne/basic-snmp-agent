@@ -142,19 +142,34 @@ mod tests {
     #[test]
     fn agent_error_socket_source_returns_inner_io_error() {
         let err = AgentError::Socket(io_err());
-        assert!(err.source().expect("source should be Some").to_string().contains("test"));
+        assert!(
+            err.source()
+                .expect("source should be Some")
+                .to_string()
+                .contains("test")
+        );
     }
 
     #[test]
     fn agent_error_udp_socket_source_returns_inner_io_error() {
         let err = AgentError::UdpSocket(io_err());
-        assert!(err.source().expect("source should be Some").to_string().contains("test"));
+        assert!(
+            err.source()
+                .expect("source should be Some")
+                .to_string()
+                .contains("test")
+        );
     }
 
     #[test]
     fn agent_error_spawn_source_returns_inner_io_error() {
         let err = AgentError::Spawn(io_err());
-        assert!(err.source().expect("source should be Some").to_string().contains("test"));
+        assert!(
+            err.source()
+                .expect("source should be Some")
+                .to_string()
+                .contains("test")
+        );
     }
 
     // ── SetError Display ─────────────────────────────────────────────────

@@ -18,8 +18,8 @@ Feature: SNMP trap sending
       | 1.3.6.1.2.1.2.2.1.1.1 | Integer32 | 1     |
       | 1.3.6.1.2.1.2.2.1.7.1 | Integer32 | 2     |
     Then snmptrapd receives a trap named "link-down"
-    And trap "link-down" has varbind "1.3.6.1.2.1.2.2.1.1.1"
-    And trap "link-down" has varbind "1.3.6.1.2.1.2.2.1.7.1"
+    And trap "link-down" has varbind "1.3.6.1.2.1.2.2.1.1.1" with value "1"
+    And trap "link-down" has varbind "1.3.6.1.2.1.2.2.1.7.1" with value "2"
 
   Scenario: OctetString varbind is preserved in transit
     When the agent sends a trap with OID "1.3.6.1.6.3.1.1.5.1" and varbinds:

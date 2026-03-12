@@ -98,11 +98,18 @@ fn main() {
                     eprintln!("error: invalid varbind value for OID '{}': {e}", v.oid);
                     process::exit(1);
                 });
-                Varbind { oid, value: VarbindValue::Value(value) }
+                Varbind {
+                    oid,
+                    value: VarbindValue::Value(value),
+                }
             })
             .collect();
 
-        let pdu = TrapPdu { request_id: def.request_id, trap_oid, varbinds };
+        let pdu = TrapPdu {
+            request_id: def.request_id,
+            trap_oid,
+            varbinds,
+        };
 
         let destinations: Vec<SocketAddr> = def
             .destinations
@@ -181,36 +188,33 @@ fn to_value(def: &VarbindDef) -> Result<Value, String> {
             }),
 
         "Counter32" => {
-            let v = def
-                .data
-                .as_u64()
-                .ok_or_else(|| format!("Counter32: expected non-negative integer, got {}", def.data))?;
+            let v = def.data.as_u64().ok_or_else(|| {
+                format!("Counter32: expected non-negative integer, got {}", def.data)
+            })?;
             u32::try_from(v)
                 .map(Value::Counter32)
                 .map_err(|_| format!("Counter32: value {v} is out of u32 range"))
         }
 
-        "Counter64" => def
-            .data
-            .as_u64()
-            .map(Value::Counter64)
-            .ok_or_else(|| format!("Counter64: expected non-negative integer, got {}", def.data)),
+        "Counter64" => {
+            def.data.as_u64().map(Value::Counter64).ok_or_else(|| {
+                format!("Counter64: expected non-negative integer, got {}", def.data)
+            })
+        }
 
         "Gauge32" => {
-            let v = def
-                .data
-                .as_u64()
-                .ok_or_else(|| format!("Gauge32: expected non-negative integer, got {}", def.data))?;
+            let v = def.data.as_u64().ok_or_else(|| {
+                format!("Gauge32: expected non-negative integer, got {}", def.data)
+            })?;
             u32::try_from(v)
                 .map(Value::Gauge32)
                 .map_err(|_| format!("Gauge32: value {v} is out of u32 range"))
         }
 
         "TimeTicks" => {
-            let v = def
-                .data
-                .as_u64()
-                .ok_or_else(|| format!("TimeTicks: expected non-negative integer, got {}", def.data))?;
+            let v = def.data.as_u64().ok_or_else(|| {
+                format!("TimeTicks: expected non-negative integer, got {}", def.data)
+            })?;
             u32::try_from(v)
                 .map(Value::TimeTicks)
                 .map_err(|_| format!("TimeTicks: value {v} is out of u32 range"))

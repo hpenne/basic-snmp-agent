@@ -1,4 +1,4 @@
-//! SNMPv3 agent library.
+//! `SNMPv3` agent library.
 //!
 //! This crate is the public API surface. It exposes [`Agent`], the primary
 //! entry point for embedding applications, and ties together the [`codec`],
@@ -43,7 +43,7 @@ pub use codec::{Oid, Value, Varbind, VarbindValue};
 pub use error::{AgentError, SetError, TrapError};
 pub use transport::{TrapPdu, TrapResult};
 
-use transport::event_loop::{Command, EventLoop};
+use transport::event_loop::{Command, EventLoop, EventLoopError};
 use transport::trap::TrapSender;
 
 // ── AgentInner ───────────────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ impl Drop for AgentInner {
         let mut guard = self
             .thread_handle
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(handle) = guard.take() {
             let _ = handle.join();
         }
@@ -107,6 +107,12 @@ impl Agent {
     ///
     /// Blocks until all destinations have been attempted and returns one
     /// [`TrapResult`] per destination, in the same order as `destinations`.
+    ///
+    /// **Note:** This method performs UDP I/O on the caller's thread directly —
+    /// it does not route through the event loop. The UDP socket is intentionally
+    /// not registered with mio (per ADR-0003), so no channel round-trip is
+    /// needed. The caller's thread is the one issuing the `sendto` syscall for
+    /// each destination.
     ///
     /// The agent automatically prepends `sysUpTime.0` and `snmpTrapOID.0` as
     /// the first two varbinds, as required by RFC 3416 §4.2.6.
@@ -182,6 +188,11 @@ impl AgentBuilder {
     /// Create a builder with default settings.
     ///
     /// Default listen address: `0.0.0.0:10161` (IANA-assigned SNMP-over-TLS port).
+    ///
+    /// # Panics
+    ///
+    /// Never panics in practice; the `expect` guards a compile-time constant address.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             listen_addr: "0.0.0.0:10161"
@@ -214,16 +225,12 @@ impl AgentBuilder {
     pub fn build(self) -> Result<Agent, AgentError> {
         let listen_addr = self.listen_addr;
 
-        // Heuristic: `AddrInUse`/`AddrNotAvailable` almost certainly come from
-        // `TcpListener::bind`; any other error kind is treated as a socket
-        // configuration failure. `EventLoop::new` does not yet return a
-        // structured error type that would let us distinguish these precisely.
         let (event_loop, _bound_addr, command_sender) =
-            EventLoop::new(listen_addr).map_err(|e| match e.kind() {
-                io::ErrorKind::AddrInUse | io::ErrorKind::AddrNotAvailable => {
-                    AgentError::Bind { addr: listen_addr, source: e }
+            EventLoop::new(listen_addr).map_err(|e| match e {
+                EventLoopError::Bind { addr, source } => AgentError::Bind { addr, source },
+                EventLoopError::Pipe(source) | EventLoopError::Registration(source) => {
+                    AgentError::Socket(source)
                 }
-                _ => AgentError::Socket(e),
             })?;
 
         let trap_sender = TrapSender::new(Instant::now()).map_err(AgentError::UdpSocket)?;

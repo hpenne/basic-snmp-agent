@@ -19,7 +19,7 @@ mod value;
 pub use oid::{Oid, OidErrorCategory, ParseOidError};
 pub use pdu::{
     DecodeError, DecodeErrorKind, EncodeError, ErrorStatus, GetBulkRequest, GetNextRequest,
-    GetRequest, GetResponse, InboundPdu, SetRequest, WireTrapPdu, Varbind, VarbindValue, decode_pdu,
-    encode_response, encode_trap,
+    GetRequest, GetResponse, InboundPdu, SetRequest, Varbind, VarbindValue, WireTrapPdu,
+    decode_pdu, encode_response, encode_trap,
 };
 pub use value::Value;
