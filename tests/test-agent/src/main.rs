@@ -148,7 +148,7 @@ fn main() {
         }
     }
 
-    process::exit(if all_ok { 0 } else { 1 });
+    process::exit(i32::from(!all_ok));
 }
 
 // ── Value conversion ──────────────────────────────────────────────────────────

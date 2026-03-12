@@ -433,7 +433,7 @@ mod tests {
         for i in 0u32..200 {
             store.set(
                 oid(&format!("1.3.6.1.2.1.1.{i}.0")),
-                Value::Integer32(i as i32),
+                Value::Integer32(i.cast_signed()),
             );
         }
         let req = GetBulkRequest {
@@ -538,7 +538,7 @@ mod tests {
     #[test]
     fn given_start_time_one_second_ago_when_elapsed_hundredths_then_returns_around_100() {
         // 1 second = 100 hundredths; allow generous headroom for slow CI runners.
-        let start = Instant::now() - Duration::from_secs(1);
+        let start = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
 
         let hundredths = elapsed_hundredths(start);
 
@@ -551,7 +551,7 @@ mod tests {
     #[test]
     fn given_start_time_ten_seconds_ago_when_elapsed_hundredths_then_returns_around_1000() {
         // 10 seconds = 1000 hundredths; allow generous headroom for slow CI runners.
-        let start = Instant::now() - Duration::from_secs(10);
+        let start = Instant::now().checked_sub(Duration::from_secs(10)).unwrap();
 
         let hundredths = elapsed_hundredths(start);
 

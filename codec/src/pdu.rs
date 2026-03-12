@@ -1028,6 +1028,8 @@ mod tests {
 
     #[test]
     fn encode_decode_empty_varbinds() {
+        use rasn_snmp::v2::{GetRequest as RasnGetRequest, Pdu};
+
         // Encode a GetResponse with zero varbinds.
         let pdu = GetResponse {
             request_id: 100,
@@ -1051,7 +1053,6 @@ mod tests {
         }
 
         // Encode a GetRequest with zero varbinds via rasn-snmp and decode via decode_pdu.
-        use rasn_snmp::v2::{GetRequest as RasnGetRequest, Pdu};
         let get_req = RasnGetRequest(Pdu {
             request_id: 200,
             error_status: 0,
@@ -1275,7 +1276,7 @@ mod tests {
         for (i, value) in values.into_iter().enumerate() {
             let oid: Oid = format!("{oid_base}.{i}.0").parse().unwrap();
             let pdu = GetResponse {
-                request_id: i as i32,
+                request_id: i32::try_from(i).expect("loop index fits i32"),
                 error_status: ErrorStatus::NoError,
                 error_index: 0,
                 varbinds: vec![Varbind {
