@@ -48,7 +48,7 @@ def _compose(*args: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def before_all(context):
-    subprocess.run(_compose("build"), check=True)
+    subprocess.run(_compose("--profile", "build-only", "build"), check=True)
     subprocess.run(_compose("up", "-d", "snmptrapd"), check=True)
     # Allow snmptrapd time to bind its UDP socket before tests send traps.
     time.sleep(2)

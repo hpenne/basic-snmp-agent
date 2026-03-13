@@ -90,7 +90,7 @@ jobs:
 
       - name: Build Docker images
         working-directory: tests/system
-        run: docker compose build
+        run: docker compose --profile build-only build
 
       - name: Run system tests
         working-directory: tests/system
