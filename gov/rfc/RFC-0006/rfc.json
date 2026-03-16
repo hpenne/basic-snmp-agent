@@ -1,0 +1,31 @@
+{
+  "rfc_id": "RFC-0006",
+  "title": "TLS Transport and Certificate Authentication",
+  "version": "0.1.0",
+  "status": "normative",
+  "phase": "spec",
+  "owners": [
+    "@Helge Penne"
+  ],
+  "created": "2026-03-16",
+  "updated": "2026-03-16",
+  "sections": [
+    {
+      "title": "Summary"
+    },
+    {
+      "title": "Specification",
+      "clauses": [
+        "clauses/C-TRANSPORT.json",
+        "clauses/C-AUTH.json"
+      ]
+    }
+  ],
+  "changelog": [
+    {
+      "version": "0.1.0",
+      "date": "2026-03-16",
+      "notes": "Initial draft"
+    }
+  ]
+}

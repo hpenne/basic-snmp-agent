@@ -2,7 +2,8 @@
   "clause_id": "C-AUTH",
   "title": "Certificate Authentication",
   "kind": "normative",
-  "status": "active",
+  "status": "superseded",
   "text": "[REQ-0015] The agent MUST authenticate inbound peers using X.509 certificates via the TLS Transport Security Model (RFC 5953).\n[REQ-0016] USM and community-string authentication MUST NOT be supported.\n\n[REQ-0017] The agent MUST accept its own certificate and private key at construction time.\n\n[REQ-0018] The agent MUST accept a set of trusted CA certificates at construction time, used to verify connecting peers.\n\n[REQ-0019] The agent MUST reject any TLS handshake from a peer whose certificate does not chain to a trusted CA.\n\n[REQ-0020] Outbound traps are sent over plain UDP and MUST NOT require any authentication or encryption.\n\nCertificate changes require restarting the agent.\n\n**Rationale:**\nCertificate-based authentication eliminates the shared-secret weaknesses of USM and community strings.\nRequiring a restart for certificate changes keeps the implementation simple; the agent is expected to be lightweight and fast to restart.\nTraps are sent over plain UDP and therefore have no TLS context to authenticate.",
+  "superseded_by": "RFC-0006:C-AUTH",
   "since": "0.1.0"
 }
