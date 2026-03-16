@@ -1,0 +1,49 @@
+[govctl]
+schema = 1
+id = "WI-2026-03-16-004"
+title = "TLS layer via rustls"
+status = "queue"
+created = "2026-03-16"
+
+[content]
+description = "Layer rustls on top of the plain-TCP dispatch path from WI-2026-03-16-002. Each accepted connection is wrapped in a `rustls::ServerConnection`. The event loop drives the TLS handshake, decrypts inbound records, passes plaintext to the RFC 6353 deframer, and encrypts outbound responses before writing them to the socket. Connections whose peer cert does not chain to a trusted CA are rejected. Requires explicit permission to add the rustls dependency. Prerequisite: WI-2026-03-16-002 and approved WI-2026-03-16-003."
+
+[[content.acceptance_criteria]]
+text = "rustls and rustls-pki-types added to transport/Cargo.toml (with user approval)"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "ConnectionState includes a rustls::ServerConnection"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "event loop drives TLS handshake before attempting to read SNMP frames"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "inbound bytes are decrypted before RFC 6353 deframing; outbound responses are encrypted"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "connections whose peer cert does not chain to a trusted CA are rejected per RFC-0001:C-AUTH"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "unit test — TLS handshake succeeds with a valid self-signed test cert"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "unit test — connection is rejected when peer cert is from an unknown CA"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "cargo clippy --workspace -- -D warnings -W clippy::pedantic passes"
+status = "pending"
+category = "chore"

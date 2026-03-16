@@ -14,13 +14,15 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
+
+use crate::request;
 
 /// mio token for the TCP listener.
 const LISTENER_TOKEN: Token = Token(0);
@@ -30,6 +32,17 @@ const PIPE_TOKEN: Token = Token(1);
 
 /// First token index available for accepted client connections.
 const FIRST_CONN_TOKEN: usize = 2;
+
+/// Maximum number of GETBULK repetitions the agent will honour per request.
+///
+/// Caps the `max-repetitions` field from the wire to prevent a single large
+/// bulk request from monopolising the event loop for an extended period.
+const MAX_BULK_REPETITIONS: u32 = 100;
+
+/// Maximum accepted RFC 6353 frame payload length, matching the `SNMPv3`
+/// `maxMessageSize` upper bound. Frames claiming a larger length are rejected
+/// and the connection is closed to prevent memory exhaustion.
+const MAX_FRAME_SIZE: usize = 65_535;
 
 // ── EventLoopError ───────────────────────────────────────────────────────────
 
@@ -83,6 +96,18 @@ pub enum Command {
     },
     /// Shut down the event loop cleanly.
     Shutdown,
+    /// Query a single OID from the MIB store and send the result back.
+    ///
+    /// Compiled only for unit tests within *this crate* (`cfg(test)`).
+    /// Integration tests in `transport/tests/` compile the crate without
+    /// `cfg(test)` and therefore cannot see this variant. Production code has
+    /// no need to read values back out of the event loop — SNMP GET dispatch
+    /// handles that.
+    #[cfg(test)]
+    QueryValue {
+        oid: codec::Oid,
+        reply: std::sync::mpsc::SyncSender<Option<codec::Value>>,
+    },
 }
 
 // ── CommandSender ────────────────────────────────────────────────────────────
@@ -169,10 +194,19 @@ impl Clone for CommandSender {
     }
 }
 
+// ── ConnectionState ──────────────────────────────────────────────────────────
+
+/// Per-connection state held in the event loop's connection map.
+struct ConnectionState {
+    stream: mio::net::TcpStream,
+    /// Accumulates partially-received bytes until a complete RFC 6353 frame arrives.
+    read_buf: Vec<u8>,
+}
+
 // ── EventLoop ────────────────────────────────────────────────────────────────
 
 /// The mio-driven event loop that owns the TCP listener, accepted connections,
-/// and the self-pipe read end.
+/// the self-pipe read end, and the MIB store.
 ///
 /// Call [`run`][`EventLoop::run`] from a dedicated OS thread. The loop exits
 /// when it receives [`Command::Shutdown`].
@@ -199,7 +233,9 @@ pub struct EventLoop {
     rx: Receiver<Command>,
     /// Next token value to assign to an accepted connection.
     next_token: usize,
-    connections: HashMap<Token, mio::net::TcpStream>,
+    connections: HashMap<Token, ConnectionState>,
+    /// MIB store; updated by `SetValue` commands from application threads.
+    store: mib::Store,
 }
 
 impl EventLoop {
@@ -261,6 +297,7 @@ impl EventLoop {
             rx,
             next_token: FIRST_CONN_TOKEN,
             connections: HashMap::new(),
+            store: mib::Store::new(),
         };
         let sender = CommandSender { tx, pipe_write_fd };
 
@@ -327,7 +364,13 @@ impl EventLoop {
                     eprintln!(
                         "[event_loop] accepted connection from {peer_addr} (token {token:?})"
                     );
-                    self.connections.insert(token, stream);
+                    self.connections.insert(
+                        token,
+                        ConnectionState {
+                            stream,
+                            read_buf: Vec::new(),
+                        },
+                    );
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) => {
@@ -351,11 +394,17 @@ impl EventLoop {
         loop {
             match self.rx.try_recv() {
                 Ok(Command::SetValue { oid, value }) => {
-                    eprintln!("[event_loop] SetValue: oid={oid:?} value={value:?}");
+                    self.store.set(oid, value);
                 }
                 Ok(Command::Shutdown) => {
                     eprintln!("[event_loop] received Shutdown, exiting");
                     return true;
+                }
+                #[cfg(test)]
+                Ok(Command::QueryValue { oid, reply }) => {
+                    // Ignore send errors: the test may have timed out or dropped
+                    // the receiver, and that should not kill the event loop.
+                    let _ = reply.send(self.store.get(&oid).cloned());
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -368,27 +417,30 @@ impl EventLoop {
         false
     }
 
-    /// Read and discard data from an accepted connection.
+    /// Read available bytes from an accepted connection, parse RFC 6353 frames,
+    /// dispatch each frame to the appropriate request handler, and write the
+    /// encoded response back.
     ///
     /// Connection-level I/O errors (e.g. `ConnectionReset`) close and remove
     /// the connection but do not propagate to the caller — a single misbehaving
     /// client must not bring down the entire event loop.
     fn handle_connection_event(&mut self, token: Token) {
-        let Some(stream) = self.connections.get_mut(&token) else {
+        let Some(conn) = self.connections.get_mut(&token) else {
             return;
         };
 
-        let mut buf = [0u8; 4096];
+        let mut chunk = [0u8; 4096];
         let mut closed = false;
 
+        // Drain all immediately available bytes into the per-connection buffer.
         loop {
-            match stream.read(&mut buf) {
+            match conn.stream.read(&mut chunk) {
                 Ok(0) => {
                     closed = true;
                     break;
                 }
-                Ok(_n) => {
-                    // Data discarded; TLS framing not yet implemented.
+                Ok(bytes_read) => {
+                    conn.read_buf.extend_from_slice(&chunk[..bytes_read]);
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) => {
@@ -401,8 +453,86 @@ impl EventLoop {
             }
         }
 
-        if closed && let Some(mut stream) = self.connections.remove(&token) {
-            if let Err(e) = self.poll.registry().deregister(&mut stream) {
+        // Process all complete RFC 6353 frames from the buffer. RFC 6353 uses a
+        // 4-byte big-endian length prefix followed by that many bytes of payload.
+        loop {
+            if conn.read_buf.len() < 4 {
+                break;
+            }
+            let frame_length = usize::try_from(u32::from_be_bytes([
+                conn.read_buf[0],
+                conn.read_buf[1],
+                conn.read_buf[2],
+                conn.read_buf[3],
+            ]))
+            .unwrap_or(usize::MAX);
+            if frame_length > MAX_FRAME_SIZE {
+                // Reject oversized frames to prevent memory exhaustion. A frame
+                // claiming more than MAX_FRAME_SIZE bytes is either malicious or
+                // the result of a corrupt stream; either way the connection is
+                // unrecoverable.
+                eprintln!(
+                    "[event_loop] oversized frame ({frame_length} bytes) on token {token:?}, closing"
+                );
+                closed = true;
+                break;
+            }
+            let Some(total_frame_size) = frame_length.checked_add(4) else {
+                // Arithmetic overflow: treat as an oversized frame.
+                closed = true;
+                break;
+            };
+            if conn.read_buf.len() < total_frame_size {
+                // Frame is incomplete; wait for more data on the next read event.
+                break;
+            }
+
+            let payload: Vec<u8> = conn.read_buf[4..total_frame_size].to_vec();
+            conn.read_buf.drain(..total_frame_size);
+
+            let response = match codec::decode_pdu(&payload) {
+                Err(decode_error) => {
+                    // A malformed PDU is discarded silently; the connection stays
+                    // open because the length prefix already consumed the right
+                    // number of bytes, leaving the stream in a known state.
+                    eprintln!("[event_loop] PDU decode error (token {token:?}): {decode_error}");
+                    continue;
+                }
+                Ok(codec::InboundPdu::GetRequest(req)) => request::handle_get(&req, &self.store),
+                Ok(codec::InboundPdu::GetNextRequest(req)) => {
+                    request::handle_get_next(&req, &self.store)
+                }
+                Ok(codec::InboundPdu::GetBulkRequest(req)) => {
+                    request::handle_get_bulk(&req, &self.store, MAX_BULK_REPETITIONS)
+                }
+                Ok(codec::InboundPdu::SetRequest(req)) => request::handle_set(&req),
+            };
+
+            let encoded_response = match codec::encode_response(&response) {
+                Ok(encoded_bytes) => encoded_bytes,
+                Err(encode_error) => {
+                    eprintln!(
+                        "[event_loop] response encode error (token {token:?}): {encode_error}"
+                    );
+                    continue;
+                }
+            };
+
+            let framed_response = frame_response(&encoded_response);
+
+            if let Err(write_error) = conn.stream.write_all(&framed_response) {
+                // Close the connection on any write error, including WouldBlock.
+                // write_all on a non-blocking socket may have written a partial
+                // response before returning WouldBlock, leaving the framing stream
+                // in a corrupt state. Closing is the only safe option.
+                eprintln!("[event_loop] write error (token {token:?}): {write_error}, closing");
+                closed = true;
+                break;
+            }
+        }
+
+        if closed && let Some(mut conn) = self.connections.remove(&token) {
+            if let Err(e) = self.poll.registry().deregister(&mut conn.stream) {
                 eprintln!("[event_loop] deregister error (token {token:?}): {e}");
             }
             eprintln!("[event_loop] connection closed (token {token:?})");
@@ -486,15 +616,42 @@ fn drain_pipe(fd: RawFd) {
     }
 }
 
+/// Build a framed PDU for sending over the RFC 6353 TCP transport.
+///
+/// Prepends a 4-byte big-endian length so the recipient's frame parser can
+/// delimit the PDU boundary without scanning for delimiters.
+fn frame_response(payload: &[u8]) -> Vec<u8> {
+    let length_prefix = u32::try_from(payload.len())
+        .expect("payload must fit in u32")
+        .to_be_bytes();
+    let mut framed = Vec::with_capacity(4 + payload.len());
+    framed.extend_from_slice(&length_prefix);
+    framed.extend_from_slice(payload);
+    framed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use std::net::SocketAddr;
     use std::thread;
     use std::time::Duration;
 
     fn any_loopback() -> SocketAddr {
         "127.0.0.1:0".parse().unwrap()
+    }
+
+    /// Read exactly `expected_len` bytes from `stream`, timing out after 2 seconds.
+    fn read_exact_with_timeout(stream: &mut std::net::TcpStream, expected_len: usize) -> Vec<u8> {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut received = vec![0u8; expected_len];
+        stream
+            .read_exact(&mut received)
+            .expect("timed out waiting for response bytes");
+        received
     }
 
     #[test]
@@ -579,6 +736,78 @@ mod tests {
     }
 
     #[test]
+    fn given_set_value_command_when_sent_then_mib_store_is_updated() {
+        // Given: a running event loop.
+        let (event_loop, _bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let handle = thread::spawn(move || event_loop.run());
+
+        let oid: codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+
+        // When: a SetValue command is sent.
+        sender
+            .send(Command::SetValue {
+                oid: oid.clone(),
+                value: codec::Value::Integer32(99),
+            })
+            .unwrap();
+
+        // Query the store via the test-only QueryValue command so we can verify
+        // the value without requiring GET dispatch (which is not yet wired up).
+        // Using the fully-qualified path avoids shadowing the `mpsc` binding
+        // brought in by `use super::*`.
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        sender
+            .send(Command::QueryValue {
+                oid: oid.clone(),
+                reply: reply_tx,
+            })
+            .unwrap();
+
+        // Then: the store contains the value that was set.
+        let stored_value = reply_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("timed out waiting for QueryValue reply");
+        assert_eq!(
+            stored_value,
+            Some(codec::Value::Integer32(99)),
+            "expected MIB store to hold Integer32(99) for oid {oid:?}"
+        );
+
+        sender.send(Command::Shutdown).unwrap();
+        handle.join().expect("event loop thread panicked").unwrap();
+    }
+
+    #[test]
+    fn given_no_set_value_when_queried_then_mib_returns_none() {
+        // Given: a running event loop with no values inserted.
+        let (event_loop, _bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let handle = thread::spawn(move || event_loop.run());
+
+        let oid: codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+
+        // When: the OID is queried without having been set.
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        sender
+            .send(Command::QueryValue {
+                oid,
+                reply: reply_tx,
+            })
+            .unwrap();
+
+        // Then: the store returns None for the unknown OID.
+        let stored_value = reply_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("timed out waiting for QueryValue reply");
+        assert_eq!(
+            stored_value, None,
+            "expected MIB store to return None for an OID that was never set"
+        );
+
+        sender.send(Command::Shutdown).unwrap();
+        handle.join().expect("event loop thread panicked").unwrap();
+    }
+
+    #[test]
     fn given_already_used_token_when_next_connection_token_called_then_token_is_skipped() {
         // Given: an event loop whose connection map already contains token 2
         // (the first candidate after FIRST_CONN_TOKEN). Bind a listener so we
@@ -599,14 +828,19 @@ mod tests {
             rx: mpsc::channel::<Command>().1,
             next_token: FIRST_CONN_TOKEN,
             connections: HashMap::new(),
+            store: mib::Store::new(),
         };
 
         // Connect to the std listener so the TcpStream is valid. mio's
         // connect is non-blocking and always returns Ok immediately on Unix.
         let dummy_stream = mio::net::TcpStream::connect(bound).unwrap();
-        event_loop
-            .connections
-            .insert(Token(FIRST_CONN_TOKEN), dummy_stream);
+        event_loop.connections.insert(
+            Token(FIRST_CONN_TOKEN),
+            ConnectionState {
+                stream: dummy_stream,
+                read_buf: Vec::new(),
+            },
+        );
 
         // When: the next token is requested.
         let token = event_loop.next_connection_token();
@@ -681,5 +915,284 @@ mod tests {
 
         let reg_err = EventLoopError::Registration(io::Error::other("reg source"));
         assert!(reg_err.source().unwrap().to_string().contains("reg source"));
+    }
+
+    // ── RFC 6353 dispatch tests ───────────────────────────────────────────────
+
+    /// Encode a `GetRequest` for `oid` as a framed PDU ready for TCP send.
+    fn framed_get_request(request_id: i32, oid: &codec::Oid) -> Vec<u8> {
+        let pdu = codec::GetRequest {
+            request_id,
+            varbinds: vec![codec::Varbind {
+                oid: oid.clone(),
+                value: codec::VarbindValue::Unspecified,
+            }],
+        };
+        let encoded = codec::encode_get_request(&pdu).expect("encode_get_request must succeed");
+        frame_response(&encoded)
+    }
+
+    /// Read a framed response payload (without the 4-byte prefix) from the stream.
+    fn read_response_payload(stream: &mut std::net::TcpStream) -> Vec<u8> {
+        let length_bytes = read_exact_with_timeout(stream, 4);
+        let frame_length = usize::try_from(u32::from_be_bytes([
+            length_bytes[0],
+            length_bytes[1],
+            length_bytes[2],
+            length_bytes[3],
+        ]))
+        .expect("frame length must fit in usize");
+        read_exact_with_timeout(stream, frame_length)
+    }
+
+    /// Decode a raw response payload using the round-trip: encode a known
+    /// `GetResponse` and compare. Returns the expected bytes for assertion.
+    fn expected_response_bytes(response: &codec::GetResponse) -> Vec<u8> {
+        codec::encode_response(response).expect("encode_response must succeed")
+    }
+
+    #[test]
+    fn given_get_request_when_sent_over_tcp_then_response_is_received() {
+        // Given: a running event loop with a known OID in the MIB.
+        let (event_loop, bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let loop_handle = thread::spawn(move || event_loop.run());
+
+        let oid: codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        sender
+            .send(Command::SetValue {
+                oid: oid.clone(),
+                value: codec::Value::Integer32(42),
+            })
+            .unwrap();
+
+        // Wait for the SetValue to be processed before connecting, so the MIB
+        // is populated before the GetRequest arrives and dispatch cannot race.
+        let (confirm_tx, confirm_rx) = std::sync::mpsc::sync_channel(1);
+        sender
+            .send(Command::QueryValue {
+                oid: oid.clone(),
+                reply: confirm_tx,
+            })
+            .unwrap();
+        confirm_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("timed out waiting for SetValue confirmation");
+
+        // When: a TCP client sends a framed GetRequest.
+        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+        client
+            .write_all(&framed_get_request(1, &oid))
+            .expect("write must succeed");
+
+        // Then: a framed response is received with the expected value.
+        let response_payload = read_response_payload(&mut client);
+        let expected = expected_response_bytes(&codec::GetResponse {
+            request_id: 1,
+            error_status: codec::ErrorStatus::NoError,
+            error_index: 0,
+            varbinds: vec![codec::Varbind {
+                oid: oid.clone(),
+                value: codec::VarbindValue::Value(codec::Value::Integer32(42)),
+            }],
+        });
+        assert_eq!(
+            response_payload, expected,
+            "response payload must match expected GetResponse BER encoding"
+        );
+
+        sender.send(Command::Shutdown).unwrap();
+        loop_handle
+            .join()
+            .expect("event loop thread panicked")
+            .unwrap();
+    }
+
+    #[test]
+    fn given_partial_frame_when_split_across_reads_then_response_is_received() {
+        // Given: a running event loop with a known OID in the MIB.
+        let (event_loop, bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let loop_handle = thread::spawn(move || event_loop.run());
+
+        let oid: codec::Oid = "1.3.6.1.2.1.1.2.0".parse().unwrap();
+        sender
+            .send(Command::SetValue {
+                oid: oid.clone(),
+                value: codec::Value::Integer32(7),
+            })
+            .unwrap();
+
+        // Wait for the SetValue to be processed before connecting, so the MIB
+        // is populated before the GetRequest arrives and dispatch cannot race.
+        let (confirm_tx, confirm_rx) = std::sync::mpsc::sync_channel(1);
+        sender
+            .send(Command::QueryValue {
+                oid: oid.clone(),
+                reply: confirm_tx,
+            })
+            .unwrap();
+        confirm_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("timed out waiting for SetValue confirmation");
+
+        // When: the framed PDU is sent in two separate writes to simulate
+        // TCP segmentation where a frame arrives split across packets.
+        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+        let framed = framed_get_request(2, &oid);
+        let midpoint = framed.len() / 2;
+        client
+            .write_all(&framed[..midpoint])
+            .expect("first half write must succeed");
+        // A brief pause gives the event loop a chance to process the partial frame,
+        // verifying that it correctly waits for more data before dispatching.
+        thread::sleep(Duration::from_millis(20));
+        client
+            .write_all(&framed[midpoint..])
+            .expect("second half write must succeed");
+
+        // Then: a complete response is received despite the split delivery.
+        let response_payload = read_response_payload(&mut client);
+        let expected = expected_response_bytes(&codec::GetResponse {
+            request_id: 2,
+            error_status: codec::ErrorStatus::NoError,
+            error_index: 0,
+            varbinds: vec![codec::Varbind {
+                oid: oid.clone(),
+                value: codec::VarbindValue::Value(codec::Value::Integer32(7)),
+            }],
+        });
+        assert_eq!(
+            response_payload, expected,
+            "split-delivery response payload must match expected GetResponse BER encoding"
+        );
+
+        sender.send(Command::Shutdown).unwrap();
+        loop_handle
+            .join()
+            .expect("event loop thread panicked")
+            .unwrap();
+    }
+
+    #[test]
+    fn given_invalid_pdu_bytes_when_received_then_connection_stays_open() {
+        // Given: a running event loop.
+        let (event_loop, bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let loop_handle = thread::spawn(move || event_loop.run());
+
+        let oid: codec::Oid = "1.3.6.1.2.1.1.3.0".parse().unwrap();
+        sender
+            .send(Command::SetValue {
+                oid: oid.clone(),
+                value: codec::Value::Integer32(99),
+            })
+            .unwrap();
+
+        // Wait for the SetValue to be processed before connecting, so the MIB
+        // is populated before the GetRequest arrives and dispatch cannot race.
+        let (confirm_tx, confirm_rx) = std::sync::mpsc::sync_channel(1);
+        sender
+            .send(Command::QueryValue {
+                oid: oid.clone(),
+                reply: confirm_tx,
+            })
+            .unwrap();
+        confirm_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("timed out waiting for SetValue confirmation");
+
+        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+
+        // When: garbage bytes are sent first (framed so the length prefix is consumed).
+        // The event loop discards the malformed PDU silently and keeps the connection open.
+        let garbage: &[u8] = &[0xFF, 0xFE, 0xFD];
+        let framed_garbage = frame_response(garbage);
+        client
+            .write_all(&framed_garbage)
+            .expect("garbage write must succeed");
+
+        // Then: a valid GetRequest sent on the same connection still receives a response.
+        client
+            .write_all(&framed_get_request(3, &oid))
+            .expect("valid request write must succeed");
+        let response_payload = read_response_payload(&mut client);
+        let expected = expected_response_bytes(&codec::GetResponse {
+            request_id: 3,
+            error_status: codec::ErrorStatus::NoError,
+            error_index: 0,
+            varbinds: vec![codec::Varbind {
+                oid: oid.clone(),
+                value: codec::VarbindValue::Value(codec::Value::Integer32(99)),
+            }],
+        });
+        assert_eq!(
+            response_payload, expected,
+            "valid request after garbage must still receive a correct response"
+        );
+
+        sender.send(Command::Shutdown).unwrap();
+        loop_handle
+            .join()
+            .expect("event loop thread panicked")
+            .unwrap();
+    }
+
+    #[test]
+    fn given_zero_length_frame_when_received_then_connection_stays_open() {
+        // Given: a running event loop with a known OID in the MIB.
+        let (event_loop, bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let loop_handle = thread::spawn(move || event_loop.run());
+
+        let oid: codec::Oid = "1.3.6.1.2.1.1.4.0".parse().unwrap();
+        sender
+            .send(Command::SetValue {
+                oid: oid.clone(),
+                value: codec::Value::Integer32(55),
+            })
+            .unwrap();
+
+        let (confirm_tx, confirm_rx) = std::sync::mpsc::sync_channel(1);
+        sender
+            .send(Command::QueryValue {
+                oid: oid.clone(),
+                reply: confirm_tx,
+            })
+            .unwrap();
+        confirm_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("timed out waiting for SetValue confirmation");
+
+        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+
+        // When: a zero-length frame is sent (4-byte prefix of zero, no payload).
+        // An empty payload is not a valid SNMP PDU; the decode error must be
+        // handled without closing the connection.
+        client
+            .write_all(&[0u8, 0, 0, 0])
+            .expect("zero-length frame write must succeed");
+
+        // Then: a valid GetRequest sent on the same connection still receives a response,
+        // confirming the connection survived the zero-length frame.
+        client
+            .write_all(&framed_get_request(4, &oid))
+            .expect("valid request write must succeed");
+        let response_payload = read_response_payload(&mut client);
+        let expected = expected_response_bytes(&codec::GetResponse {
+            request_id: 4,
+            error_status: codec::ErrorStatus::NoError,
+            error_index: 0,
+            varbinds: vec![codec::Varbind {
+                oid: oid.clone(),
+                value: codec::VarbindValue::Value(codec::Value::Integer32(55)),
+            }],
+        });
+        assert_eq!(
+            response_payload, expected,
+            "valid request after zero-length frame must still receive a correct response"
+        );
+
+        sender.send(Command::Shutdown).unwrap();
+        loop_handle
+            .join()
+            .expect("event loop thread panicked")
+            .unwrap();
     }
 }

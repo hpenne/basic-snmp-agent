@@ -10,3 +10,6 @@ mib = { path = "../mib" }
 mio = { version = "1", features = ["net", "os-poll", "os-ext"] }
 rustls = "0.23"
 libc = "0.2"
+
+[dev-dependencies]
+codec = { path = "../codec", features = ["test-support"] }

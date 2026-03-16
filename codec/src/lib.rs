@@ -17,6 +17,8 @@ mod pdu;
 mod value;
 
 pub use oid::{Oid, OidErrorCategory, ParseOidError};
+#[cfg(feature = "test-support")]
+pub use pdu::encode_get_request;
 pub use pdu::{
     DecodeError, DecodeErrorKind, EncodeError, ErrorStatus, GetBulkRequest, GetNextRequest,
     GetRequest, GetResponse, InboundPdu, SetRequest, Varbind, VarbindValue, WireTrapPdu,

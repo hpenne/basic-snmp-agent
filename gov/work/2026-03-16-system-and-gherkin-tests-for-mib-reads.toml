@@ -1,0 +1,29 @@
+[govctl]
+schema = 1
+id = "WI-2026-03-16-005"
+title = "System and Gherkin tests for MIB reads"
+status = "queue"
+created = "2026-03-16"
+
+[content]
+description = "Write and fix Gherkin/Behave system tests that exercise GET, GETNEXT, and GETBULK against a running TLS-enabled agent. Update the test-agent binary to construct an Agent with TLS config and a pre-populated MIB. All Behave scenarios must pass in CI. Prerequisite: WI-2026-03-16-004."
+
+[[content.acceptance_criteria]]
+text = "Gherkin scenarios for GET, GETNEXT, and GETBULK against a real TLS agent"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "test-agent constructs Agent with TLS config and a pre-populated MIB"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "all existing Behave scenarios pass"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "CI pipeline runs Behave suite and fails on scenario failures"
+status = "pending"
+category = "added"

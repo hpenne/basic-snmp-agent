@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+## Enables `encode_get_request`, which is only needed by test code in other crates.
+test-support = []
+
 [dependencies]
 rasn = "0.22"
 rasn-smi = "0.22"
