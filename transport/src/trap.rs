@@ -333,13 +333,15 @@ mod tests {
         assert_eq!(results[0].destination, ipv6_unreachable_dest);
         assert_eq!(results[1].destination, ipv4_reachable_dest);
 
-        // And: the IPv6 destination produces an InvalidInput error — not InvalidData,
-        // which would indicate the send was never attempted due to an encoding failure.
+        // And: the IPv6 destination produces a known socket-level send error.
+        // macOS yields InvalidInput; Linux yields an OS error (EAFNOSUPPORT, os
+        // error 97) which has no stable ErrorKind variant but always carries a
+        // raw_os_error. Both are distinct from our synthetic InvalidData errors,
+        // which carry no OS error code.
         let send_err = results[0].outcome.as_ref().unwrap_err();
-        assert_eq!(
-            send_err.kind(),
-            io::ErrorKind::InvalidInput,
-            "expected InvalidInput for IPv6 destination on IPv4 socket, got {send_err}"
+        assert!(
+            send_err.kind() == io::ErrorKind::InvalidInput || send_err.raw_os_error().is_some(),
+            "expected InvalidInput or an OS error for IPv6 on IPv4 socket, got {send_err}"
         );
 
         // And: the IPv4 destination succeeds despite the earlier failure.
