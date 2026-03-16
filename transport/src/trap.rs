@@ -19,6 +19,9 @@ use crate::request::{TrapPdu, build_wire_trap};
 const TRAP_MTU_BYTES: usize = 1500;
 
 /// Per-destination outcome of a single trap send attempt.
+///
+/// # Requirements
+/// Implements: REQ-0047
 #[derive(Debug)]
 pub struct TrapResult {
     /// The destination address this result pertains to.
@@ -32,6 +35,9 @@ pub struct TrapResult {
 /// The socket is bound to an OS-assigned local port on `0.0.0.0` at
 /// construction time and reused for all subsequent sends. `TrapSender` is
 /// cheap to clone — all clones share the same underlying socket via [`Arc`].
+///
+/// # Requirements
+/// Implements: REQ-0036
 ///
 /// # Examples
 ///
@@ -79,6 +85,9 @@ impl TrapSender {
     /// **Limitation:** Only IPv4 destinations are supported. Sending to an IPv6
     /// address will produce an I/O error for that destination.
     ///
+    /// # Requirements
+    /// Implements: REQ-0036, REQ-0037
+    ///
     /// # Errors
     ///
     /// Returns an error if the UDP socket cannot be bound.
@@ -105,6 +114,9 @@ impl TrapSender {
     /// `destinations`. If encoding fails or the encoded PDU exceeds the MTU cap
     /// (1500 bytes), every destination receives an `Err` result and no datagrams
     /// are sent.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0035, REQ-0042, REQ-0044, REQ-0045, REQ-0047
     ///
     /// # Examples
     ///
@@ -197,6 +209,7 @@ mod tests {
 
     #[test]
     fn given_trap_pdu_within_mtu_when_send_trap_then_all_destinations_get_ok() {
+        // Verifies: REQ-0035, REQ-0036, REQ-0044, REQ-0047
         // Given: a sender and a loopback receiver socket.
         let sender = TrapSender::new(Instant::now()).unwrap();
         let (receiver, dest) = loopback_receiver();
@@ -274,6 +287,7 @@ mod tests {
 
     #[test]
     fn given_multiple_destinations_when_send_trap_then_result_per_destination() {
+        // Verifies: REQ-0044, REQ-0045, REQ-0047
         // Given: a sender and two loopback receiver sockets.
         let sender = TrapSender::new(Instant::now()).unwrap();
         let (_recv_a, dest_a) = loopback_receiver();
@@ -296,6 +310,54 @@ mod tests {
             results[1].outcome.is_ok(),
             "expected Ok for dest_b, got {:?}",
             results[1].outcome
+        );
+    }
+
+    #[test]
+    fn given_one_failing_destination_when_send_trap_then_failure_does_not_prevent_remaining_delivery()
+     {
+        // Verifies: REQ-0044, REQ-0045, REQ-0047
+        // Sending to an IPv6 address from an IPv4-only socket (bound to 0.0.0.0)
+        // produces a synchronous I/O error, giving us a reliable per-destination
+        // failure without any external coordination.
+        let sender = TrapSender::new(Instant::now()).unwrap();
+        let ipv6_unreachable_dest: SocketAddr = "[::1]:9999".parse().unwrap();
+        let (recv_ok, ipv4_reachable_dest) = loopback_receiver();
+        let pdu = minimal_pdu();
+
+        // When: the trap is sent to a failing destination followed by a reachable one.
+        let results = sender.send_trap(&pdu, &[ipv6_unreachable_dest, ipv4_reachable_dest]);
+
+        // Then: two results are returned in the original order.
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].destination, ipv6_unreachable_dest);
+        assert_eq!(results[1].destination, ipv4_reachable_dest);
+
+        // And: the IPv6 destination produces a known socket-level send error.
+        // macOS yields InvalidInput; Linux yields an OS error (EAFNOSUPPORT, os
+        // error 97) which has no stable ErrorKind variant but always carries a
+        // raw_os_error. Both are distinct from our synthetic InvalidData errors,
+        // which carry no OS error code.
+        let send_err = results[0].outcome.as_ref().unwrap_err();
+        assert!(
+            send_err.kind() == io::ErrorKind::InvalidInput || send_err.raw_os_error().is_some(),
+            "expected InvalidInput or an OS error for IPv6 on IPv4 socket, got {send_err}"
+        );
+
+        // And: the IPv4 destination succeeds despite the earlier failure.
+        assert!(
+            results[1].outcome.is_ok(),
+            "expected Ok for IPv4 destination, got {:?}",
+            results[1].outcome
+        );
+
+        // And: the receiver socket actually received a non-empty datagram, proving
+        // the earlier per-destination failure did not abort subsequent sends.
+        let mut recv_buf = vec![0u8; TRAP_MTU_BYTES];
+        let (bytes_received, _src) = recv_ok.recv_from(&mut recv_buf).unwrap();
+        assert!(
+            bytes_received > 0,
+            "expected datagram on reachable destination despite earlier failure"
         );
     }
 }

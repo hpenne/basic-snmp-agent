@@ -76,6 +76,39 @@ The project currently has a single binary entry point at `src/main.rs`. As SNMP 
 - Name entities that cross step boundaries. When a `Then` step captures a result (e.g., a received trap), give it an explicit name in the step text. Subsequent `And` steps must reference that same name. The name must appear verbatim in both the step that creates the entity and every step that inspects it — never rely on implicit context state.
 - Step definitions are the right place for all implementation detail (how to send a trap, how to retrieve and parse the result). Feature files express what is being tested, not how.
 
+### Requirement traceability
+
+Every Rust module, struct, and function must be annotated with the requirements it implements. Every unit test must be annotated with the requirements it verifies.
+
+**Public items** — add a `# Requirements` section to the doc comment:
+
+```rust
+/// Sends a trap PDU to one or more destinations.
+///
+/// # Requirements
+/// Implements: REQ-0034, REQ-0035, REQ-0042, REQ-0043
+pub fn send_trap(...) {}
+```
+
+**Private items** — add a comment directly above the item:
+
+```rust
+// Implements: REQ-0048, REQ-0049
+fn run_event_loop() {}
+```
+
+**Unit tests** — add a comment at the top of the test body:
+
+```rust
+#[test]
+fn given_empty_destinations_when_send_trap_then_returns_error() {
+    // Verifies: REQ-0043
+    ...
+}
+```
+
+Use `grep -r 'Implements: REQ-'` to find all implementation sites, `grep -r 'Verifies: REQ-'` to find all unit test sites, and `grep -r 'REQ-0043'` to find every mention of a specific requirement.
+
 ### Rust
 
 - No compiler warnings: Code must compile without warnings. Do not suppress warnings with `#[expect(...)]` unless there is a compelling reason; prefer fixing the underlying issue instead.
