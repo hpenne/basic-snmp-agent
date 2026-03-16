@@ -1,0 +1,24 @@
+[govctl]
+schema = 1
+id = "WI-2026-03-16-003"
+title = "ADR-0017: Agent construction and config API"
+status = "queue"
+created = "2026-03-16"
+
+[content]
+description = "ADR-0017 is currently open. Before TLS can be implemented, we need a decided API for how the public `Agent` type accepts TLS configuration: server certificate, private key, and trusted CA certificates. This work item produces a reviewed and approved ADR-0017 covering the construction API, cert/key types, and error handling at construction time."
+
+[[content.acceptance_criteria]]
+text = "ADR-0017 written and approved covering the Agent construction and TLS config API"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "ADR-0017 specifies how server cert, private key, and trusted CAs are passed to the Agent"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "ADR-0017 specifies error handling for invalid or unusable TLS config at construction time"
+status = "pending"
+category = "added"
