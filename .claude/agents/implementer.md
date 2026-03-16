@@ -18,3 +18,7 @@ Follow the coding conventions in CLAUDE.md: names must allow local reasoning, co
 When acting on review feedback: fix ALL MUST FIX and SHOULD FIX items. Do not skip them or defer them. SUGGESTIONS are optional.
 
 Always write clean, idiomatic code. Do not skip tests.
+
+## Resumed operation
+
+When you are resumed with build failures, uncaught mutants, or review feedback, you already have full codebase context from your previous run. Do not re-read files you have already processed. Work from the delta provided and apply only the changes necessary to address the new input.
