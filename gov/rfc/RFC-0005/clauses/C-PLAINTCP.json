@@ -1,0 +1,7 @@
+{
+  "clause_id": "C-PLAINTCP",
+  "title": "Plain TCP Transport",
+  "kind": "normative",
+  "status": "active",
+  "text": "[REQ-0068] The agent MUST accept inbound SNMP connections over plain TCP (RFC 3430).\n[REQ-0069] The agent MUST bind a TCP socket on port 10161 by default.\n[REQ-0070] The agent MUST accept a configuration parameter to override the listen address and port.\n[REQ-0071] The agent MUST use the BER length field to determine message boundaries on the TCP byte\n           stream, as specified in RFC 3430 §3.\n[REQ-0072] The agent MUST support both IPv4 and IPv6 for inbound connections.\n[REQ-0073] After framing, the agent MUST silently discard any payload that does not decode as a valid\n           SNMPv3 message.\n\nRationale: Plain TCP is a temporary transport used to enable end-to-end inbound request testing with\nnet-snmp client tools before TLS is introduced. It provides no authentication or encryption.\nRFC-0006:C-TRANSPORT supersedes this clause."
+}
