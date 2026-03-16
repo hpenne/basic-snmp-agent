@@ -144,8 +144,9 @@ impl CommandSender {
             .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "event loop has exited"))?;
         // Write one byte to wake the poll call; the value is irrelevant.
         let byte: [u8; 1] = [1];
-        let ret = unsafe { libc::write(self.pipe_write_fd.as_raw_fd(), byte.as_ptr().cast(), 1) };
-        if ret < 0 {
+        let write_result =
+            unsafe { libc::write(self.pipe_write_fd.as_raw_fd(), byte.as_ptr().cast(), 1) };
+        if write_result < 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())
@@ -438,8 +439,8 @@ impl EventLoop {
 /// failure automatically closes already-created fds on drop.
 fn create_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     let mut fds: [libc::c_int; 2] = [0; 2];
-    let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
-    if ret < 0 {
+    let pipe_result = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if pipe_result < 0 {
         return Err(io::Error::last_os_error());
     }
 
@@ -461,8 +462,8 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
     if flags < 0 {
         return Err(io::Error::last_os_error());
     }
-    let ret = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
-    if ret < 0 {
+    let set_nonblock_result = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+    if set_nonblock_result < 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(())
@@ -472,14 +473,14 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
 ///
 /// Stops on `WouldBlock`, which is the expected steady-state after draining.
 fn drain_pipe(fd: RawFd) {
-    let mut buf = [0u8; 64];
+    let mut drain_buf = [0u8; 64];
     loop {
-        let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
-        // TODO: `n <= 0` treats EAGAIN/WouldBlock and genuine errors (e.g.
+        let bytes_read = unsafe { libc::read(fd, drain_buf.as_mut_ptr().cast(), drain_buf.len()) };
+        // TODO: `bytes_read <= 0` treats EAGAIN/WouldBlock and genuine errors (e.g.
         // EBADF) identically — both silently stop the drain. A real error here
         // would indicate a programming bug (bad fd); distinguishing the two
         // would improve observability but has no correctness impact in practice.
-        if n <= 0 {
+        if bytes_read <= 0 {
             break;
         }
     }
@@ -510,8 +511,8 @@ mod tests {
 
         // Then: the loop exits cleanly after shutdown.
         sender.send(Command::Shutdown).unwrap();
-        let result = handle.join().expect("event loop thread panicked");
-        assert!(result.is_ok());
+        let event_loop_result = handle.join().expect("event loop thread panicked");
+        assert!(event_loop_result.is_ok());
     }
 
     #[test]
@@ -524,8 +525,8 @@ mod tests {
         sender.send(Command::Shutdown).unwrap();
 
         // Then: the thread exits and returns Ok.
-        let result = handle.join().expect("event loop thread panicked");
-        assert!(result.is_ok());
+        let event_loop_result = handle.join().expect("event loop thread panicked");
+        assert!(event_loop_result.is_ok());
     }
 
     #[test]
@@ -545,8 +546,8 @@ mod tests {
         sender.send(Command::Shutdown).unwrap();
 
         // Then: the loop processes both commands and exits cleanly.
-        let result = handle.join().expect("event loop thread panicked");
-        assert!(result.is_ok());
+        let event_loop_result = handle.join().expect("event loop thread panicked");
+        assert!(event_loop_result.is_ok());
     }
 
     #[test]
@@ -622,25 +623,34 @@ mod tests {
     #[test]
     fn given_event_loop_error_bind_when_display_then_contains_address_and_source() {
         let addr: SocketAddr = "127.0.0.1:10161".parse().unwrap();
-        let err = EventLoopError::Bind {
+        let bind_error = EventLoopError::Bind {
             addr,
             source: io::Error::new(io::ErrorKind::AddrInUse, "already in use"),
         };
-        let msg = err.to_string();
-        assert!(msg.contains("127.0.0.1:10161"), "{msg}");
-        assert!(msg.contains("already in use"), "{msg}");
+        let error_message = bind_error.to_string();
+        assert!(error_message.contains("127.0.0.1:10161"), "{error_message}");
+        assert!(error_message.contains("already in use"), "{error_message}");
     }
 
     #[test]
     fn given_event_loop_error_pipe_when_display_then_mentions_self_pipe() {
-        let err = EventLoopError::Pipe(io::Error::other("pipe failed"));
-        assert!(err.to_string().contains("self-pipe"), "{}", err);
+        let pipe_error = EventLoopError::Pipe(io::Error::other("pipe failed"));
+        assert!(
+            pipe_error.to_string().contains("self-pipe"),
+            "{}",
+            pipe_error
+        );
     }
 
     #[test]
     fn given_event_loop_error_registration_when_display_then_mentions_registration() {
-        let err = EventLoopError::Registration(io::Error::other("registration failed"));
-        assert!(err.to_string().contains("registration"), "{}", err);
+        let registration_error =
+            EventLoopError::Registration(io::Error::other("registration failed"));
+        assert!(
+            registration_error.to_string().contains("registration"),
+            "{}",
+            registration_error
+        );
     }
 
     #[test]

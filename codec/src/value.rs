@@ -136,8 +136,8 @@ mod tests {
 
     #[test]
     fn value_integer32_negative() {
-        let v = Value::Integer32(-1);
-        assert_eq!(v, Value::Integer32(-1));
+        let integer_value = Value::Integer32(-1);
+        assert_eq!(integer_value, Value::Integer32(-1));
     }
 
     #[test]
@@ -158,8 +158,8 @@ mod tests {
 
     #[test]
     fn value_ip_address_display_dotted_decimal() {
-        let v = Value::IpAddress([192, 168, 1, 1]);
-        assert_eq!(v.to_string(), "192.168.1.1");
+        let ip_address = Value::IpAddress([192, 168, 1, 1]);
+        assert_eq!(ip_address.to_string(), "192.168.1.1");
     }
 
     #[test]
@@ -189,8 +189,8 @@ mod tests {
     #[test]
     fn value_object_identifier_display() {
         let oid: Oid = "1.3.6.1.2.1".parse().unwrap();
-        let v = Value::ObjectIdentifier(oid);
-        assert_eq!(v.to_string(), "1.3.6.1.2.1");
+        let object_identifier = Value::ObjectIdentifier(oid);
+        assert_eq!(object_identifier.to_string(), "1.3.6.1.2.1");
     }
 
     // --- Value::OctetString ---
@@ -205,8 +205,8 @@ mod tests {
 
     #[test]
     fn value_octet_string_display() {
-        let v = Value::OctetString(b"Hello".to_vec());
-        assert_eq!(v.to_string(), "48656C6C6F");
+        let octet_string = Value::OctetString(b"Hello".to_vec());
+        assert_eq!(octet_string.to_string(), "48656C6C6F");
     }
 
     #[test]
@@ -316,8 +316,8 @@ mod tests {
 
     #[test]
     fn value_opaque_display() {
-        let v = Value::Opaque(vec![0xDE, 0xAD, 0xBE, 0xEF]);
-        assert_eq!(v.to_string(), "DEADBEEF");
+        let opaque_value = Value::Opaque(vec![0xDE, 0xAD, 0xBE, 0xEF]);
+        assert_eq!(opaque_value.to_string(), "DEADBEEF");
     }
 
     #[test]
@@ -335,45 +335,45 @@ mod tests {
 
     #[test]
     fn value_from_byte_slice() {
-        let v = Value::from(b"hello".as_slice());
-        assert_eq!(v, Value::OctetString(b"hello".to_vec()));
+        let octet_string = Value::from(b"hello".as_slice());
+        assert_eq!(octet_string, Value::OctetString(b"hello".to_vec()));
     }
 
     #[test]
     fn value_from_byte_slice_empty() {
-        let v = Value::from([].as_slice());
-        assert_eq!(v, Value::OctetString(vec![]));
+        let octet_string = Value::from([].as_slice());
+        assert_eq!(octet_string, Value::OctetString(vec![]));
     }
 
     #[test]
     fn value_from_vec_u8() {
-        let bytes = vec![0x01u8, 0x02, 0x03];
-        let v = Value::from(bytes);
-        assert_eq!(v, Value::OctetString(vec![0x01, 0x02, 0x03]));
+        let byte_vec = vec![0x01u8, 0x02, 0x03];
+        let octet_string = Value::from(byte_vec);
+        assert_eq!(octet_string, Value::OctetString(vec![0x01, 0x02, 0x03]));
     }
 
     #[test]
     fn value_from_vec_u8_empty() {
-        let v = Value::from(vec![]);
-        assert_eq!(v, Value::OctetString(vec![]));
+        let octet_string = Value::from(vec![]);
+        assert_eq!(octet_string, Value::OctetString(vec![]));
     }
 
     #[test]
     fn value_from_str_slice() {
-        let v = Value::from("hello");
-        assert_eq!(v, Value::OctetString(b"hello".to_vec()));
+        let octet_string = Value::from("hello");
+        assert_eq!(octet_string, Value::OctetString(b"hello".to_vec()));
     }
 
     #[test]
     fn value_from_str_slice_empty() {
-        let v = Value::from("");
-        assert_eq!(v, Value::OctetString(vec![]));
+        let octet_string = Value::from("");
+        assert_eq!(octet_string, Value::OctetString(vec![]));
     }
 
     #[test]
     fn value_from_str_slice_utf8() {
         // Non-ASCII UTF-8 encodes to multiple bytes per character.
-        let v = Value::from("é");
-        assert_eq!(v, Value::OctetString("é".as_bytes().to_vec()));
+        let octet_string = Value::from("é");
+        assert_eq!(octet_string, Value::OctetString("é".as_bytes().to_vec()));
     }
 }

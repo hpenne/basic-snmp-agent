@@ -378,7 +378,7 @@ pub fn encode_trap(pdu: &WireTrapPdu) -> Result<Vec<u8>, EncodeError> {
         error_index: 0,
         variable_bindings: pdu.varbinds.iter().map(varbind_to_rasn).collect(),
     });
-    let msg = V2cMessage {
+    let v2c_message = V2cMessage {
         version: V2cMessage::<Pdus>::VERSION.into(),
         // An empty community string is intentional: this agent does not
         // implement SNMPv2c community-based authentication. Trap receivers
@@ -387,7 +387,7 @@ pub fn encode_trap(pdu: &WireTrapPdu) -> Result<Vec<u8>, EncodeError> {
         community: rasn::types::OctetString::from(vec![]),
         data: Pdus::Trap(rasn_pdu),
     };
-    rasn::ber::encode(&msg)
+    rasn::ber::encode(&v2c_message)
         .map_err(|e| EncodeError::new(format!("BER encoding of WireTrapPdu failed: {e}")))
 }
 
@@ -508,28 +508,28 @@ fn oid_from_rasn(oid: &rasn::types::ObjectIdentifier) -> Result<Oid, DecodeError
 // length fits in the target byte width.
 #[allow(clippy::cast_possible_truncation)]
 fn bytes_to_opaque(bytes: &[u8]) -> rasn_smi::v1::Opaque {
-    let len = bytes.len();
+    let payload_len = bytes.len();
     assert!(
-        len <= 0xFFFF,
-        "bytes_to_opaque: payload length {len} exceeds maximum supported BER length (65535)"
+        payload_len <= 0xFFFF,
+        "bytes_to_opaque: payload length {payload_len} exceeds maximum supported BER length (65535)"
     );
 
     // BER tag for APPLICATION 4 (primitive): class=application(0x40),
     // constructed=0, tag=4  →  0x44.
-    let mut ber = Vec::with_capacity(4 + len);
+    let mut ber = Vec::with_capacity(4 + payload_len);
     ber.push(0x44u8);
-    if len <= 0x7F {
+    if payload_len <= 0x7F {
         // Short-form length: single byte, no high-bit set.
-        ber.push(len as u8);
-    } else if len <= 0xFF {
+        ber.push(payload_len as u8);
+    } else if payload_len <= 0xFF {
         // Long-form length: 0x81 indicates one following length byte.
         ber.push(0x81u8);
-        ber.push(len as u8);
+        ber.push(payload_len as u8);
     } else {
         // Long-form length: 0x82 indicates two following length bytes.
         ber.push(0x82u8);
-        ber.push((len >> 8) as u8);
-        ber.push((len & 0xFF) as u8);
+        ber.push((payload_len >> 8) as u8);
+        ber.push((payload_len & 0xFF) as u8);
     }
     ber.extend_from_slice(bytes);
     rasn::ber::decode::<rasn_smi::v1::Opaque>(&ber)
@@ -578,11 +578,11 @@ fn value_to_object_syntax(value: &Value) -> ObjectSyntax {
 /// Converts a rasn-snmp wire type `ObjectSyntax` into our public [`Value`].
 fn value_from_object_syntax(syntax: ObjectSyntax) -> Result<Value, DecodeError> {
     match syntax {
-        ObjectSyntax::Simple(SimpleSyntax::Integer(n)) => {
-            let n: i32 = n
+        ObjectSyntax::Simple(SimpleSyntax::Integer(raw_integer)) => {
+            let integer_value: i32 = raw_integer
                 .try_into()
                 .map_err(|_| DecodeError::new(DecodeErrorKind::Ber, "Integer32 out of range"))?;
-            Ok(Value::Integer32(n))
+            Ok(Value::Integer32(integer_value))
         }
         ObjectSyntax::Simple(SimpleSyntax::String(bytes)) => Ok(Value::OctetString(bytes.to_vec())),
         ObjectSyntax::Simple(SimpleSyntax::ObjectId(oid)) => {
@@ -674,12 +674,12 @@ mod tests {
 
     #[test]
     fn varbind_value_variants_are_distinct() {
-        let val = VarbindValue::Value(Value::Integer32(42));
+        let varbind_value = VarbindValue::Value(Value::Integer32(42));
         let unspecified = VarbindValue::Unspecified;
         let no_obj = VarbindValue::NoSuchObject;
         let no_inst = VarbindValue::NoSuchInstance;
         let eom = VarbindValue::EndOfMibView;
-        assert_ne!(val, unspecified);
+        assert_ne!(varbind_value, unspecified);
         assert_ne!(unspecified, no_obj);
         assert_ne!(no_obj, no_inst);
         assert_ne!(no_inst, eom);
@@ -698,8 +698,8 @@ mod tests {
             VarbindValue::Value(Value::Opaque(vec![0xDE, 0xAD])),
             VarbindValue::Value(Value::ObjectIdentifier(sysname_oid())),
         ];
-        for v in cases {
-            assert!(matches!(v, VarbindValue::Value(_)));
+        for varbind_value in cases {
+            assert!(matches!(varbind_value, VarbindValue::Value(_)));
         }
     }
 
@@ -828,42 +828,42 @@ mod tests {
 
     #[test]
     fn decode_error_display() {
-        let err = DecodeError::new(DecodeErrorKind::Ber, "something went wrong");
+        let decode_error = DecodeError::new(DecodeErrorKind::Ber, "something went wrong");
         assert_eq!(
-            err.to_string(),
+            decode_error.to_string(),
             "SNMP decode error (BER decode failure): something went wrong"
         );
     }
 
     #[test]
     fn decode_error_debug() {
-        let err = DecodeError::new(DecodeErrorKind::Ber, "bad bytes");
-        let dbg = format!("{err:?}");
+        let decode_error = DecodeError::new(DecodeErrorKind::Ber, "bad bytes");
+        let dbg = format!("{decode_error:?}");
         assert!(dbg.contains("bad bytes"));
     }
 
     #[test]
     fn decode_error_is_std_error() {
-        let err = DecodeError::new(DecodeErrorKind::Ber, "test");
-        let _: &dyn std::error::Error = &err;
+        let decode_error = DecodeError::new(DecodeErrorKind::Ber, "test");
+        let _: &dyn std::error::Error = &decode_error;
     }
 
     #[test]
     fn decode_error_kind_ber() {
-        let err = DecodeError::new(DecodeErrorKind::Ber, "bad ber");
-        assert_eq!(err.kind(), &DecodeErrorKind::Ber);
+        let ber_error = DecodeError::new(DecodeErrorKind::Ber, "bad ber");
+        assert_eq!(ber_error.kind(), &DecodeErrorKind::Ber);
     }
 
     #[test]
     fn decode_error_kind_unsupported_pdu_type() {
-        let err = DecodeError::new(DecodeErrorKind::UnsupportedPduType, "response pdu");
-        assert_eq!(err.kind(), &DecodeErrorKind::UnsupportedPduType);
+        let decode_error = DecodeError::new(DecodeErrorKind::UnsupportedPduType, "response pdu");
+        assert_eq!(decode_error.kind(), &DecodeErrorKind::UnsupportedPduType);
     }
 
     #[test]
     fn decode_error_kind_invalid_oid() {
-        let err = DecodeError::new(DecodeErrorKind::InvalidOid, "bad oid");
-        assert_eq!(err.kind(), &DecodeErrorKind::InvalidOid);
+        let decode_error = DecodeError::new(DecodeErrorKind::InvalidOid, "bad oid");
+        assert_eq!(decode_error.kind(), &DecodeErrorKind::InvalidOid);
     }
 
     // ── encode_response round-trip ────────────────────────────────────────────
@@ -880,8 +880,8 @@ mod tests {
                 value: VarbindValue::Value(Value::OctetString(b"Linux".to_vec())),
             }],
         };
-        let bytes = encode_response(&pdu).unwrap();
-        assert!(!bytes.is_empty());
+        let encoded_response = encode_response(&pdu).unwrap();
+        assert!(!encoded_response.is_empty());
     }
 
     #[test]
@@ -894,10 +894,10 @@ mod tests {
                 value: VarbindValue::Value(Value::TimeTicks(0)),
             }],
         };
-        let bytes = encode_trap(&pdu).unwrap();
+        let encoded_trap = encode_trap(&pdu).unwrap();
         // Verify the output is valid BER by decoding it back as a full SNMPv2c message.
         let decoded: V2cMessage<Pdus> =
-            rasn::ber::decode(&bytes).expect("encode_trap must produce valid BER");
+            rasn::ber::decode(&encoded_trap).expect("encode_trap must produce valid BER");
         assert!(
             matches!(decoded.data, Pdus::Trap(_)),
             "expected Trap PDU, got {:?}",
@@ -919,10 +919,10 @@ mod tests {
                 value: VarbindValue::Value(Value::Integer32(100)),
             }],
         };
-        let bytes = encode_response(&pdu).unwrap();
+        let encoded_response = encode_response(&pdu).unwrap();
 
         // Decode back using rasn directly to verify BER validity.
-        let decoded: Pdus = rasn::ber::decode(&bytes).expect("must decode");
+        let decoded: Pdus = rasn::ber::decode(&encoded_response).expect("must decode");
         match decoded {
             Pdus::Response(Response(inner)) => {
                 assert_eq!(inner.request_id, 9999);
@@ -952,10 +952,10 @@ mod tests {
                 },
             ],
         };
-        let bytes = encode_trap(&pdu).unwrap();
+        let encoded_trap = encode_trap(&pdu).unwrap();
 
         // BER-decode back as a full SNMPv2c message to verify structural validity.
-        let decoded: V2cMessage<Pdus> = rasn::ber::decode(&bytes).expect("must decode");
+        let decoded: V2cMessage<Pdus> = rasn::ber::decode(&encoded_trap).expect("must decode");
         assert_eq!(
             u64::try_from(decoded.version).unwrap(),
             V2cMessage::<Pdus>::VERSION
@@ -973,8 +973,11 @@ mod tests {
         }
 
         // Also verify round-trip by re-encoding and checking it's stable.
-        let bytes2 = encode_trap(&pdu).unwrap();
-        assert_eq!(bytes, bytes2, "encode_trap must be deterministic");
+        let encoded_trap2 = encode_trap(&pdu).unwrap();
+        assert_eq!(
+            encoded_trap, encoded_trap2,
+            "encode_trap must be deterministic"
+        );
     }
 
     #[test]
@@ -1002,10 +1005,10 @@ mod tests {
                 },
             ],
         };
-        let bytes = encode_response(&pdu).unwrap();
+        let encoded_response = encode_response(&pdu).unwrap();
 
         // BER-decode back via rasn and inspect varbind values directly.
-        let decoded: Pdus = rasn::ber::decode(&bytes).expect("must decode");
+        let decoded: Pdus = rasn::ber::decode(&encoded_response).expect("must decode");
         match decoded {
             Pdus::Response(Response(inner)) => {
                 assert_eq!(inner.variable_bindings.len(), 3);
@@ -1037,14 +1040,14 @@ mod tests {
             error_index: 0,
             varbinds: vec![],
         };
-        let bytes = encode_response(&pdu).unwrap();
+        let encoded_response = encode_response(&pdu).unwrap();
         assert!(
-            !bytes.is_empty(),
+            !encoded_response.is_empty(),
             "encoded bytes must not be empty even with no varbinds"
         );
 
         // BER-decode back and check varbind count.
-        let decoded: Pdus = rasn::ber::decode(&bytes).expect("must decode");
+        let decoded: Pdus = rasn::ber::decode(&encoded_response).expect("must decode");
         match decoded {
             Pdus::Response(Response(inner)) => {
                 assert_eq!(inner.variable_bindings.len(), 0);
@@ -1059,9 +1062,9 @@ mod tests {
             error_index: 0,
             variable_bindings: vec![],
         });
-        let req_bytes = rasn::ber::encode(&get_req).unwrap();
-        let inbound = decode_pdu(&req_bytes).unwrap();
-        match inbound {
+        let raw_ber = rasn::ber::encode(&get_req).unwrap();
+        let decode_result = decode_pdu(&raw_ber).unwrap();
+        match decode_result {
             InboundPdu::GetRequest(req) => {
                 assert_eq!(req.request_id, 200);
                 assert_eq!(req.varbinds.len(), 0);
@@ -1088,10 +1091,10 @@ mod tests {
                 value: VarBindValue::Unspecified,
             }],
         });
-        let bytes = rasn::ber::encode(&get_req).unwrap();
-        let pdu = decode_pdu(&bytes).unwrap();
+        let raw_ber = rasn::ber::encode(&get_req).unwrap();
+        let decode_result = decode_pdu(&raw_ber).unwrap();
 
-        match pdu {
+        match decode_result {
             InboundPdu::GetRequest(req) => {
                 assert_eq!(req.request_id, 42);
                 assert_eq!(req.varbinds.len(), 1);
@@ -1120,8 +1123,8 @@ mod tests {
                 value: VarBindValue::Unspecified,
             }],
         });
-        let bytes = rasn::ber::encode(&req).unwrap();
-        let pdu = decode_pdu(&bytes).unwrap();
+        let encoded_response = rasn::ber::encode(&req).unwrap();
+        let pdu = decode_pdu(&encoded_response).unwrap();
 
         assert!(matches!(pdu, InboundPdu::GetNextRequest(_)));
     }
@@ -1143,8 +1146,8 @@ mod tests {
                 value: VarBindValue::Unspecified,
             }],
         });
-        let bytes = rasn::ber::encode(&req).unwrap();
-        let pdu = decode_pdu(&bytes).unwrap();
+        let encoded_response = rasn::ber::encode(&req).unwrap();
+        let pdu = decode_pdu(&encoded_response).unwrap();
 
         match pdu {
             InboundPdu::GetBulkRequest(bulk) => {
@@ -1175,8 +1178,8 @@ mod tests {
                 ))),
             }],
         });
-        let bytes = rasn::ber::encode(&req).unwrap();
-        let pdu = decode_pdu(&bytes).unwrap();
+        let encoded_response = rasn::ber::encode(&req).unwrap();
+        let pdu = decode_pdu(&encoded_response).unwrap();
 
         match pdu {
             InboundPdu::SetRequest(set) => {
@@ -1192,9 +1195,9 @@ mod tests {
 
     #[test]
     fn decode_pdu_invalid_bytes_returns_error() {
-        let result = decode_pdu(&[0xFF, 0xFF, 0xFF]);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind(), &DecodeErrorKind::Ber);
+        let decode_result = decode_pdu(&[0xFF, 0xFF, 0xFF]);
+        assert!(decode_result.is_err());
+        assert_eq!(decode_result.unwrap_err().kind(), &DecodeErrorKind::Ber);
     }
 
     #[test]
@@ -1208,11 +1211,11 @@ mod tests {
             error_index: 0,
             variable_bindings: vec![],
         });
-        let bytes = rasn::ber::encode(&resp).unwrap();
-        let result = decode_pdu(&bytes);
-        assert!(result.is_err());
+        let encoded_response = rasn::ber::encode(&resp).unwrap();
+        let decode_result = decode_pdu(&encoded_response);
+        assert!(decode_result.is_err());
         assert_eq!(
-            result.unwrap_err().kind(),
+            decode_result.unwrap_err().kind(),
             &DecodeErrorKind::UnsupportedPduType
         );
     }
@@ -1221,19 +1224,22 @@ mod tests {
 
     #[test]
     fn encode_error_display_contains_message() {
-        let err = EncodeError::new("something failed badly");
-        let s = err.to_string();
-        assert!(s.contains("SNMP encode error"), "missing prefix in: {s}");
+        let encode_error = EncodeError::new("something failed badly");
+        let error_message = encode_error.to_string();
         assert!(
-            s.contains("something failed badly"),
-            "missing message in: {s}"
+            error_message.contains("SNMP encode error"),
+            "missing prefix in: {error_message}"
+        );
+        assert!(
+            error_message.contains("something failed badly"),
+            "missing message in: {error_message}"
         );
     }
 
     #[test]
     fn encode_error_is_std_error() {
-        let err = EncodeError::new("test");
-        let _: &dyn std::error::Error = &err;
+        let encode_error = EncodeError::new("test");
+        let _: &dyn std::error::Error = &encode_error;
     }
 
     // ── bytes_to_opaque ───────────────────────────────────────────────────────
@@ -1242,9 +1248,9 @@ mod tests {
     // A 128-byte payload uses BER long-form length 0x81 0x80.
     #[test]
     fn bytes_to_opaque_medium_payload_round_trips() {
-        let data: Vec<u8> = (0u8..128).collect();
-        let opaque = bytes_to_opaque(&data);
-        assert_eq!(opaque.as_ref(), data.as_slice());
+        let opaque_payload: Vec<u8> = (0u8..128).collect();
+        let opaque = bytes_to_opaque(&opaque_payload);
+        assert_eq!(opaque.as_ref(), opaque_payload.as_slice());
     }
 
     // Exercises the two-byte long-form BER length path (len > 0xFF).
@@ -1252,9 +1258,9 @@ mod tests {
     // This catches mutations to the `>>` shift and `&` mask on the high/low bytes.
     #[test]
     fn bytes_to_opaque_large_payload_round_trips() {
-        let data: Vec<u8> = (0u8..=255).collect(); // exactly 256 bytes
-        let opaque = bytes_to_opaque(&data);
-        assert_eq!(opaque.as_ref(), data.as_slice());
+        let opaque_payload: Vec<u8> = (0u8..=255).collect(); // exactly 256 bytes
+        let opaque = bytes_to_opaque(&opaque_payload);
+        assert_eq!(opaque.as_ref(), opaque_payload.as_slice());
     }
 
     // ── All SMIv2 Value types survive encode/decode ───────────────────────────
@@ -1284,8 +1290,8 @@ mod tests {
                     value: VarbindValue::Value(value.clone()),
                 }],
             };
-            let bytes = encode_response(&pdu).unwrap();
-            let decoded: Pdus = rasn::ber::decode(&bytes).expect("must decode");
+            let encoded_response = encode_response(&pdu).unwrap();
+            let decoded: Pdus = rasn::ber::decode(&encoded_response).expect("must decode");
             match decoded {
                 Pdus::Response(Response(inner)) => {
                     let vb = &inner.variable_bindings[0];

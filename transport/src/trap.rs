@@ -130,17 +130,17 @@ impl TrapSender {
         let encoded_pdu = match codec::encode_trap(&wire_pdu) {
             Ok(encoded_pdu) => encoded_pdu,
             Err(e) => {
-                let msg = format!("trap PDU encoding failed: {e}");
-                return encode_error_for_all(destinations, &msg);
+                let error_message = format!("trap PDU encoding failed: {e}");
+                return encode_error_for_all(destinations, &error_message);
             }
         };
 
         if encoded_pdu.len() > TRAP_MTU_BYTES {
-            let msg = format!(
+            let error_message = format!(
                 "encoded trap PDU ({} bytes) exceeds MTU ({TRAP_MTU_BYTES} bytes)",
                 encoded_pdu.len()
             );
-            return encode_error_for_all(destinations, &msg);
+            return encode_error_for_all(destinations, &error_message);
         }
 
         destinations

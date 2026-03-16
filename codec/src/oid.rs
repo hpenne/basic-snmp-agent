@@ -405,10 +405,10 @@ mod tests {
 
     #[test]
     fn oid_try_from_vec_failure_second_too_large() {
-        let err = Oid::try_from(vec![0u32, 40]).unwrap_err();
+        let oid_error = Oid::try_from(vec![0u32, 40]).unwrap_err();
         assert!(
-            err.to_string().contains("second OID component"),
-            "unexpected error: {err}"
+            oid_error.to_string().contains("second OID component"),
+            "unexpected error: {oid_error}"
         );
     }
 
@@ -431,58 +431,60 @@ mod tests {
 
     #[test]
     fn oid_parse_error_single_component() {
-        let err = "42".parse::<Oid>().unwrap_err();
+        let parse_error = "42".parse::<Oid>().unwrap_err();
         assert!(
-            err.to_string().contains("at least two components"),
-            "unexpected error: {err}"
+            parse_error.to_string().contains("at least two components"),
+            "unexpected error: {parse_error}"
         );
     }
 
     #[test]
     fn oid_parse_error_empty_string() {
-        let err = "".parse::<Oid>().unwrap_err();
-        assert_eq!(err.to_string(), "invalid OID: empty string");
+        let parse_error = "".parse::<Oid>().unwrap_err();
+        assert_eq!(parse_error.to_string(), "invalid OID: empty string");
     }
 
     #[test]
     fn oid_parse_error_invalid_component() {
-        let err = "1.3.foo.1".parse::<Oid>().unwrap_err();
+        let parse_error = "1.3.foo.1".parse::<Oid>().unwrap_err();
         assert!(
-            err.to_string().contains("invalid component"),
-            "unexpected error: {err}"
+            parse_error.to_string().contains("invalid component"),
+            "unexpected error: {parse_error}"
         );
         // The source error text must also appear in Display.
         assert!(
-            err.to_string().contains("invalid digit found in string"),
-            "expected chained source in Display, got: {err}"
+            parse_error
+                .to_string()
+                .contains("invalid digit found in string"),
+            "expected chained source in Display, got: {parse_error}"
         );
     }
 
     #[test]
     fn oid_parse_error_negative_component() {
         // Negative numbers are not valid OID components (u32 parse rejects them).
-        let err = "1.3.-1".parse::<Oid>().unwrap_err();
+        let parse_error = "1.3.-1".parse::<Oid>().unwrap_err();
         assert!(
-            err.to_string().contains("invalid component"),
-            "unexpected error: {err}"
+            parse_error.to_string().contains("invalid component"),
+            "unexpected error: {parse_error}"
         );
     }
 
     #[test]
     fn oid_parse_error_invalid_first_component() {
-        let err = "3.0".parse::<Oid>().unwrap_err();
+        let parse_error = "3.0".parse::<Oid>().unwrap_err();
         assert!(
-            err.to_string().contains("first OID component"),
-            "unexpected error: {err}"
+            parse_error.to_string().contains("first OID component"),
+            "unexpected error: {parse_error}"
         );
     }
 
     #[test]
     fn oid_parse_error_second_component_too_large() {
-        let err = "0.40".parse::<Oid>().unwrap_err();
+        let parse_error = "0.40".parse::<Oid>().unwrap_err();
         assert!(
-            err.to_string().contains("second OID component"),
-            "unexpected error: {err}"
+            parse_error.to_string().contains("second OID component"),
+            "unexpected error: {parse_error}"
         );
     }
 
@@ -495,22 +497,22 @@ mod tests {
 
     #[test]
     fn oid_parse_error_leading_dot() {
-        let err = ".1.3.6".parse::<Oid>().unwrap_err();
-        assert_eq!(err.to_string(), "invalid OID: leading dot");
+        let parse_error = ".1.3.6".parse::<Oid>().unwrap_err();
+        assert_eq!(parse_error.to_string(), "invalid OID: leading dot");
     }
 
     #[test]
     fn oid_parse_error_trailing_dot() {
-        let err = "1.3.6.".parse::<Oid>().unwrap_err();
-        assert_eq!(err.to_string(), "invalid OID: trailing dot");
+        let parse_error = "1.3.6.".parse::<Oid>().unwrap_err();
+        assert_eq!(parse_error.to_string(), "invalid OID: trailing dot");
     }
 
     #[test]
     fn oid_parse_error_consecutive_dots() {
-        let err = "1..3.6.1".parse::<Oid>().unwrap_err();
+        let parse_error = "1..3.6.1".parse::<Oid>().unwrap_err();
         assert!(
-            err.to_string().contains("consecutive dots"),
-            "unexpected error: {err}"
+            parse_error.to_string().contains("consecutive dots"),
+            "unexpected error: {parse_error}"
         );
     }
 
@@ -518,33 +520,33 @@ mod tests {
     // detected problem), not "consecutive dots".
     #[test]
     fn oid_parse_double_dot_only_reports_leading_dot() {
-        let err = "..".parse::<Oid>().unwrap_err();
-        assert_eq!(err.category(), OidErrorCategory::LeadingDot);
-        assert_eq!(err.to_string(), "invalid OID: leading dot");
+        let parse_error = "..".parse::<Oid>().unwrap_err();
+        assert_eq!(parse_error.category(), OidErrorCategory::LeadingDot);
+        assert_eq!(parse_error.to_string(), "invalid OID: leading dot");
     }
 
     // "1.." ends with a dot, so it is reported as "trailing dot", not
     // "consecutive dots".
     #[test]
     fn oid_parse_trailing_double_dot_reports_trailing_dot() {
-        let err = "1..".parse::<Oid>().unwrap_err();
-        assert_eq!(err.category(), OidErrorCategory::TrailingDot);
-        assert_eq!(err.to_string(), "invalid OID: trailing dot");
+        let parse_error = "1..".parse::<Oid>().unwrap_err();
+        assert_eq!(parse_error.category(), OidErrorCategory::TrailingDot);
+        assert_eq!(parse_error.to_string(), "invalid OID: trailing dot");
     }
 
     // --- Leading zero tests ---
 
     #[test]
     fn oid_parse_error_leading_zero_in_component() {
-        let err = "1.3.06.1".parse::<Oid>().unwrap_err();
-        assert_eq!(err.category(), OidErrorCategory::LeadingZero);
+        let parse_error = "1.3.06.1".parse::<Oid>().unwrap_err();
+        assert_eq!(parse_error.category(), OidErrorCategory::LeadingZero);
         assert!(
-            err.to_string().contains("leading zero"),
-            "unexpected error: {err}"
+            parse_error.to_string().contains("leading zero"),
+            "unexpected error: {parse_error}"
         );
         assert!(
-            err.to_string().contains("\"06\""),
-            "expected component name in error, got: {err}"
+            parse_error.to_string().contains("\"06\""),
+            "expected component name in error, got: {parse_error}"
         );
     }
 
@@ -558,11 +560,11 @@ mod tests {
 
     #[test]
     fn oid_parse_zero_followed_by_space_reports_invalid_component_not_leading_zero() {
-        let err = "1.3.0 .1".parse::<Oid>().unwrap_err();
-        assert_eq!(err.category(), OidErrorCategory::InvalidComponent);
+        let parse_error = "1.3.0 .1".parse::<Oid>().unwrap_err();
+        assert_eq!(parse_error.category(), OidErrorCategory::InvalidComponent);
         assert!(
-            err.to_string().contains("\"0 \""),
-            "expected offending component in error, got: {err}"
+            parse_error.to_string().contains("\"0 \""),
+            "expected offending component in error, got: {parse_error}"
         );
     }
 
@@ -570,32 +572,32 @@ mod tests {
 
     #[test]
     fn oid_error_category_empty_string() {
-        let err = "".parse::<Oid>().unwrap_err();
-        assert_eq!(err.category(), OidErrorCategory::EmptyString);
+        let parse_error = "".parse::<Oid>().unwrap_err();
+        assert_eq!(parse_error.category(), OidErrorCategory::EmptyString);
     }
 
     #[test]
     fn oid_error_category_invalid_component() {
-        let err = "1.3.foo.1".parse::<Oid>().unwrap_err();
-        assert_eq!(err.category(), OidErrorCategory::InvalidComponent);
+        let parse_error = "1.3.foo.1".parse::<Oid>().unwrap_err();
+        assert_eq!(parse_error.category(), OidErrorCategory::InvalidComponent);
     }
 
     #[test]
     fn oid_error_category_too_few_components() {
-        let err = "42".parse::<Oid>().unwrap_err();
-        assert_eq!(err.category(), OidErrorCategory::TooFewComponents);
+        let parse_error = "42".parse::<Oid>().unwrap_err();
+        assert_eq!(parse_error.category(), OidErrorCategory::TooFewComponents);
     }
 
     #[test]
     fn oid_error_category_invalid_first_arc() {
-        let err = "3.0".parse::<Oid>().unwrap_err();
-        assert_eq!(err.category(), OidErrorCategory::InvalidFirstArc);
+        let parse_error = "3.0".parse::<Oid>().unwrap_err();
+        assert_eq!(parse_error.category(), OidErrorCategory::InvalidFirstArc);
     }
 
     #[test]
     fn oid_error_category_invalid_second_arc() {
-        let err = "0.40".parse::<Oid>().unwrap_err();
-        assert_eq!(err.category(), OidErrorCategory::InvalidSecondArc);
+        let parse_error = "0.40".parse::<Oid>().unwrap_err();
+        assert_eq!(parse_error.category(), OidErrorCategory::InvalidSecondArc);
     }
 
     // --- Oid::Ord ---
@@ -632,17 +634,17 @@ mod tests {
 
     #[test]
     fn parse_oid_error_implements_error_trait() {
-        let err = "".parse::<Oid>().unwrap_err();
+        let parse_error = "".parse::<Oid>().unwrap_err();
         // Verify the trait bound is satisfied by using it as &dyn Error.
-        let _: &dyn std::error::Error = &err;
+        let _: &dyn std::error::Error = &parse_error;
     }
 
     #[test]
     fn parse_oid_error_source_is_some_for_invalid_component() {
         use std::error::Error;
-        let err = "1.3.foo".parse::<Oid>().unwrap_err();
+        let parse_error = "1.3.foo".parse::<Oid>().unwrap_err();
         assert!(
-            err.source().is_some(),
+            parse_error.source().is_some(),
             "expected a chained source error for an invalid component"
         );
     }
@@ -650,9 +652,9 @@ mod tests {
     #[test]
     fn parse_oid_error_source_is_none_for_empty_string() {
         use std::error::Error;
-        let err = "".parse::<Oid>().unwrap_err();
+        let parse_error = "".parse::<Oid>().unwrap_err();
         assert!(
-            err.source().is_none(),
+            parse_error.source().is_none(),
             "expected no chained source error for an empty string"
         );
     }
@@ -660,9 +662,9 @@ mod tests {
     #[test]
     fn parse_oid_error_source_is_none_for_structural_violation() {
         use std::error::Error;
-        let err = "3.0".parse::<Oid>().unwrap_err();
+        let parse_error = "3.0".parse::<Oid>().unwrap_err();
         assert!(
-            err.source().is_none(),
+            parse_error.source().is_none(),
             "expected no chained source error for a structural violation"
         );
     }

@@ -20,11 +20,7 @@ import subprocess
 import tempfile
 import time
 
-from behave import given, then, use_step_matcher, when
-
-# Use the regex-based step matcher so that quoted parameters are matched with
-# ``[^"]+``, preventing one step pattern from matching a longer variant.
-use_step_matcher("re")
+from behave import given, then, when
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +108,7 @@ def step_snmptrapd_is_running(context):
     )
 
 
-@given(r'a second snmptrapd named "(?P<receiver_name>[^"]+)" is running')
+@given('a second snmptrapd named "{receiver_name}" is running')
 def step_second_snmptrapd_running(context, receiver_name):
     container_name = f"snmptrapd-{receiver_name}-test"
     subprocess.run(
@@ -135,7 +131,7 @@ def step_second_snmptrapd_running(context, receiver_name):
 # When steps
 # ---------------------------------------------------------------------------
 
-@when(r'the agent sends a trap with OID "(?P<trap_oid>[^"]+)"')
+@when('the agent sends a trap with OID "{trap_oid}"')
 def step_send_trap(context, trap_oid):
     _run_agent(context, [
         {
@@ -147,7 +143,7 @@ def step_send_trap(context, trap_oid):
     ])
 
 
-@when(r'the agent sends a trap with OID "(?P<trap_oid>[^"]+)" and varbinds')
+@when('the agent sends a trap with OID "{trap_oid}" and varbinds')
 def step_send_trap_with_varbinds(context, trap_oid):
     varbinds = []
     for row in context.table:
@@ -173,7 +169,7 @@ def _receiver_dest(context, receiver_name: str) -> str:
     return f"{context.extra_container_map[receiver_name]}:162"
 
 
-@when(r'the agent sends to receivers "(?P<receiver1>[^"]+)" and "(?P<receiver2>[^"]+)" a trap with OID "(?P<trap_oid>[^"]+)"')
+@when('the agent sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"')
 def step_send_trap_to_two_receivers(context, receiver1, receiver2, trap_oid):
     dest1 = _receiver_dest(context, receiver1)
     dest2 = _receiver_dest(context, receiver2)
@@ -187,7 +183,7 @@ def step_send_trap_to_two_receivers(context, receiver1, receiver2, trap_oid):
     ])
 
 
-@when(r'the agent sends an oversized trap with OID "(?P<trap_oid>[^"]+)"')
+@when('the agent sends an oversized trap with OID "{trap_oid}"')
 def step_send_oversized_trap(context, trap_oid):
     # 10 × 200-byte OctetString varbinds produce ~2 000+ bytes after BER
     # overhead, comfortably exceeding the 1 500-byte MTU cap.
@@ -209,14 +205,14 @@ def step_send_oversized_trap(context, trap_oid):
 # Then steps
 # ---------------------------------------------------------------------------
 
-@then(r'snmptrapd receives a trap named "(?P<name>[^"]+)"')
+@then('snmptrapd receives a trap named "{name}"')
 def step_snmptrapd_receives_trap(context, name):
     traps = _poll_for_trap(context.snmptrapd_container)
     assert traps, "snmptrapd did not receive any trap within the timeout"
     context.named_traps[name] = traps[0]
 
 
-@then(r'"(?P<receiver_name>[^"]+)" receives a trap named "(?P<name>[^"]+)"')
+@then('"{receiver_name}" receives a trap named "{name}"')
 def step_receiver_receives_trap(context, receiver_name, name):
     container = context.extra_container_map[receiver_name]
     traps = _poll_for_trap(container)
@@ -227,18 +223,7 @@ def step_receiver_receives_trap(context, receiver_name, name):
     context.named_traps[name] = traps[0]
 
 
-@then(r'trap "(?P<name>[^"]+)" has varbind "(?P<oid>[^"]+)"')
-def step_trap_has_varbind(context, name, oid):
-    trap = context.named_traps[name]
-    dot_oid = _dot(oid)
-    matching = [v for v in trap["varbinds"] if v["oid"] == dot_oid]
-    assert matching, (
-        f"Trap '{name}' has no varbind with OID '{dot_oid}'.\n"
-        f"Varbinds present: {trap['varbinds']}"
-    )
-
-
-@then(r'trap "(?P<name>[^"]+)" has varbind "(?P<oid>[^"]+)" with value "(?P<expected_value>[^"]+)"')
+@then('trap "{name}" has varbind "{oid}" with value "{expected_value}"')
 def step_trap_has_varbind_with_value(context, name, oid, expected_value):
     trap = context.named_traps[name]
     dot_oid = _dot(oid)
@@ -257,7 +242,18 @@ def step_trap_has_varbind_with_value(context, name, oid, expected_value):
     )
 
 
-@then(r'the agent reports an error containing "(?P<substring>[^"]+)"')
+@then('trap "{name}" has varbind "{oid}"')
+def step_trap_has_varbind(context, name, oid):
+    trap = context.named_traps[name]
+    dot_oid = _dot(oid)
+    matching = [v for v in trap["varbinds"] if v["oid"] == dot_oid]
+    assert matching, (
+        f"Trap '{name}' has no varbind with OID '{dot_oid}'.\n"
+        f"Varbinds present: {trap['varbinds']}"
+    )
+
+
+@then('the agent reports an error containing "{substring}"')
 def step_agent_reports_error(context, substring):
     assert substring in context.last_agent_output, (
         f"Expected '{substring}' in agent output.\nOutput:\n{context.last_agent_output}"

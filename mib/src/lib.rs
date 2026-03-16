@@ -302,9 +302,9 @@ mod tests {
         // Verify that the convenience re-exports compile and are usable without
         // importing from codec directly.
         let o: Oid = "1.3.6.1".parse().unwrap();
-        let v: Value = Value::Integer32(0);
+        let integer_value: Value = Value::Integer32(0);
         let mut store = Store::new();
-        store.set(o.clone(), v);
+        store.set(o.clone(), integer_value);
         assert_eq!(store.get(&o), Some(&Value::Integer32(0)));
     }
 }

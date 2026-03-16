@@ -162,13 +162,13 @@ fn main() {
 fn to_value(def: &VarbindDef) -> Result<Value, String> {
     match def.r#type.as_str() {
         "Integer32" => {
-            let v = def
+            let raw_integer = def
                 .data
                 .as_i64()
                 .ok_or_else(|| format!("Integer32: expected integer, got {}", def.data))?;
-            i32::try_from(v)
+            i32::try_from(raw_integer)
                 .map(Value::Integer32)
-                .map_err(|_| format!("Integer32: value {v} is out of i32 range"))
+                .map_err(|_| format!("Integer32: value {raw_integer} is out of i32 range"))
         }
 
         "OctetString" => def
@@ -188,12 +188,12 @@ fn to_value(def: &VarbindDef) -> Result<Value, String> {
             }),
 
         "Counter32" => {
-            let v = def.data.as_u64().ok_or_else(|| {
+            let raw_count = def.data.as_u64().ok_or_else(|| {
                 format!("Counter32: expected non-negative integer, got {}", def.data)
             })?;
-            u32::try_from(v)
+            u32::try_from(raw_count)
                 .map(Value::Counter32)
-                .map_err(|_| format!("Counter32: value {v} is out of u32 range"))
+                .map_err(|_| format!("Counter32: value {raw_count} is out of u32 range"))
         }
 
         "Counter64" => {
@@ -203,21 +203,21 @@ fn to_value(def: &VarbindDef) -> Result<Value, String> {
         }
 
         "Gauge32" => {
-            let v = def.data.as_u64().ok_or_else(|| {
+            let raw_gauge = def.data.as_u64().ok_or_else(|| {
                 format!("Gauge32: expected non-negative integer, got {}", def.data)
             })?;
-            u32::try_from(v)
+            u32::try_from(raw_gauge)
                 .map(Value::Gauge32)
-                .map_err(|_| format!("Gauge32: value {v} is out of u32 range"))
+                .map_err(|_| format!("Gauge32: value {raw_gauge} is out of u32 range"))
         }
 
         "TimeTicks" => {
-            let v = def.data.as_u64().ok_or_else(|| {
+            let raw_ticks = def.data.as_u64().ok_or_else(|| {
                 format!("TimeTicks: expected non-negative integer, got {}", def.data)
             })?;
-            u32::try_from(v)
+            u32::try_from(raw_ticks)
                 .map(Value::TimeTicks)
-                .map_err(|_| format!("TimeTicks: value {v} is out of u32 range"))
+                .map_err(|_| format!("TimeTicks: value {raw_ticks} is out of u32 range"))
         }
 
         "IpAddress" => {
@@ -232,12 +232,13 @@ fn to_value(def: &VarbindDef) -> Result<Value, String> {
                 ));
             }
             let mut octets = [0u8; 4];
-            for (i, v) in arr.iter().enumerate() {
-                let n = v
+            for (octet_index, octet_element) in arr.iter().enumerate() {
+                let raw_octet = octet_element
                     .as_u64()
-                    .ok_or_else(|| format!("IpAddress: element {i} is not an integer"))?;
-                octets[i] = u8::try_from(n)
-                    .map_err(|_| format!("IpAddress: element {i} value {n} is out of u8 range"))?;
+                    .ok_or_else(|| format!("IpAddress: element {octet_index} is not an integer"))?;
+                octets[octet_index] = u8::try_from(raw_octet).map_err(|_| {
+                    format!("IpAddress: element {octet_index} value {raw_octet} is out of u8 range")
+                })?;
             }
             Ok(Value::IpAddress(octets))
         }

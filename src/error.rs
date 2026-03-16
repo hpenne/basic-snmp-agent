@@ -99,31 +99,31 @@ mod tests {
     #[test]
     fn agent_error_bind_display_contains_address_and_cause() {
         let addr: SocketAddr = "127.0.0.1:10161".parse().unwrap();
-        let err = AgentError::Bind {
+        let bind_error = AgentError::Bind {
             addr,
             source: io_err(),
         };
-        let msg = err.to_string();
-        assert!(msg.contains("127.0.0.1:10161"), "{msg}");
-        assert!(msg.contains("test"), "{msg}");
+        let error_message = bind_error.to_string();
+        assert!(error_message.contains("127.0.0.1:10161"), "{error_message}");
+        assert!(error_message.contains("test"), "{error_message}");
     }
 
     #[test]
     fn agent_error_socket_display_mentions_tcp_listener() {
-        let err = AgentError::Socket(io_err());
-        assert!(err.to_string().contains("TCP listener"));
+        let socket_error = AgentError::Socket(io_err());
+        assert!(socket_error.to_string().contains("TCP listener"));
     }
 
     #[test]
     fn agent_error_udp_socket_display_mentions_udp_trap_socket() {
-        let err = AgentError::UdpSocket(io_err());
-        assert!(err.to_string().contains("UDP trap socket"));
+        let udp_socket_error = AgentError::UdpSocket(io_err());
+        assert!(udp_socket_error.to_string().contains("UDP trap socket"));
     }
 
     #[test]
     fn agent_error_spawn_display_mentions_event_loop() {
-        let err = AgentError::Spawn(io_err());
-        assert!(err.to_string().contains("event loop"));
+        let spawn_error = AgentError::Spawn(io_err());
+        assert!(spawn_error.to_string().contains("event loop"));
     }
 
     // ── AgentError source ────────────────────────────────────────────────
@@ -131,19 +131,20 @@ mod tests {
     #[test]
     fn agent_error_bind_source_returns_inner_io_error() {
         let addr: SocketAddr = "127.0.0.1:10161".parse().unwrap();
-        let err = AgentError::Bind {
+        let bind_error = AgentError::Bind {
             addr,
             source: io_err(),
         };
-        let source = err.source().expect("source should be Some");
+        let source = bind_error.source().expect("source should be Some");
         assert!(source.to_string().contains("test"));
     }
 
     #[test]
     fn agent_error_socket_source_returns_inner_io_error() {
-        let err = AgentError::Socket(io_err());
+        let socket_error = AgentError::Socket(io_err());
         assert!(
-            err.source()
+            socket_error
+                .source()
                 .expect("source should be Some")
                 .to_string()
                 .contains("test")
@@ -152,9 +153,10 @@ mod tests {
 
     #[test]
     fn agent_error_udp_socket_source_returns_inner_io_error() {
-        let err = AgentError::UdpSocket(io_err());
+        let udp_socket_error = AgentError::UdpSocket(io_err());
         assert!(
-            err.source()
+            udp_socket_error
+                .source()
                 .expect("source should be Some")
                 .to_string()
                 .contains("test")
@@ -163,9 +165,10 @@ mod tests {
 
     #[test]
     fn agent_error_spawn_source_returns_inner_io_error() {
-        let err = AgentError::Spawn(io_err());
+        let spawn_error = AgentError::Spawn(io_err());
         assert!(
-            err.source()
+            spawn_error
+                .source()
                 .expect("source should be Some")
                 .to_string()
                 .contains("test")
@@ -176,15 +179,23 @@ mod tests {
 
     #[test]
     fn set_error_disconnected_display_mentions_event_loop() {
-        let err = SetError::Disconnected;
-        assert!(err.to_string().contains("event loop"), "{}", err);
+        let set_error = SetError::Disconnected;
+        assert!(
+            set_error.to_string().contains("event loop"),
+            "{}",
+            set_error
+        );
     }
 
     // ── TrapError Display ────────────────────────────────────────────────
 
     #[test]
     fn trap_error_empty_destinations_display_mentions_destination() {
-        let err = TrapError::EmptyDestinations;
-        assert!(err.to_string().contains("destination"), "{}", err);
+        let trap_error = TrapError::EmptyDestinations;
+        assert!(
+            trap_error.to_string().contains("destination"),
+            "{}",
+            trap_error
+        );
     }
 }
