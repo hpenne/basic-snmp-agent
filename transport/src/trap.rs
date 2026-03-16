@@ -312,4 +312,50 @@ mod tests {
             results[1].outcome
         );
     }
+
+    #[test]
+    fn given_one_failing_destination_when_send_trap_then_failure_does_not_prevent_remaining_delivery()
+     {
+        // Verifies: REQ-0044, REQ-0045, REQ-0047
+        // Sending to an IPv6 address from an IPv4-only socket (bound to 0.0.0.0)
+        // produces a synchronous I/O error, giving us a reliable per-destination
+        // failure without any external coordination.
+        let sender = TrapSender::new(Instant::now()).unwrap();
+        let ipv6_unreachable_dest: SocketAddr = "[::1]:9999".parse().unwrap();
+        let (recv_ok, ipv4_reachable_dest) = loopback_receiver();
+        let pdu = minimal_pdu();
+
+        // When: the trap is sent to a failing destination followed by a reachable one.
+        let results = sender.send_trap(&pdu, &[ipv6_unreachable_dest, ipv4_reachable_dest]);
+
+        // Then: two results are returned in the original order.
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].destination, ipv6_unreachable_dest);
+        assert_eq!(results[1].destination, ipv4_reachable_dest);
+
+        // And: the IPv6 destination produces an InvalidInput error — not InvalidData,
+        // which would indicate the send was never attempted due to an encoding failure.
+        let send_err = results[0].outcome.as_ref().unwrap_err();
+        assert_eq!(
+            send_err.kind(),
+            io::ErrorKind::InvalidInput,
+            "expected InvalidInput for IPv6 destination on IPv4 socket, got {send_err}"
+        );
+
+        // And: the IPv4 destination succeeds despite the earlier failure.
+        assert!(
+            results[1].outcome.is_ok(),
+            "expected Ok for IPv4 destination, got {:?}",
+            results[1].outcome
+        );
+
+        // And: the receiver socket actually received a non-empty datagram, proving
+        // the earlier per-destination failure did not abort subsequent sends.
+        let mut recv_buf = vec![0u8; TRAP_MTU_BYTES];
+        let (bytes_received, _src) = recv_ok.recv_from(&mut recv_buf).unwrap();
+        assert!(
+            bytes_received > 0,
+            "expected datagram on reachable destination despite earlier failure"
+        );
+    }
 }
