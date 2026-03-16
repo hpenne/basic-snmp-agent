@@ -346,6 +346,44 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
         .map_err(|e| EncodeError::new(format!("BER encoding of GetResponse failed: {e}")))
 }
 
+// ── encode_get_request ────────────────────────────────────────────────────────
+
+/// BER-encode a [`GetRequest`] PDU for use in tests that need to send a
+/// well-formed inbound PDU to the agent over TCP.
+///
+/// Production code never needs to encode a `GetRequest` (only managers do);
+/// this function exists so that integration tests in the `transport` crate can
+/// construct valid wire frames without taking a direct dependency on `rasn`.
+///
+/// # Errors
+///
+/// Returns an [`EncodeError`] if `rasn` fails to BER-encode the PDU.
+///
+/// # Examples
+///
+/// ```
+/// use codec::{Oid, GetRequest, Varbind, VarbindValue, encode_get_request};
+///
+/// let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+/// let pdu = GetRequest {
+///     request_id: 1,
+///     varbinds: vec![Varbind { oid, value: VarbindValue::Unspecified }],
+/// };
+/// let bytes = encode_get_request(&pdu).unwrap();
+/// assert!(!bytes.is_empty());
+/// ```
+#[cfg(feature = "test-support")]
+pub fn encode_get_request(pdu: &GetRequest) -> Result<Vec<u8>, EncodeError> {
+    let rasn_pdu = RasnGetRequest(RasnPdu {
+        request_id: pdu.request_id,
+        error_status: 0,
+        error_index: 0,
+        variable_bindings: pdu.varbinds.iter().map(varbind_to_rasn).collect(),
+    });
+    rasn::ber::encode(&rasn_pdu)
+        .map_err(|e| EncodeError::new(format!("BER encoding of GetRequest failed: {e}")))
+}
+
 // ── encode_trap ───────────────────────────────────────────────────────────────
 
 /// BER-encode a [`WireTrapPdu`] for transmission as a plain UDP datagram.

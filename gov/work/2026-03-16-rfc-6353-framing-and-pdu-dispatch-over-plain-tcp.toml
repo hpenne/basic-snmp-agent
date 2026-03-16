@@ -2,48 +2,50 @@
 schema = 1
 id = "WI-2026-03-16-002"
 title = "RFC 6353 framing and PDU dispatch over plain TCP"
-status = "queue"
+status = "done"
 created = "2026-03-16"
+started = "2026-03-16"
+completed = "2026-03-16"
 
 [content]
 description = "With the MIB store wired in, this work item makes the event loop respond to SNMP requests over plain TCP (no TLS). Each accepted connection gets a `ConnectionState` holding the stream and a read buffer. Incoming bytes are accumulated until a complete RFC 6353 frame (4-byte big-endian length prefix + payload) is available, then decoded, dispatched through the existing request handlers (`handle_get`, `handle_get_next`, `handle_get_bulk`, `handle_set`), and a length-prefixed response is written back. Invalid payloads are silently discarded. Prerequisite: WI-2026-03-16-001."
 
 [[content.acceptance_criteria]]
 text = "ConnectionState type holds a TcpStream and a Vec<u8> read buffer"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "handle_connection_event accumulates bytes and parses RFC 6353 4-byte length-prefix framing"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "complete frames are decoded and dispatched to the appropriate request handler"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "responses are written back with a 4-byte length prefix"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "frames that fail to decode are silently discarded per RFC-0001:C-TRANSPORT"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "unit test — send GET over loopback plain TCP, receive correct GetResponse"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "unit test — partial frame across two reads is handled correctly"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "cargo clippy --workspace -- -D warnings -W clippy::pedantic passes"
-status = "pending"
+status = "done"
 category = "chore"
