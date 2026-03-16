@@ -2,33 +2,35 @@
 schema = 1
 id = "WI-2026-03-16-001"
 title = "Wire MIB store into the event loop"
-status = "queue"
+status = "done"
 created = "2026-03-16"
+started = "2026-03-16"
+completed = "2026-03-16"
 
 [content]
 description = "`EventLoop` currently has no MIB store. `SetValue` commands print to stderr instead of updating any state. This work item adds a `mib::Store` field to `EventLoop`, initialises it in `new`, and wires `drain_commands` to call `store.set(oid, value)`."
 
 [[content.acceptance_criteria]]
 text = "EventLoop struct has a store: mib::Store field"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "EventLoop::new initialises the store"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "drain_commands calls store.set(oid, value) for SetValue commands instead of printing to stderr"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "unit test confirms sending SetValue leaves the expected value in the store"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "cargo clippy --workspace -- -D warnings -W clippy::pedantic passes"
-status = "pending"
+status = "done"
 category = "chore"

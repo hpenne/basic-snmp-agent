@@ -83,6 +83,18 @@ pub enum Command {
     },
     /// Shut down the event loop cleanly.
     Shutdown,
+    /// Query a single OID from the MIB store and send the result back.
+    ///
+    /// Compiled only for unit tests within *this crate* (`cfg(test)`).
+    /// Integration tests in `transport/tests/` compile the crate without
+    /// `cfg(test)` and therefore cannot see this variant. Production code has
+    /// no need to read values back out of the event loop — SNMP GET dispatch
+    /// handles that.
+    #[cfg(test)]
+    QueryValue {
+        oid: codec::Oid,
+        reply: std::sync::mpsc::SyncSender<Option<codec::Value>>,
+    },
 }
 
 // ── CommandSender ────────────────────────────────────────────────────────────
@@ -172,7 +184,7 @@ impl Clone for CommandSender {
 // ── EventLoop ────────────────────────────────────────────────────────────────
 
 /// The mio-driven event loop that owns the TCP listener, accepted connections,
-/// and the self-pipe read end.
+/// the self-pipe read end, and the MIB store.
 ///
 /// Call [`run`][`EventLoop::run`] from a dedicated OS thread. The loop exits
 /// when it receives [`Command::Shutdown`].
@@ -200,6 +212,8 @@ pub struct EventLoop {
     /// Next token value to assign to an accepted connection.
     next_token: usize,
     connections: HashMap<Token, mio::net::TcpStream>,
+    /// MIB store; updated by `SetValue` commands from application threads.
+    store: mib::Store,
 }
 
 impl EventLoop {
@@ -261,6 +275,7 @@ impl EventLoop {
             rx,
             next_token: FIRST_CONN_TOKEN,
             connections: HashMap::new(),
+            store: mib::Store::new(),
         };
         let sender = CommandSender { tx, pipe_write_fd };
 
@@ -351,11 +366,17 @@ impl EventLoop {
         loop {
             match self.rx.try_recv() {
                 Ok(Command::SetValue { oid, value }) => {
-                    eprintln!("[event_loop] SetValue: oid={oid:?} value={value:?}");
+                    self.store.set(oid, value);
                 }
                 Ok(Command::Shutdown) => {
                     eprintln!("[event_loop] received Shutdown, exiting");
                     return true;
+                }
+                #[cfg(test)]
+                Ok(Command::QueryValue { oid, reply }) => {
+                    // Ignore send errors: the test may have timed out or dropped
+                    // the receiver, and that should not kill the event loop.
+                    let _ = reply.send(self.store.get(&oid).cloned());
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -579,6 +600,78 @@ mod tests {
     }
 
     #[test]
+    fn given_set_value_command_when_sent_then_mib_store_is_updated() {
+        // Given: a running event loop.
+        let (event_loop, _bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let handle = thread::spawn(move || event_loop.run());
+
+        let oid: codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+
+        // When: a SetValue command is sent.
+        sender
+            .send(Command::SetValue {
+                oid: oid.clone(),
+                value: codec::Value::Integer32(99),
+            })
+            .unwrap();
+
+        // Query the store via the test-only QueryValue command so we can verify
+        // the value without requiring GET dispatch (which is not yet wired up).
+        // Using the fully-qualified path avoids shadowing the `mpsc` binding
+        // brought in by `use super::*`.
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        sender
+            .send(Command::QueryValue {
+                oid: oid.clone(),
+                reply: reply_tx,
+            })
+            .unwrap();
+
+        // Then: the store contains the value that was set.
+        let stored_value = reply_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("timed out waiting for QueryValue reply");
+        assert_eq!(
+            stored_value,
+            Some(codec::Value::Integer32(99)),
+            "expected MIB store to hold Integer32(99) for oid {oid:?}"
+        );
+
+        sender.send(Command::Shutdown).unwrap();
+        handle.join().expect("event loop thread panicked").unwrap();
+    }
+
+    #[test]
+    fn given_no_set_value_when_queried_then_mib_returns_none() {
+        // Given: a running event loop with no values inserted.
+        let (event_loop, _bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let handle = thread::spawn(move || event_loop.run());
+
+        let oid: codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+
+        // When: the OID is queried without having been set.
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        sender
+            .send(Command::QueryValue {
+                oid,
+                reply: reply_tx,
+            })
+            .unwrap();
+
+        // Then: the store returns None for the unknown OID.
+        let stored_value = reply_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("timed out waiting for QueryValue reply");
+        assert_eq!(
+            stored_value, None,
+            "expected MIB store to return None for an OID that was never set"
+        );
+
+        sender.send(Command::Shutdown).unwrap();
+        handle.join().expect("event loop thread panicked").unwrap();
+    }
+
+    #[test]
     fn given_already_used_token_when_next_connection_token_called_then_token_is_skipped() {
         // Given: an event loop whose connection map already contains token 2
         // (the first candidate after FIRST_CONN_TOKEN). Bind a listener so we
@@ -599,6 +692,7 @@ mod tests {
             rx: mpsc::channel::<Command>().1,
             next_token: FIRST_CONN_TOKEN,
             connections: HashMap::new(),
+            store: mib::Store::new(),
         };
 
         // Connect to the std listener so the TcpStream is valid. mio's
