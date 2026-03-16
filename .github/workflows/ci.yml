@@ -60,10 +60,24 @@ jobs:
       - name: cargo test
         run: cargo test --workspace
 
+  trace:
+    name: Requirement tracing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: make trace
+        run: make trace
+
   system-tests:
     name: System tests
     runs-on: ubuntu-latest
-    needs: [check, test]
+    needs: [check, test, trace]
     steps:
       - uses: actions/checkout@v4
 

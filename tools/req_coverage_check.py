@@ -84,11 +84,16 @@ def find_project_root(start: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def load_implemented_rfcs(gov_dir: Path) -> list[ImplementedRfc]:
+def load_implemented_rfcs(
+    gov_dir: Path,
+    force_rfc_ids: set[str] | None = None,
+) -> list[ImplementedRfc]:
     """Return an ``ImplementedRfc`` for every RFC whose phase is ``test`` or ``stable``.
 
     Tracing is only enforced once implementation is complete. RFCs in the
-    ``spec`` or ``impl`` phase are still being written and are excluded.
+    ``spec`` or ``impl`` phase are still being written and are excluded,
+    unless their ID is listed in *force_rfc_ids*, in which case they are
+    included regardless of phase.
     """
     rfc_root = gov_dir / "rfc"
     implemented: list[ImplementedRfc] = []
@@ -97,7 +102,10 @@ def load_implemented_rfcs(gov_dir: Path) -> list[ImplementedRfc]:
         if not rfc_json_path.is_file():
             continue
         rfc_record = json.loads(rfc_json_path.read_text(encoding="utf-8"))
-        if rfc_record.get("phase") in ("test", "stable"):
+        rfc_id = rfc_record.get("rfc_id", rfc_dir.name)
+        phase_qualifies = rfc_record.get("phase") in ("test", "stable")
+        force_included = force_rfc_ids is not None and rfc_id in force_rfc_ids
+        if phase_qualifies or force_included:
             implemented.append(ImplementedRfc(rfc_dir=rfc_dir, record=rfc_record))
     return implemented
 
@@ -325,17 +333,24 @@ def find_orphaned_annotations(
 # ---------------------------------------------------------------------------
 
 
-def run_check(project_root: Path, strict: bool = False) -> int:
+def run_check(
+    project_root: Path,
+    strict: bool = False,
+    force_rfc_ids: set[str] | None = None,
+) -> int:
     """Execute the full coverage check and print a summary.
 
     When *strict* is ``True``, annotations that reference a REQ ID not defined
     in any implemented RFC are also reported and cause a non-zero exit.
 
+    *force_rfc_ids*, if given, is a set of RFC IDs to include regardless of
+    their current phase (useful for checking in-progress RFCs).
+
     Returns the exit code: 0 for pass, 1 for failure.
     """
     gov_dir = project_root / "gov"
 
-    implemented_rfcs = load_implemented_rfcs(gov_dir)
+    implemented_rfcs = load_implemented_rfcs(gov_dir, force_rfc_ids=force_rfc_ids)
     rfc_count = len(implemented_rfcs)
     print(f"Checking requirement coverage for {rfc_count} implemented RFC(s)...")
 
@@ -411,6 +426,15 @@ def main() -> None:
         help="Also fail if any annotation references a REQ ID not defined in "
         "any implemented RFC (orphaned annotation check).",
     )
+    parser.add_argument(
+        "--rfc",
+        metavar="RFC_ID",
+        action="append",
+        dest="force_rfc_ids",
+        default=None,
+        help="Include this RFC in the check regardless of its phase. "
+        "May be repeated to force multiple RFCs (e.g. --rfc RFC-0002 --rfc RFC-0003).",
+    )
     args = parser.parse_args()
 
     if args.root is not None:
@@ -418,7 +442,8 @@ def main() -> None:
     else:
         project_root = find_project_root(Path(__file__).parent)
 
-    sys.exit(run_check(project_root, strict=args.strict))
+    force_rfc_ids = set(args.force_rfc_ids) if args.force_rfc_ids else None
+    sys.exit(run_check(project_root, strict=args.strict, force_rfc_ids=force_rfc_ids))
 
 
 if __name__ == "__main__":
