@@ -1,0 +1,14 @@
+[[gap]]
+req     = "REQ-0039"
+missing = ["behave_test"]
+rationale = "Structural type constraint: TrapPdu having no sysUpTime.0 field is enforced by the Rust type definition and verified at compile time via struct-literal tests. A Behave system test cannot introspect struct shape."
+
+[[gap]]
+req     = "REQ-0043"
+missing = ["behave_test"]
+rationale = "The empty-destinations error is returned before any PDU is sent. A system-level Behave test cannot meaningfully distinguish this early-return case from other failures, and the requirement is fully covered by a unit test."
+
+[[gap]]
+req     = "REQ-0046"
+missing = ["rust_test", "behave_test"]
+rationale = "Absence/negative constraint: the non-existence of a send_inform API is enforced by the type system at compile time. No runtime test can verify the absence of a method; the constraint is satisfied by the public API having no such function."

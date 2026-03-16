@@ -19,6 +19,9 @@ use crate::request::{TrapPdu, build_wire_trap};
 const TRAP_MTU_BYTES: usize = 1500;
 
 /// Per-destination outcome of a single trap send attempt.
+///
+/// # Requirements
+/// Implements: REQ-0047
 #[derive(Debug)]
 pub struct TrapResult {
     /// The destination address this result pertains to.
@@ -32,6 +35,9 @@ pub struct TrapResult {
 /// The socket is bound to an OS-assigned local port on `0.0.0.0` at
 /// construction time and reused for all subsequent sends. `TrapSender` is
 /// cheap to clone — all clones share the same underlying socket via [`Arc`].
+///
+/// # Requirements
+/// Implements: REQ-0036
 ///
 /// # Examples
 ///
@@ -79,6 +85,9 @@ impl TrapSender {
     /// **Limitation:** Only IPv4 destinations are supported. Sending to an IPv6
     /// address will produce an I/O error for that destination.
     ///
+    /// # Requirements
+    /// Implements: REQ-0036, REQ-0037
+    ///
     /// # Errors
     ///
     /// Returns an error if the UDP socket cannot be bound.
@@ -105,6 +114,9 @@ impl TrapSender {
     /// `destinations`. If encoding fails or the encoded PDU exceeds the MTU cap
     /// (1500 bytes), every destination receives an `Err` result and no datagrams
     /// are sent.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0035, REQ-0042, REQ-0044, REQ-0045, REQ-0047
     ///
     /// # Examples
     ///
@@ -197,6 +209,7 @@ mod tests {
 
     #[test]
     fn given_trap_pdu_within_mtu_when_send_trap_then_all_destinations_get_ok() {
+        // Verifies: REQ-0035, REQ-0036, REQ-0044, REQ-0047
         // Given: a sender and a loopback receiver socket.
         let sender = TrapSender::new(Instant::now()).unwrap();
         let (receiver, dest) = loopback_receiver();
@@ -274,6 +287,7 @@ mod tests {
 
     #[test]
     fn given_multiple_destinations_when_send_trap_then_result_per_destination() {
+        // Verifies: REQ-0044, REQ-0045, REQ-0047
         // Given: a sender and two loopback receiver sockets.
         let sender = TrapSender::new(Instant::now()).unwrap();
         let (_recv_a, dest_a) = loopback_receiver();

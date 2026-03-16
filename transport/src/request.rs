@@ -33,6 +33,9 @@ static SNMP_TRAP_OID_OID: LazyLock<Oid> =
 ///
 /// This type is re-exported from the `transport` crate root and from `basic_snmp_agent`.
 ///
+/// # Requirements
+/// Implements: REQ-0039, REQ-0040
+///
 /// # Examples
 ///
 /// ```
@@ -220,6 +223,9 @@ pub fn handle_set(req: &SetRequest) -> GetResponse {
 /// Per RFC 3416 §4.2.6, every Trap-PDU must begin with these two varbinds in order.
 /// The public API `TrapPdu` omits them; the event loop inserts them here so that
 /// callers never have to manage `sysUpTime`.
+///
+/// # Requirements
+/// Implements: REQ-0037, REQ-0038, REQ-0041
 pub fn build_wire_trap(api_pdu: &TrapPdu, start_time: Instant) -> codec::WireTrapPdu {
     let sys_up_time = elapsed_hundredths(start_time);
 
@@ -496,6 +502,7 @@ mod tests {
 
     #[test]
     fn given_api_trap_pdu_when_built_then_prepends_sys_up_time_and_trap_oid() {
+        // Verifies: REQ-0037, REQ-0038, REQ-0041
         let api_pdu = TrapPdu {
             request_id: 5,
             trap_oid: oid("1.3.6.1.6.3.1.1.5.1"),
@@ -522,10 +529,51 @@ mod tests {
         assert_eq!(wire.varbinds[2].oid, oid("1.3.6.1.2.1.1.5.0"));
     }
 
+    // ── TrapPdu structure ─────────────────────────────────────────────────────
+
+    #[test]
+    fn trap_pdu_excludes_sys_up_time_field() {
+        // Verifies: REQ-0039
+        // TrapPdu must not include a sysUpTime.0 field. Constructing it via a
+        // struct literal is compile-time enforcement: if sysUpTime were added as
+        // a field, every struct literal would fail to compile (missing field),
+        // making the omission intentional and always visible.
+        let _pdu = TrapPdu {
+            request_id: 1,
+            trap_oid: oid("1.3.6.1.6.3.1.1.5.1"),
+            varbinds: vec![],
+        };
+    }
+
+    // ── build_wire_trap timing ────────────────────────────────────────────────
+
+    #[test]
+    fn given_known_construction_time_when_build_wire_trap_then_sys_up_time_reflects_elapsed() {
+        // Verifies: REQ-0037
+        let start = Instant::now().checked_sub(Duration::from_secs(5)).unwrap();
+        let api_pdu = TrapPdu {
+            request_id: 1,
+            trap_oid: oid("1.3.6.1.6.3.1.1.5.1"),
+            varbinds: vec![],
+        };
+
+        let wire = build_wire_trap(&api_pdu, start);
+
+        // sysUpTime.0 is in hundredths of a second; 5 seconds ≈ 500 hundredths.
+        let VarbindValue::Value(Value::TimeTicks(sys_up_time)) = &wire.varbinds[0].value else {
+            panic!("expected TimeTicks for sysUpTime.0 varbind");
+        };
+        assert!(
+            (500..=600).contains(sys_up_time),
+            "expected sysUpTime near 500 hundredths of a second, got {sys_up_time}"
+        );
+    }
+
     // ── elapsed_hundredths ────────────────────────────────────────────────────
 
     #[test]
     fn given_start_time_just_now_when_elapsed_hundredths_then_returns_near_zero() {
+        // Verifies: REQ-0037
         // A start time of Instant::now() has elapsed only nanoseconds, so the
         // result must be well below 5 hundredths.
         let start = Instant::now();
@@ -537,6 +585,7 @@ mod tests {
 
     #[test]
     fn given_start_time_one_second_ago_when_elapsed_hundredths_then_returns_around_100() {
+        // Verifies: REQ-0037
         // 1 second = 100 hundredths; allow generous headroom for slow CI runners.
         let start = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
 

@@ -85,6 +85,9 @@ impl Drop for AgentInner {
 ///
 /// Construct an `Agent` via [`AgentBuilder`].
 ///
+/// # Requirements
+/// Implements: REQ-0046
+///
 /// # Examples
 ///
 /// ```no_run
@@ -124,6 +127,9 @@ impl Agent {
     ///
     /// Returns [`TrapError::EmptyDestinations`] immediately if `destinations`
     /// is empty, without sending any PDU.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0034, REQ-0035, REQ-0040, REQ-0042, REQ-0043, REQ-0047
     ///
     /// # Examples
     ///
@@ -215,6 +221,9 @@ impl AgentBuilder {
     /// Binds the TCP listener on [`listen_addr`][`Self::listen_addr`], creates
     /// the UDP socket for outbound traps, and spawns the event loop thread.
     ///
+    /// # Requirements
+    /// Implements: REQ-0037
+    ///
     /// # Errors
     ///
     /// Returns an [`AgentError`] if the TCP listener cannot be bound
@@ -251,5 +260,56 @@ impl AgentBuilder {
 impl Default for AgentBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::UdpSocket;
+
+    fn test_agent() -> Agent {
+        // Port 0 lets the OS assign a free port, avoiding conflicts between tests.
+        AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn given_empty_destinations_when_send_trap_then_error() {
+        // Verifies: REQ-0043
+        let agent = test_agent();
+        let pdu = TrapPdu {
+            request_id: 1,
+            trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
+            varbinds: vec![],
+        };
+
+        let result = agent.send_trap(&pdu, &[]);
+
+        assert!(matches!(result, Err(TrapError::EmptyDestinations)));
+    }
+
+    #[test]
+    fn given_trap_pdu_with_varbinds_when_send_trap_then_result_ok() {
+        // Verifies: REQ-0034, REQ-0040, REQ-0042
+        let agent = test_agent();
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let dest = receiver.local_addr().unwrap();
+        let pdu = TrapPdu {
+            request_id: 1,
+            trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
+            varbinds: vec![Varbind {
+                oid: "1.3.6.1.2.1.1.1.0".parse().unwrap(),
+                value: VarbindValue::Value(Value::Integer32(42)),
+            }],
+        };
+
+        let results = agent.send_trap(&pdu, &[dest]).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].destination, dest);
+        assert!(results[0].outcome.is_ok());
     }
 }

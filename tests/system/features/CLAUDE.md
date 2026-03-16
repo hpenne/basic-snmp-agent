@@ -82,6 +82,18 @@ Scenario: Invalid input
 Scenario: Submitting a renewal form with an expired credit card shows a payment error
 ```
 
+### Requirement traceability
+
+Every scenario must be tagged with the requirements it verifies, using Gherkin `@REQ-XXXX` tags placed directly above the `Scenario` line.
+
+```gherkin
+@REQ-0034 @REQ-0038 @REQ-0041
+Scenario: Cold-start trap includes mandatory RFC 3416 varbinds
+  ...
+```
+
+Use `grep -r '@REQ-'` to find all tagged scenarios, and `grep -r 'REQ-0034'` to find every mention of a specific requirement across the whole project.
+
 ## Review checklist
 
 Before committing a `.feature` file, verify:
@@ -93,3 +105,4 @@ Before committing a `.feature` file, verify:
 - [ ] Each scenario has exactly one `When`
 - [ ] `Then` steps assert observable outcomes, not UI or internal state
 - [ ] The scenario title is self-describing
+- [ ] Every scenario is tagged with `@REQ-XXXX` for each requirement it verifies
