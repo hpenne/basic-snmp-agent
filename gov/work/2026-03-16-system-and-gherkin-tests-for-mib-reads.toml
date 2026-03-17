@@ -1,29 +1,38 @@
 [govctl]
 schema = 1
 id = "WI-2026-03-16-005"
-title = "System and Gherkin tests for MIB reads"
+title = "Upgrade MIB read system tests to TLS"
 status = "queue"
 created = "2026-03-16"
+refs = [
+    "WI-2026-03-16-006",
+    "WI-2026-03-16-004",
+]
 
 [content]
-description = "Write and fix Gherkin/Behave system tests that exercise GET, GETNEXT, and GETBULK against a running TLS-enabled agent. Update the test-agent binary to construct an Agent with TLS config and a pre-populated MIB. All Behave scenarios must pass in CI. Prerequisite: WI-2026-03-16-004."
+description = """
+Swap the plain-TCP transport in the MIB read system tests for rustls TLS.
+Update the test-agent to construct an Agent with TLS config (cert, key, trusted CAs per ADR-0017).
+Update the connect_to_agent helper in step definitions to open a TLS connection instead of plain TCP.
+All existing MIB read scenarios must continue to pass over TLS.
+Prerequisites: WI-2026-03-16-006 and WI-2026-03-16-004."""
 
 [[content.acceptance_criteria]]
-text = "Gherkin scenarios for GET, GETNEXT, and GETBULK against a real TLS agent"
+text = "test-agent binary updated to pass TLS config to AgentBuilder (cert, key, trusted CAs per ADR-0017)"
 status = "pending"
-category = "added"
+category = "changed"
 
 [[content.acceptance_criteria]]
-text = "test-agent constructs Agent with TLS config and a pre-populated MIB"
+text = "connect_to_agent helper updated to use TLS; all other step definitions unchanged"
 status = "pending"
-category = "added"
+category = "changed"
 
 [[content.acceptance_criteria]]
-text = "all existing Behave scenarios pass"
+text = "all MIB read scenarios pass over TLS"
 status = "pending"
-category = "added"
+category = "chore"
 
 [[content.acceptance_criteria]]
-text = "CI pipeline runs Behave suite and fails on scenario failures"
+text = "make test passes end-to-end"
 status = "pending"
-category = "added"
+category = "chore"

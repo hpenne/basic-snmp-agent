@@ -122,6 +122,7 @@ Use `grep -r 'Implements: REQ-'` to find all implementation sites, `grep -r 'Ver
 - Keep trait implementations close to the data structure but after the "impl" block.
 - Order code so that a reader starting from the top understands the high-level intent, with details filled in below.
 - Keep Related Things Together: Group related structs, enums, and trait implementations, rather than splitting them arbitrarily across the file.
+- Avoid using "cfg" to write code that is only used for test support. Test using the existing public APIs instead.
 
 ## Testing
 

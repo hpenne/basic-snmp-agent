@@ -1,0 +1,62 @@
+[govctl]
+schema = 1
+id = "WI-2026-03-16-006"
+title = "System and Behave tests for MIB reads over plain TCP"
+status = "queue"
+created = "2026-03-16"
+refs = ["WI-2026-03-16-002"]
+
+[content]
+description = """
+Write Gherkin/Behave system tests that exercise GET, GETNEXT, and GETBULK against a running
+agent over plain TCP using SNMPv3 USM noAuthNoPriv.
+
+The test-agent-mib binary starts an Agent with known MIB values; net-snmp CLI tools
+(snmpget, snmpgetnext, snmpbulkget) send queries from a Docker container.
+
+SNMPv3 USM noAuthNoPriv is chosen because it shares the same message envelope as SNMPv3
+over TLS. Upgrading to TLS (WI-2026-03-16-005) requires only changing the transport
+specifier in connect_to_agent_addr — the Rust message encoding path is unchanged.
+
+The plain TCP endpoint is a testing facility (C-PLAINTCP); USM is accepted here and does
+not conflict with REQ-0016, which governs the TLS production endpoint.
+
+This WI includes Rust changes to encode/decode full SNMPv3 messages (ScopedPDU inside a
+Message with fixed USM noAuthNoPriv security parameters) on the inbound TCP path.
+
+Prerequisite: WI-2026-03-16-002 (RFC 6353 framing and PDU dispatch over plain TCP)."""
+
+[[content.acceptance_criteria]]
+text = "New feature file tests/system/features/mib_reads.feature with scenarios for GET (hit, miss), GETNEXT (hit, end-of-MIB), GETBULK with non-repeaters, and GETBULK with max-repetitions=0"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "Every scenario tagged with the relevant @REQ-XXXX IDs from RFC-0001:C-INBOUND"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "The agent accepts inbound SNMPv3 messages (USM noAuthNoPriv, noPriv) over plain TCP and returns SNMPv3 responses. The codec encodes/decodes the full msgVersion + msgGlobalData + msgSecurityParameters + msgData/ScopedPDU structure."
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "connect_to_agent_addr(context) Python helper returns the transport address (e.g. tcp:test-agent-mib:10161). Changing one string and credential flags switches plain TCP to TLS."
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "Net-snmp CLI tools (snmpget -v3 -l noAuthNoPriv, snmpgetnext, snmpbulkget) are the sole client mechanism. No Rust client binary is written."
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "All scenarios pass under make test"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "make trace continues to pass (or new requirement annotations added where needed)"
+status = "pending"
+category = "chore"
