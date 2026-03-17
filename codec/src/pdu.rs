@@ -245,6 +245,9 @@ pub struct V3InboundMessage {
     pub engine_id: Vec<u8>,
     /// Context name from the `ScopedPdu`; should be empty for the default context.
     pub context_name: Vec<u8>,
+    /// Security name (user name) from USM security parameters; echoed in the response
+    /// per RFC 3414 §8.2.4 so the command generator can match the response to its request.
+    pub user_name: Vec<u8>,
     /// The inner PDU ready for dispatch to request handlers.
     pub pdu: InboundPdu,
 }
@@ -376,6 +379,14 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> 
         }
     };
 
+    // Extract the user name from USMSecurityParameters so it can be echoed in
+    // the response (RFC 3414 §8.2.4 requires msgUserName to be the same in both).
+    // Failure to decode the security parameters is treated as a BER error.
+    let usm_params: USMSecurityParameters =
+        rasn::ber::decode(v3_message.security_parameters.as_ref())
+            .map_err(|e| DecodeError::new(DecodeErrorKind::Ber, format!("USM decode failed: {e}")))?;
+    let user_name = usm_params.user_name.to_vec();
+
     let engine_id = scoped_pdu.engine_id.to_vec();
     let context_name = scoped_pdu.name.to_vec();
     let pdu = pdus_to_inbound_pdu(scoped_pdu.data)?;
@@ -384,6 +395,7 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> 
         msg_id,
         engine_id,
         context_name,
+        user_name,
         pdu,
     })
 }
@@ -430,9 +442,9 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
 ///
 /// Constructs a `ScopedPdu` from `engine_id` and `context_name`, wraps it in
 /// `ScopedPduData::CleartextPdu`, and builds an `SNMPv3` `Message` with
-/// `HeaderData` indicating USM noAuthNoPriv. The `USMSecurityParameters` are
-/// zero-valued (all fields empty), which is correct for noAuthNoPriv responses
-/// per RFC 3414 §3.1.
+/// `HeaderData` indicating USM noAuthNoPriv. The `USMSecurityParameters` include
+/// the authoritative engine ID and the original `user_name` echoed back, as
+/// required by RFC 3414 §8.2.4 so the command generator can match the response.
 ///
 /// # Errors
 ///
@@ -452,12 +464,13 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
 ///     error_index: 0,
 ///     varbinds: vec![],
 /// };
-/// let bytes = encode_v3_response(1, b"engine", b"", &pdu).unwrap();
+/// let bytes = encode_v3_response(1, b"engine", b"user", b"", &pdu).unwrap();
 /// assert!(!bytes.is_empty());
 /// ```
 pub fn encode_v3_response(
     msg_id: i32,
     engine_id: &[u8],
+    user_name: &[u8],
     context_name: &[u8],
     pdu: &GetResponse,
 ) -> Result<Vec<u8>, EncodeError> {
@@ -474,10 +487,18 @@ pub fn encode_v3_response(
         data: Pdus::Response(rasn_response),
     };
 
-    // Zero-valued USM security parameters are correct for noAuthNoPriv responses.
-    // RFC 3414 §3.1 specifies that for noAuthNoPriv, authParameters and
-    // privParameters must be zero-length, and no computation is required.
-    let usm_params = empty_usm_security_parameters();
+    // RFC 3414 §8.2.4: the response's USMSecurityParameters must include the
+    // authoritative engine ID and the original msgUserName so the command
+    // generator can match the response to its pending request.
+    // auth/priv parameters remain zero-length for noAuthNoPriv.
+    let usm_params = USMSecurityParameters {
+        authoritative_engine_id: engine_id.to_vec().into(),
+        authoritative_engine_boots: 0.into(),
+        authoritative_engine_time: 0.into(),
+        user_name: user_name.to_vec().into(),
+        authentication_parameters: rasn::types::OctetString::from(vec![]),
+        privacy_parameters: rasn::types::OctetString::from(vec![]),
+    };
 
     let security_parameters_bytes = rasn::ber::encode(&usm_params).map_err(|e| {
         EncodeError::new(format!("BER encoding of USMSecurityParameters failed: {e}"))
@@ -571,8 +592,14 @@ pub fn encode_v3_get_request(
         data: Pdus::GetRequest(rasn_pdu),
     };
 
-    let usm_params = empty_usm_security_parameters();
-
+    let usm_params = USMSecurityParameters {
+        authoritative_engine_id: rasn::types::OctetString::from(vec![]),
+        authoritative_engine_boots: 0.into(),
+        authoritative_engine_time: 0.into(),
+        user_name: rasn::types::OctetString::from(vec![]),
+        authentication_parameters: rasn::types::OctetString::from(vec![]),
+        privacy_parameters: rasn::types::OctetString::from(vec![]),
+    };
     let security_parameters_bytes = rasn::ber::encode(&usm_params).map_err(|e| {
         EncodeError::new(format!("BER encoding of USMSecurityParameters failed: {e}"))
     })?;
@@ -910,18 +937,6 @@ fn varbinds_from_rasn(list: Vec<VarBind>) -> Result<Vec<Varbind>, DecodeError> {
     list.into_iter().map(varbind_from_rasn).collect()
 }
 
-// Implements: REQ-0068
-fn empty_usm_security_parameters() -> USMSecurityParameters {
-    USMSecurityParameters {
-        authoritative_engine_id: rasn::types::OctetString::from(vec![]),
-        authoritative_engine_boots: 0.into(),
-        authoritative_engine_time: 0.into(),
-        user_name: rasn::types::OctetString::from(vec![]),
-        authentication_parameters: rasn::types::OctetString::from(vec![]),
-        privacy_parameters: rasn::types::OctetString::from(vec![]),
-    }
-}
-
 // Implements: REQ-0021, REQ-0068
 /// Maps a decoded `Pdus` variant to our `InboundPdu`.
 ///
@@ -963,6 +978,17 @@ fn pdus_to_inbound_pdu(pdus: Pdus) -> Result<InboundPdu, DecodeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn empty_usm_security_parameters() -> USMSecurityParameters {
+        USMSecurityParameters {
+            authoritative_engine_id: rasn::types::OctetString::from(vec![]),
+            authoritative_engine_boots: 0.into(),
+            authoritative_engine_time: 0.into(),
+            user_name: rasn::types::OctetString::from(vec![]),
+            authentication_parameters: rasn::types::OctetString::from(vec![]),
+            privacy_parameters: rasn::types::OctetString::from(vec![]),
+        }
+    }
 
     fn sysname_oid() -> Oid {
         "1.3.6.1.2.1.1.5.0".parse().unwrap()
@@ -1763,7 +1789,7 @@ mod tests {
             }],
         };
 
-        let encoded = encode_v3_response(5, engine_id, b"", &pdu).unwrap();
+        let encoded = encode_v3_response(5, engine_id, b"testuser", b"", &pdu).unwrap();
 
         // Decode back as a V3Message to verify structural validity.
         let decoded: V3Message = rasn::ber::decode(&encoded).expect("must decode as V3Message");

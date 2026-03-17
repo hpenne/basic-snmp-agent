@@ -10,6 +10,7 @@ COPY mib/ mib/
 COPY transport/ transport/
 COPY src/ src/
 COPY tests/test-agent/ tests/test-agent/
+COPY tests/test-agent-mib/ tests/test-agent-mib/
 
 RUN cargo build -p test-agent --release
 

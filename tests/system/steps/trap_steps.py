@@ -201,6 +201,18 @@ def step_send_oversized_trap(context, trap_oid):
     ])
 
 
+@when('the agent sends a trap with OID "{trap_oid}" to no destinations')
+def step_send_trap_no_destinations(context, trap_oid):
+    _run_agent(context, [
+        {
+            "request_id": 1,
+            "trap_oid": trap_oid,
+            "destinations": [],
+            "varbinds": [],
+        }
+    ])
+
+
 # ---------------------------------------------------------------------------
 # Then steps
 # ---------------------------------------------------------------------------

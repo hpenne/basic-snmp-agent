@@ -1,9 +1,9 @@
 //! Central event loop for the SNMP agent.
 //!
-//! The loop multiplexes a TCP listener, accepted TLS connections, and a
+//! The loop multiplexes a TCP listener, accepted connections, and a
 //! self-pipe using `mio` (epoll/kqueue). Inbound SNMP requests arrive over
-//! TLS-framed TCP connections (RFC 6353); outbound traps are sent as plain UDP
-//! datagrams.
+//! plain TCP connections using RFC 3430 BER framing; outbound traps are sent
+//! as plain UDP datagrams.
 //!
 //! # Design
 //!
@@ -37,11 +37,13 @@ const FIRST_CONN_TOKEN: usize = 2;
 ///
 /// Caps the `max-repetitions` field from the wire to prevent a single large
 /// bulk request from monopolising the event loop for an extended period.
+// Implements: REQ-0029, REQ-0031
 const MAX_BULK_REPETITIONS: u32 = 100;
 
-/// Maximum accepted RFC 6353 frame payload length, matching the `SNMPv3`
-/// `maxMessageSize` upper bound. Frames claiming a larger length are rejected
-/// and the connection is closed to prevent memory exhaustion.
+/// Maximum accepted RFC 3430 frame total size (tag + length + content),
+/// matching the `SNMPv3` `maxMessageSize` upper bound. Frames whose total
+/// size exceeds this are rejected and the connection is closed to prevent
+/// memory exhaustion.
 const MAX_FRAME_SIZE: usize = 65_535;
 
 // ── EventLoopError ───────────────────────────────────────────────────────────
@@ -200,7 +202,7 @@ impl Clone for CommandSender {
 /// Per-connection state held in the event loop's connection map.
 struct ConnectionState {
     stream: mio::net::TcpStream,
-    /// Accumulates partially-received bytes until a complete RFC 6353 frame arrives.
+    /// Accumulates partially-received bytes until a complete RFC 3430 BER frame arrives.
     read_buf: Vec<u8>,
 }
 
@@ -258,7 +260,7 @@ impl EventLoop {
     /// [`EventLoopError::Registration`] if mio token registration fails.
     ///
     /// # Requirements
-    /// Implements: REQ-0055, REQ-0068
+    /// Implements: REQ-0055, REQ-0068, REQ-0069, REQ-0072
     ///
     /// # Examples
     ///
@@ -431,16 +433,16 @@ impl EventLoop {
         false
     }
 
-    /// Read available bytes from an accepted connection, parse RFC 6353 frames,
-    /// dispatch each frame to the appropriate request handler, and write the
-    /// encoded response back.
+    /// Read available bytes from an accepted connection, parse RFC 3430 BER
+    /// frames, dispatch each frame to the appropriate request handler, and
+    /// write the encoded response back.
     ///
     /// Connection-level I/O errors (e.g. `ConnectionReset`) close and remove
     /// the connection but do not propagate to the caller — a single misbehaving
     /// client must not bring down the entire event loop.
     ///
     /// # Requirements
-    /// Implements: REQ-0057, REQ-0058, REQ-0068, REQ-0073
+    /// Implements: REQ-0057, REQ-0058, REQ-0068, REQ-0071, REQ-0073
     fn handle_connection_event(&mut self, token: Token) {
         let Some(conn) = self.connections.get_mut(&token) else {
             return;
@@ -470,50 +472,55 @@ impl EventLoop {
             }
         }
 
-        // Process all complete RFC 6353 frames from the buffer. RFC 6353 uses a
-        // 4-byte big-endian length prefix followed by that many bytes of payload.
+        // Process all complete RFC 3430 BER frames from the buffer.
+        // Each frame is a raw BER SEQUENCE: tag 0x30, BER-encoded length, content.
         loop {
-            if conn.read_buf.len() < 4 {
+            // Need at least 2 bytes to read the tag and the first length byte.
+            if conn.read_buf.len() < 2 {
                 break;
             }
-            let frame_length = usize::try_from(u32::from_be_bytes([
-                conn.read_buf[0],
-                conn.read_buf[1],
-                conn.read_buf[2],
-                conn.read_buf[3],
-            ]))
-            .unwrap_or(usize::MAX);
-            if frame_length > MAX_FRAME_SIZE {
-                // Reject oversized frames to prevent memory exhaustion. A frame
-                // claiming more than MAX_FRAME_SIZE bytes is either malicious or
-                // the result of a corrupt stream; either way the connection is
-                // unrecoverable.
+
+            // RFC 3430: frames must begin with the SEQUENCE tag (0x30).
+            // A different tag indicates a corrupt or non-SNMP stream.
+            if conn.read_buf[0] != 0x30 {
                 eprintln!(
-                    "[event_loop] oversized frame ({frame_length} bytes) on token {token:?}, closing"
+                    "[event_loop] non-SEQUENCE tag {:#04x} on token {token:?}, closing",
+                    conn.read_buf[0]
                 );
                 closed = true;
                 break;
             }
-            let Some(total_frame_size) = frame_length.checked_add(4) else {
-                // Arithmetic overflow: treat as an oversized frame.
-                closed = true;
+
+            // Incomplete length field; wait for more data on the next read event.
+            let Some((content_length, length_field_bytes)) = parse_ber_length(&conn.read_buf[1..]) else {
                 break;
             };
-            if conn.read_buf.len() < total_frame_size {
+
+            let total_frame_bytes = 1 + length_field_bytes + content_length;
+            if total_frame_bytes > MAX_FRAME_SIZE {
+                // Reject oversized frames to prevent memory exhaustion.
+                eprintln!(
+                    "[event_loop] oversized frame ({total_frame_bytes} bytes) on token {token:?}, closing"
+                );
+                closed = true;
+                break;
+            }
+            if conn.read_buf.len() < total_frame_bytes {
                 // Frame is incomplete; wait for more data on the next read event.
                 break;
             }
 
-            let payload: Vec<u8> = conn.read_buf[4..total_frame_size].to_vec();
-            conn.read_buf.drain(..total_frame_size);
+            // The full BER frame (tag + length field + content) is the payload.
+            let ber_frame: Vec<u8> = conn.read_buf[..total_frame_bytes].to_vec();
+            conn.read_buf.drain(..total_frame_bytes);
 
-            let Some(framed_response) =
-                Self::dispatch_snmpv3_frame(&payload, token, &self.engine_id, &self.store)
+            let Some(encoded_response) =
+                Self::dispatch_snmpv3_frame(&ber_frame, token, &self.engine_id, &self.store)
             else {
                 continue;
             };
 
-            if let Err(write_error) = conn.stream.write_all(&framed_response) {
+            if let Err(write_error) = conn.stream.write_all(&encoded_response) {
                 // Close the connection on any write error, including WouldBlock.
                 // write_all on a non-blocking socket may have written a partial
                 // response before returning WouldBlock, leaving the framing stream
@@ -532,22 +539,23 @@ impl EventLoop {
         }
     }
 
-    /// Decode, validate, and dispatch a single RFC 6353 frame payload.
+    /// Decode, validate, and dispatch a single RFC 3430 BER frame.
     ///
-    /// Returns `Some(framed_response)` when the frame produces a response ready
-    /// for writing, or `None` when the frame should be silently discarded
-    /// (invalid encoding, wrong engine ID, or unsupported context name).
-    // Implements: REQ-0057, REQ-0058, REQ-0068, REQ-0073
+    /// `ber_frame` is the complete BER bytes including the SEQUENCE tag, length
+    /// field, and content. Returns `Some(encoded_response)` — raw BER bytes
+    /// ready for writing — when the frame produces a response, or `None` when
+    /// the frame should be silently discarded (invalid encoding, wrong engine
+    /// ID, or unsupported context name).
+    // Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0068, REQ-0073
     fn dispatch_snmpv3_frame(
-        payload: &[u8],
+        ber_frame: &[u8],
         token: Token,
         engine_id: &[u8],
         store: &mib::Store,
     ) -> Option<Vec<u8>> {
         // Decode as an SNMPv3 message. Non-v3 messages are silently discarded
-        // per REQ-0073; the caller has already consumed the length prefix so the
-        // connection framing remains consistent.
-        let v3_msg = match codec::decode_v3_message(payload) {
+        // per REQ-0073.
+        let v3_msg = match codec::decode_v3_message(ber_frame) {
             Err(decode_error) => {
                 eprintln!("[event_loop] SNMPv3 decode error (token {token:?}): {decode_error}");
                 return None;
@@ -587,6 +595,7 @@ impl EventLoop {
         let encoded_response = match codec::encode_v3_response(
             v3_msg.msg_id,
             engine_id,
+            &v3_msg.user_name,
             &v3_msg.context_name,
             &response,
         ) {
@@ -597,7 +606,8 @@ impl EventLoop {
             }
         };
 
-        Some(frame_response(&encoded_response))
+        // The encoded response is already a complete BER frame — no prefix needed.
+        Some(encoded_response)
     }
 
     /// Allocate the next unique connection token, skipping reserved values.
@@ -677,18 +687,39 @@ fn drain_pipe(fd: RawFd) {
     }
 }
 
-/// Build a framed PDU for sending over the RFC 6353 TCP transport.
+/// Parse a BER length field starting at `buf[0]`.
 ///
-/// Prepends a 4-byte big-endian length so the recipient's frame parser can
-/// delimit the PDU boundary without scanning for delimiters.
-fn frame_response(payload: &[u8]) -> Vec<u8> {
-    let length_prefix = u32::try_from(payload.len())
-        .expect("payload must fit in u32")
-        .to_be_bytes();
-    let mut framed = Vec::with_capacity(4 + payload.len());
-    framed.extend_from_slice(&length_prefix);
-    framed.extend_from_slice(payload);
-    framed
+/// Returns `Some((content_length, length_field_bytes))` when enough bytes are
+/// available, or `None` when the buffer is incomplete or the encoding is
+/// unsupported (indefinite-length or more than 4 length octets).
+///
+/// BER length encoding (X.690 §8.1.3):
+/// - Short form: `buf[0]` bit 7 is 0; length = `buf[0]` (0–127); field is 1 byte.
+/// - Long form: `buf[0]` bit 7 is 1; low 7 bits = number of subsequent octets N;
+///   content length is encoded in the next N octets (big-endian).
+// Implements: REQ-0071
+fn parse_ber_length(buf: &[u8]) -> Option<(usize, usize)> {
+    if buf.is_empty() {
+        return None;
+    }
+    if buf[0] & 0x80 == 0 {
+        // Short form: the byte itself is the length.
+        return Some((buf[0] as usize, 1));
+    }
+    let num_octets = (buf[0] & 0x7f) as usize;
+    if num_octets == 0 || num_octets > 4 {
+        // Indefinite-length (0x80) or absurdly large (>4 bytes): not supported.
+        return None;
+    }
+    if buf.len() < 1 + num_octets {
+        // Incomplete length field; caller should wait for more data.
+        return None;
+    }
+    let mut content_length: usize = 0;
+    for &byte in &buf[1..=num_octets] {
+        content_length = (content_length << 8) | (byte as usize);
+    }
+    Some((content_length, 1 + num_octets))
 }
 
 #[cfg(test)]
@@ -992,9 +1023,58 @@ mod tests {
         assert!(reg_err.source().unwrap().to_string().contains("reg source"));
     }
 
-    // ── RFC 6353 dispatch tests ───────────────────────────────────────────────
+    // ── parse_ber_length unit tests ───────────────────────────────────────────
 
-    /// Encode a GetRequest as a framed SNMPv3 PDU ready for TCP send.
+    #[test]
+    fn given_short_form_length_when_parsed_then_returns_correct_length_and_field_size() {
+        // Verifies: REQ-0071
+        // Short form: single byte, bit 7 clear.
+        assert_eq!(parse_ber_length(&[0x00]), Some((0, 1)));
+        assert_eq!(parse_ber_length(&[0x7f]), Some((127, 1)));
+        assert_eq!(parse_ber_length(&[0x05, 0xAA, 0xBB]), Some((5, 1)));
+    }
+
+    #[test]
+    fn given_long_form_one_octet_when_parsed_then_returns_correct_length_and_field_size() {
+        // Verifies: REQ-0071
+        // Long form: 0x81 means one subsequent octet carries the length.
+        assert_eq!(parse_ber_length(&[0x81, 0x80]), Some((128, 2)));
+        assert_eq!(parse_ber_length(&[0x81, 0xFF]), Some((255, 2)));
+    }
+
+    #[test]
+    fn given_long_form_two_octets_when_parsed_then_returns_correct_length_and_field_size() {
+        // Verifies: REQ-0071
+        // Long form: 0x82 means two subsequent octets carry the length.
+        assert_eq!(parse_ber_length(&[0x82, 0x01, 0x00]), Some((256, 3)));
+        assert_eq!(parse_ber_length(&[0x82, 0xFF, 0xFF]), Some((65535, 3)));
+    }
+
+    #[test]
+    fn given_incomplete_buffer_when_parsed_then_returns_none() {
+        // Verifies: REQ-0071
+        assert_eq!(parse_ber_length(&[]), None);
+        // Long form but not enough length octets.
+        assert_eq!(parse_ber_length(&[0x82, 0x01]), None);
+    }
+
+    #[test]
+    fn given_indefinite_length_when_parsed_then_returns_none() {
+        // Verifies: REQ-0071
+        // 0x80 = indefinite-length form; not supported.
+        assert_eq!(parse_ber_length(&[0x80]), None);
+    }
+
+    #[test]
+    fn given_oversized_length_field_when_parsed_then_returns_none() {
+        // Verifies: REQ-0071
+        // 0x85 = 5 subsequent octets; more than 4 is not supported.
+        assert_eq!(parse_ber_length(&[0x85, 0, 0, 0, 0, 1]), None);
+    }
+
+    // ── RFC 3430 dispatch tests ───────────────────────────────────────────────
+
+    /// Encode a GetRequest as a raw BER SNMPv3 frame ready for TCP send (RFC 3430).
     fn framed_get_request(msg_id: i32, request_id: i32, oid: &codec::Oid) -> Vec<u8> {
         let pdu = codec::GetRequest {
             request_id,
@@ -1003,29 +1083,45 @@ mod tests {
                 value: codec::VarbindValue::Unspecified,
             }],
         };
-        let encoded = codec::encode_v3_get_request(msg_id, TEST_ENGINE_ID, b"", &pdu)
-            .expect("encode_v3_get_request must succeed");
-        frame_response(&encoded)
+        // Raw BER output from the codec IS the RFC 3430 frame — no prefix needed.
+        codec::encode_v3_get_request(msg_id, TEST_ENGINE_ID, b"", &pdu)
+            .expect("encode_v3_get_request must succeed")
     }
 
-    /// Read a framed response payload (without the 4-byte prefix) from the stream.
-    fn read_response_payload(stream: &mut std::net::TcpStream) -> Vec<u8> {
-        let length_bytes = read_exact_with_timeout(stream, 4);
-        let frame_length = usize::try_from(u32::from_be_bytes([
-            length_bytes[0],
-            length_bytes[1],
-            length_bytes[2],
-            length_bytes[3],
-        ]))
-        .expect("frame length must fit in usize");
-        read_exact_with_timeout(stream, frame_length)
+    /// Read a complete RFC 3430 BER frame (tag + length + content) from the stream.
+    fn read_framed_response(stream: &mut std::net::TcpStream) -> Vec<u8> {
+        // Read tag byte and first length byte together.
+        let header = read_exact_with_timeout(stream, 2);
+        assert_eq!(header[0], 0x30, "expected SEQUENCE tag 0x30 in response");
+
+        let (content_len, extra_len_bytes) = if header[1] & 0x80 == 0 {
+            // Short form: no extra length octets.
+            (header[1] as usize, vec![])
+        } else {
+            let num_extra = (header[1] & 0x7f) as usize;
+            let extra = read_exact_with_timeout(stream, num_extra);
+            let mut len = 0usize;
+            for &b in &extra {
+                len = (len << 8) | b as usize;
+            }
+            (len, extra)
+        };
+
+        let content = read_exact_with_timeout(stream, content_len);
+
+        // Reconstruct the full BER frame so decode_v3_response_payload can parse it.
+        let mut frame = Vec::with_capacity(2 + extra_len_bytes.len() + content_len);
+        frame.extend_from_slice(&header);
+        frame.extend_from_slice(&extra_len_bytes);
+        frame.extend_from_slice(&content);
+        frame
     }
 
-    /// Decode a raw response payload back into a `GetResponse` via the SNMPv3 path,
+    /// Decode a raw BER response frame back into a `GetResponse` via the SNMPv3 path,
     /// so we can assert on request_id and varbind values.
-    fn decode_v3_response_payload(payload: &[u8]) -> codec::GetResponse {
+    fn decode_v3_response_payload(ber_frame: &[u8]) -> codec::GetResponse {
         use rasn_snmp::v3::{Message as V3Message, ScopedPduData};
-        let v3_msg: V3Message = rasn::ber::decode(payload).expect("must decode as V3Message");
+        let v3_msg: V3Message = rasn::ber::decode(ber_frame).expect("must decode as V3Message");
         let scoped_pdu = match v3_msg.scoped_data {
             ScopedPduData::CleartextPdu(pdu) => pdu,
             ScopedPduData::EncryptedPdu(_) => panic!("expected cleartext"),
@@ -1078,7 +1174,7 @@ mod tests {
 
     #[test]
     fn given_get_request_when_sent_over_tcp_then_response_is_received() {
-        // Verifies: REQ-0021, REQ-0068, REQ-0069, REQ-0070
+        // Verifies: REQ-0021, REQ-0068, REQ-0069, REQ-0070, REQ-0071
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
             EventLoop::new(any_loopback(), test_engine_id()).unwrap();
@@ -1105,15 +1201,15 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("timed out waiting for SetValue confirmation");
 
-        // When: a TCP client sends a framed SNMPv3 GetRequest.
+        // When: a TCP client sends a raw BER SNMPv3 GetRequest (RFC 3430 framing).
         let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
         client
             .write_all(&framed_get_request(1, 1, &oid))
             .expect("write must succeed");
 
-        // Then: a framed SNMPv3 response is received with the expected value.
-        let response_payload = read_response_payload(&mut client);
-        let response = decode_v3_response_payload(&response_payload);
+        // Then: a raw BER SNMPv3 response is received with the expected value.
+        let response_frame = read_framed_response(&mut client);
+        let response = decode_v3_response_payload(&response_frame);
         assert_eq!(response.request_id, 1);
         assert_eq!(response.error_status, codec::ErrorStatus::NoError);
         assert_eq!(response.varbinds.len(), 1);
@@ -1132,7 +1228,7 @@ mod tests {
 
     #[test]
     fn given_partial_frame_when_split_across_reads_then_response_is_received() {
-        // Verifies: REQ-0068
+        // Verifies: REQ-0068, REQ-0071
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
             EventLoop::new(any_loopback(), test_engine_id()).unwrap();
@@ -1175,8 +1271,8 @@ mod tests {
             .expect("second half write must succeed");
 
         // Then: a complete response is received despite the split delivery.
-        let response_payload = read_response_payload(&mut client);
-        let response = decode_v3_response_payload(&response_payload);
+        let response_frame = read_framed_response(&mut client);
+        let response = decode_v3_response_payload(&response_frame);
         assert_eq!(response.request_id, 2);
         assert_eq!(
             response.varbinds[0].value,
@@ -1191,7 +1287,7 @@ mod tests {
     }
 
     #[test]
-    fn given_invalid_pdu_bytes_when_received_then_connection_stays_open() {
+    fn given_invalid_snmp_payload_in_sequence_when_received_then_connection_stays_open() {
         // Verifies: REQ-0073
         // Given: a running event loop.
         let (event_loop, bound_addr, sender) =
@@ -1221,20 +1317,22 @@ mod tests {
 
         let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
 
-        // When: garbage bytes are sent first (framed so the length prefix is consumed).
-        // The event loop discards the malformed PDU silently and keeps the connection open.
-        let garbage: &[u8] = &[0xFF, 0xFE, 0xFD];
-        let framed_garbage = frame_response(garbage);
+        // When: garbage bytes are sent inside a valid SEQUENCE wrapper so the
+        // BER frame parses correctly but the SNMP decode fails. The event loop
+        // must discard the malformed PDU silently and keep the connection open.
+        let garbage_content: &[u8] = &[0xFF, 0xFE, 0xFD];
+        let mut garbage_frame = vec![0x30u8, garbage_content.len() as u8];
+        garbage_frame.extend_from_slice(garbage_content);
         client
-            .write_all(&framed_garbage)
+            .write_all(&garbage_frame)
             .expect("garbage write must succeed");
 
         // Then: a valid SNMPv3 GetRequest sent on the same connection still receives a response.
         client
             .write_all(&framed_get_request(3, 3, &oid))
             .expect("valid request write must succeed");
-        let response_payload = read_response_payload(&mut client);
-        let response = decode_v3_response_payload(&response_payload);
+        let response_frame = read_framed_response(&mut client);
+        let response = decode_v3_response_payload(&response_frame);
         assert_eq!(response.request_id, 3);
         assert_eq!(
             response.varbinds[0].value,
@@ -1249,7 +1347,7 @@ mod tests {
     }
 
     #[test]
-    fn given_zero_length_frame_when_received_then_connection_stays_open() {
+    fn given_empty_sequence_frame_when_received_then_connection_stays_open() {
         // Verifies: REQ-0073
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
@@ -1277,20 +1375,20 @@ mod tests {
 
         let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
 
-        // When: a zero-length frame is sent (4-byte prefix of zero, no payload).
+        // When: an empty SEQUENCE frame is sent (tag 0x30, length 0x00, no content).
         // An empty payload is not a valid SNMP PDU; the decode error must be
         // handled without closing the connection.
         client
-            .write_all(&[0u8, 0, 0, 0])
-            .expect("zero-length frame write must succeed");
+            .write_all(&[0x30u8, 0x00])
+            .expect("empty sequence frame write must succeed");
 
         // Then: a valid SNMPv3 GetRequest sent on the same connection still receives a response,
-        // confirming the connection survived the zero-length frame.
+        // confirming the connection survived the empty SEQUENCE frame.
         client
             .write_all(&framed_get_request(4, 4, &oid))
             .expect("valid request write must succeed");
-        let response_payload = read_response_payload(&mut client);
-        let response = decode_v3_response_payload(&response_payload);
+        let response_frame = read_framed_response(&mut client);
+        let response = decode_v3_response_payload(&response_frame);
         assert_eq!(response.request_id, 4);
         assert_eq!(
             response.varbinds[0].value,
@@ -1344,16 +1442,17 @@ mod tests {
         };
         let wrong_encoded = codec::encode_v3_get_request(10, wrong_engine_id, b"", &pdu)
             .expect("encode must succeed");
-        let framed_wrong = frame_response(&wrong_encoded);
-        client.write_all(&framed_wrong).expect("write must succeed");
+        client
+            .write_all(&wrong_encoded)
+            .expect("write must succeed");
 
         // Then: immediately sending a correct request gets a response,
         // confirming the wrong-engine request was silently discarded.
         client
             .write_all(&framed_get_request(11, 11, &oid))
             .expect("valid request write must succeed");
-        let response_payload = read_response_payload(&mut client);
-        let response = decode_v3_response_payload(&response_payload);
+        let response_frame = read_framed_response(&mut client);
+        let response = decode_v3_response_payload(&response_frame);
         assert_eq!(response.request_id, 11);
         assert_eq!(
             response.varbinds[0].value,
@@ -1369,7 +1468,7 @@ mod tests {
 
     #[test]
     fn given_non_empty_context_name_when_request_sent_then_discarded_silently() {
-        // Verifies: REQ-0058
+        // Verifies: REQ-0056, REQ-0058
         // A request with a non-empty context name must be silently discarded;
         // the connection must stay open so a subsequent valid request succeeds.
 
@@ -1410,9 +1509,8 @@ mod tests {
         let bad_context_encoded =
             codec::encode_v3_get_request(20, TEST_ENGINE_ID, b"badcontext", &pdu)
                 .expect("encode must succeed");
-        let framed_bad_context = frame_response(&bad_context_encoded);
         client
-            .write_all(&framed_bad_context)
+            .write_all(&bad_context_encoded)
             .expect("write must succeed");
 
         // Then: no response arrives for the bad-context request (connection stays open).
@@ -1420,8 +1518,8 @@ mod tests {
         client
             .write_all(&framed_get_request(21, 21, &oid))
             .expect("valid request write must succeed");
-        let response_payload = read_response_payload(&mut client);
-        let response = decode_v3_response_payload(&response_payload);
+        let response_frame = read_framed_response(&mut client);
+        let response = decode_v3_response_payload(&response_frame);
         assert_eq!(response.request_id, 21);
         assert_eq!(
             response.varbinds[0].value,

@@ -3,12 +3,12 @@
   "title": "Outbound Traps",
   "version": "0.1.0",
   "status": "normative",
-  "phase": "test",
+  "phase": "stable",
   "owners": [
     "@Helge Penne"
   ],
   "created": "2026-03-16",
-  "updated": "2026-03-16",
+  "updated": "2026-03-17",
   "sections": [
     {
       "title": "Summary"

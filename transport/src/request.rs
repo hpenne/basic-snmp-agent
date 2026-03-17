@@ -60,6 +60,9 @@ pub struct TrapPdu {
 /// Handles a `GetRequest` by looking up each OID in the store.
 ///
 /// Missing OIDs yield `NoSuchObject`; present OIDs yield their current value.
+///
+/// # Requirements
+/// Implements: REQ-0021, REQ-0022, REQ-0023
 #[must_use]
 pub fn handle_get(req: &GetRequest, store: &Store) -> GetResponse {
     let varbinds = req
@@ -88,6 +91,9 @@ pub fn handle_get(req: &GetRequest, store: &Store) -> GetResponse {
 /// Handles a `GetNextRequest` by looking up the lexicographic successor of each OID.
 ///
 /// If no successor exists for an OID, the varbind carries `EndOfMibView`.
+///
+/// # Requirements
+/// Implements: REQ-0021, REQ-0022, REQ-0024, REQ-0025
 #[must_use]
 pub fn handle_get_next(req: &GetNextRequest, store: &Store) -> GetResponse {
     let varbinds = req
@@ -128,6 +134,9 @@ pub fn handle_get_next(req: &GetNextRequest, store: &Store) -> GetResponse {
 /// `max-repetitions` therefore never reaches this function; it is dropped at the
 /// `decode_pdu` call site in the event loop. The cap is still applied here as a
 /// defence-in-depth measure against large positive values.
+///
+/// # Requirements
+/// Implements: REQ-0021, REQ-0022, REQ-0024, REQ-0025, REQ-0026, REQ-0027, REQ-0028, REQ-0029, REQ-0030, REQ-0031
 #[must_use]
 pub fn handle_get_bulk(
     req: &GetBulkRequest,
@@ -207,6 +216,9 @@ pub fn handle_get_bulk(
 ///
 /// This agent does not support writes; all Set requests are rejected per
 /// RFC 3416 with error-status `notWritable` and error-index 1.
+///
+/// # Requirements
+/// Implements: REQ-0032
 #[must_use]
 pub fn handle_set(req: &SetRequest) -> GetResponse {
     GetResponse {
@@ -278,6 +290,7 @@ mod tests {
 
     #[test]
     fn given_present_oid_when_get_then_returns_value() {
+        // Verifies: REQ-0021, REQ-0022
         let store = store_with(&[("1.3.6.1.2.1.1.1.0", Value::OctetString(b"agent".to_vec()))]);
         let req = GetRequest {
             request_id: 42,
@@ -300,6 +313,7 @@ mod tests {
 
     #[test]
     fn given_absent_oid_when_get_then_returns_no_such_object() {
+        // Verifies: REQ-0023
         let store = Store::new();
         let req = GetRequest {
             request_id: 1,
@@ -316,6 +330,7 @@ mod tests {
 
     #[test]
     fn given_mixed_present_and_absent_oids_when_get_then_each_resolves_correctly() {
+        // Verifies: REQ-0021, REQ-0022, REQ-0023
         let store = store_with(&[("1.3.6.1.2.1.1.1.0", Value::Integer32(1))]);
         let req = GetRequest {
             request_id: 5,
@@ -344,6 +359,7 @@ mod tests {
 
     #[test]
     fn given_successor_exists_when_get_next_then_returns_next_oid_and_value() {
+        // Verifies: REQ-0021, REQ-0022, REQ-0024
         let store = store_with(&[
             ("1.3.6.1.2.1.1.1.0", Value::Integer32(1)),
             ("1.3.6.1.2.1.1.2.0", Value::Integer32(2)),
@@ -368,6 +384,7 @@ mod tests {
 
     #[test]
     fn given_no_successor_when_get_next_then_returns_end_of_mib_view() {
+        // Verifies: REQ-0024, REQ-0025
         let store = store_with(&[("1.3.6.1.2.1.1.1.0", Value::Integer32(1))]);
         let req = GetNextRequest {
             request_id: 3,
@@ -387,6 +404,7 @@ mod tests {
 
     #[test]
     fn given_bulk_request_when_non_repeaters_covers_all_then_no_repeating_section() {
+        // Verifies: REQ-0026, REQ-0027
         let store = store_with(&[
             ("1.3.6.1.2.1.1.1.0", Value::Integer32(1)),
             ("1.3.6.1.2.1.1.2.0", Value::Integer32(2)),
@@ -410,6 +428,7 @@ mod tests {
 
     #[test]
     fn given_bulk_request_with_repeaters_when_handled_then_walks_mib_forward() {
+        // Verifies: REQ-0021, REQ-0022, REQ-0026
         let store = store_with(&[
             ("1.3.6.1.2.1.1.1.0", Value::Integer32(1)),
             ("1.3.6.1.2.1.1.2.0", Value::Integer32(2)),
@@ -435,6 +454,7 @@ mod tests {
 
     #[test]
     fn given_bulk_request_when_max_repetitions_exceeds_cap_then_capped() {
+        // Verifies: REQ-0029, REQ-0030, REQ-0031
         let mut store = Store::new();
         for i in 0u32..200 {
             store.set(
@@ -460,6 +480,7 @@ mod tests {
 
     #[test]
     fn given_bulk_request_when_mib_exhausted_before_max_repetitions_then_stops_early() {
+        // Verifies: REQ-0024, REQ-0026
         let store = store_with(&[("1.3.6.1.2.1.1.1.0", Value::Integer32(1))]);
         let req = GetBulkRequest {
             request_id: 13,
@@ -479,10 +500,56 @@ mod tests {
         assert_eq!(resp.varbinds[1].value, VarbindValue::EndOfMibView);
     }
 
+    #[test]
+    fn given_empty_mib_when_get_bulk_then_all_end_of_mib_view() {
+        // Verifies: REQ-0025
+        let store = Store::new();
+        let req = GetBulkRequest {
+            request_id: 1,
+            non_repeaters: 0,
+            max_repetitions: 3,
+            varbinds: vec![Varbind {
+                oid: oid("1.3.6.1.2.1.1.1.0"),
+                value: VarbindValue::Unspecified,
+            }],
+        };
+        let resp = handle_get_bulk(&req, &store, 100);
+        // RFC 3416 §4.2.3: stop early when all columns have reached end of MIB.
+        // With an empty MIB the first repetition exhausts all columns immediately,
+        // so the response contains exactly one EndOfMibView varbind.
+        assert_eq!(resp.varbinds.len(), 1);
+        assert_eq!(resp.varbinds[0].value, VarbindValue::EndOfMibView);
+    }
+
+    #[test]
+    fn given_bulk_request_when_max_repetitions_zero_then_only_non_repeaters_returned() {
+        // Verifies: REQ-0027
+        let store = store_with(&[("1.3.6.1.2.1.1.1.0", Value::Integer32(1))]);
+        let req = GetBulkRequest {
+            request_id: 2,
+            non_repeaters: 1,
+            max_repetitions: 0,
+            varbinds: vec![
+                Varbind {
+                    oid: oid("1.3.6.1.2.1.1.1.0"),
+                    value: VarbindValue::Unspecified,
+                },
+                Varbind {
+                    oid: oid("1.3.6.1.2.1.1.1.0"),
+                    value: VarbindValue::Unspecified,
+                },
+            ],
+        };
+        let resp = handle_get_bulk(&req, &store, 100);
+        // Only the non-repeater varbind (GETNEXT of first OID) should appear.
+        assert_eq!(resp.varbinds.len(), 1);
+    }
+
     // ── handle_set ────────────────────────────────────────────────────────────
 
     #[test]
     fn given_set_request_when_handled_then_returns_not_writable() {
+        // Verifies: REQ-0032
         let req = SetRequest {
             request_id: 99,
             varbinds: vec![Varbind {
@@ -502,7 +569,7 @@ mod tests {
 
     #[test]
     fn given_api_trap_pdu_when_built_then_prepends_sys_up_time_and_trap_oid() {
-        // Verifies: REQ-0037, REQ-0038, REQ-0041
+        // Verifies: REQ-0037, REQ-0038, REQ-0041, REQ-0046
         let api_pdu = TrapPdu {
             request_id: 5,
             trap_oid: oid("1.3.6.1.6.3.1.1.5.1"),

@@ -11,10 +11,14 @@ import uuid
 
 from behave import given, then, when
 
-ENGINE_ID = "0x800001f88404746573742d6167656e742d6d6962"
+ENGINE_ID = "0x80001f8804746573742d6167656e742d6d6962"
 
 # SNMPv3 noAuthNoPriv flags for net-snmp CLI tools.
-SNMPV3_FLAGS = ["-v3", "-l", "noAuthNoPriv", "-u", ""]
+# Net-snmp requires a non-empty security name even for noAuthNoPriv; the agent
+# does not authenticate the username on the plain TCP path.
+# -On prints OIDs in numeric form so step assertions can match on the dotted
+# numeric string that appears in the feature file.
+SNMPV3_FLAGS = ["-v3", "-l", "noAuthNoPriv", "-u", "noauth", "-On"]
 
 
 def _snmp_client_run(context, snmp_cmd: list[str]) -> subprocess.CompletedProcess:
@@ -102,8 +106,8 @@ def step_snmpbulkget(context, non_repeaters, max_repetitions, oid):
         + SNMPV3_FLAGS
         + [
             "-e", context.agent_engine_id,
-            "-Cn", str(non_repeaters),
-            "-Cr", str(max_repetitions),
+            f"-Cn{non_repeaters}",
+            f"-Cr{max_repetitions}",
             _agent_addr(context),
             oid,
         ],
@@ -172,6 +176,24 @@ def step_response_contains_oid(context, oid):
 def step_response_not_contains_oid(context, oid):
     output = context.last_snmp_output
     assert oid not in output, f"OID {oid!r} unexpectedly found in output:\n{output}"
+
+
+@when('snmpset queries OID "{oid}" with string value "{value}" from the agent')
+def step_snmpset(context, oid, value):
+    result = _snmp_client_run(
+        context,
+        ["snmpset"]
+        + SNMPV3_FLAGS
+        + ["-e", context.agent_engine_id, _agent_addr(context), oid, "s", value],
+    )
+    context.last_snmp_output = result.stdout + result.stderr
+    context.last_snmp_returncode = result.returncode
+
+
+@then('the SNMP response contains error "{error}"')
+def step_response_contains_error(context, error):
+    output = context.last_snmp_output
+    assert error in output, f"Error {error!r} not found in output:\n{output}"
 
 
 @then('the SNMP request times out or returns an error')
