@@ -33,6 +33,8 @@ DOCKER_NETWORK = f"{PROJECT_NAME}_snmp-test"
 
 TEST_AGENT_IMAGE = "test-agent-test"
 SNMPTRAPD_IMAGE = "snmptrapd-test"
+TEST_AGENT_MIB_IMAGE = "test-agent-mib-test"
+SNMP_CLIENT_IMAGE = "snmp-client-test"
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +59,8 @@ def before_all(context):
     context.docker_network = DOCKER_NETWORK
     context.test_agent_image = TEST_AGENT_IMAGE
     context.snmptrapd_image = SNMPTRAPD_IMAGE
+    context.test_agent_mib_image = TEST_AGENT_MIB_IMAGE
+    context.snmp_client_image = SNMP_CLIENT_IMAGE
 
 
 def before_scenario(context, scenario):
@@ -76,9 +80,18 @@ def before_scenario(context, scenario):
     context.extra_containers = []
     context.temp_files = []
     context.last_agent_output = ""
+    # agent_container: name of the test-agent-mib container started by MIB read
+    # scenarios, if any. Stopped and removed in after_scenario.
+    context.agent_container = None
 
 
 def after_scenario(context, scenario):
+    if context.agent_container is not None:
+        subprocess.run(
+            ["docker", "stop", context.agent_container],
+            check=False,
+            capture_output=True,
+        )
     for name in context.extra_containers:
         subprocess.run(["docker", "stop", name], check=False, capture_output=True)
     for path in context.temp_files:

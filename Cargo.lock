@@ -659,6 +659,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "test-agent-mib"
+version = "0.1.0"
+dependencies = [
+ "basic-snmp-agent",
+]
+
+[[package]]
 name = "transport"
 version = "0.1.0"
 dependencies = [
@@ -666,6 +673,9 @@ dependencies = [
  "libc",
  "mib",
  "mio",
+ "rasn",
+ "rasn-smi",
+ "rasn-snmp",
  "rustls",
 ]
 

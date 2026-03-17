@@ -4,7 +4,9 @@
 //!
 //! - Clean public PDU types decoupled from the `rasn`/`rasn-snmp` wire types.
 //! - [`decode_pdu`]: BER-decode inbound SNMP PDU bytes into an [`InboundPdu`].
+//! - [`decode_v3_message`]: BER-decode an inbound `SNMPv3` message into a [`V3InboundMessage`].
 //! - [`encode_response`]: BER-encode a [`GetResponse`] for sending.
+//! - [`encode_v3_response`]: BER-encode a [`GetResponse`] inside an `SNMPv3` message envelope.
 //! - [`encode_trap`]: BER-encode a [`WireTrapPdu`] for sending.
 
 use std::fmt;
@@ -16,6 +18,9 @@ use rasn_snmp::v2::{
     Trap, VarBind, VarBindValue as RasnVarBindValue,
 };
 use rasn_snmp::v2c::Message as V2cMessage;
+use rasn_snmp::v3::{
+    HeaderData, Message as V3Message, ScopedPdu, ScopedPduData, USMSecurityParameters,
+};
 
 use crate::Oid;
 use crate::Value;
@@ -224,6 +229,26 @@ pub enum InboundPdu {
     SetRequest(SetRequest),
 }
 
+// ── V3InboundMessage ──────────────────────────────────────────────────────────
+
+/// A decoded inbound `SNMPv3` message, containing the message-level fields
+/// extracted from the `HeaderData` and `ScopedPdu` envelope, plus the inner
+/// PDU ready for dispatch.
+///
+/// # Requirements
+/// Implements: REQ-0068, REQ-0069, REQ-0070
+#[derive(Debug)]
+pub struct V3InboundMessage {
+    /// Message ID from `HeaderData`; echoed in the `SNMPv3` response.
+    pub msg_id: i32,
+    /// Engine ID from the `ScopedPdu`; used to verify the request targets this agent.
+    pub engine_id: Vec<u8>,
+    /// Context name from the `ScopedPdu`; should be empty for the default context.
+    pub context_name: Vec<u8>,
+    /// The inner PDU ready for dispatch to request handlers.
+    pub pdu: InboundPdu,
+}
+
 // ── Outbound PDU structs ──────────────────────────────────────────────────────
 
 /// An `SNMPv2` Response PDU (outbound), used to answer Get/GetNext/GetBulk/Set requests.
@@ -280,34 +305,87 @@ pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
     let pdus: Pdus = rasn::ber::decode(bytes)
         .map_err(|e| DecodeError::new(DecodeErrorKind::Ber, format!("BER decode failed: {e}")))?;
 
-    match pdus {
-        Pdus::GetRequest(RasnGetRequest(pdu)) => Ok(InboundPdu::GetRequest(GetRequest {
-            request_id: pdu.request_id,
-            varbinds: varbinds_from_rasn(pdu.variable_bindings)?,
-        })),
-        Pdus::GetNextRequest(RasnGetNextRequest(pdu)) => {
-            Ok(InboundPdu::GetNextRequest(GetNextRequest {
-                request_id: pdu.request_id,
-                varbinds: varbinds_from_rasn(pdu.variable_bindings)?,
-            }))
-        }
-        Pdus::GetBulkRequest(RasnGetBulkRequest(bulk)) => {
-            Ok(InboundPdu::GetBulkRequest(GetBulkRequest {
-                request_id: bulk.request_id,
-                non_repeaters: bulk.non_repeaters,
-                max_repetitions: bulk.max_repetitions,
-                varbinds: varbinds_from_rasn(bulk.variable_bindings)?,
-            }))
-        }
-        Pdus::SetRequest(RasnSetRequest(pdu)) => Ok(InboundPdu::SetRequest(SetRequest {
-            request_id: pdu.request_id,
-            varbinds: varbinds_from_rasn(pdu.variable_bindings)?,
-        })),
-        other => Err(DecodeError::new(
-            DecodeErrorKind::UnsupportedPduType,
-            format!("unexpected outbound PDU type: {other:?}"),
-        )),
+    pdus_to_inbound_pdu(pdus)
+}
+
+// ── decode_v3_message ─────────────────────────────────────────────────────────
+
+/// BER-decode an inbound `SNMPv3` message into a [`V3InboundMessage`].
+///
+/// Accepts only cleartext (noAuthNoPriv or authNoPriv) `SNMPv3` messages; encrypted
+/// PDUs (`ScopedPduData::EncryptedPdu`) are rejected because this agent implements
+/// USM noAuthNoPriv only.
+///
+/// The inner `Pdus` variant must be an inbound request type; response and trap
+/// PDUs are rejected.
+///
+/// # Errors
+///
+/// Returns a [`DecodeError`] if:
+/// - The bytes are not valid BER.
+/// - The message version is not 3 ([`DecodeErrorKind::WrongVersion`]).
+/// - The scoped PDU is encrypted ([`DecodeErrorKind::EncryptedPdu`]).
+/// - The inner PDU type is not a recognised inbound type.
+/// - An OID or value in a varbind cannot be decoded.
+///
+/// # Requirements
+/// Implements: REQ-0068, REQ-0069, REQ-0071, REQ-0073
+///
+/// # Examples
+///
+/// ```no_run
+/// use codec::decode_v3_message;
+///
+/// let bytes: &[u8] = &[/* raw BER SNMPv3 message bytes */];
+/// match decode_v3_message(bytes) {
+///     Ok(msg) => println!("engine_id={:?} pdu={:?}", msg.engine_id, msg.pdu),
+///     Err(e) => eprintln!("decode failed: {e}"),
+/// }
+/// ```
+pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> {
+    let v3_message: V3Message = rasn::ber::decode(bytes)
+        .map_err(|e| DecodeError::new(DecodeErrorKind::Ber, format!("BER decode failed: {e}")))?;
+
+    // Verify this is indeed version 3; version 1 or 2c messages are not accepted here.
+    let version_number: i64 = v3_message.version.try_into().map_err(|_| {
+        DecodeError::new(
+            DecodeErrorKind::WrongVersion,
+            "version field too large for i64",
+        )
+    })?;
+    if version_number != 3 {
+        return Err(DecodeError::new(
+            DecodeErrorKind::WrongVersion,
+            format!("expected SNMPv3 (version 3), got version {version_number}"),
+        ));
     }
+
+    let msg_id: i32 =
+        v3_message.global_data.message_id.try_into().map_err(|_| {
+            DecodeError::new(DecodeErrorKind::Ber, "msgID field does not fit in i32")
+        })?;
+
+    let scoped_pdu = match v3_message.scoped_data {
+        ScopedPduData::CleartextPdu(pdu) => pdu,
+        // Encrypted PDUs require privacy support that this agent does not implement.
+        ScopedPduData::EncryptedPdu(_) => {
+            return Err(DecodeError::new(
+                DecodeErrorKind::EncryptedPdu,
+                "encrypted (privacy-protected) PDUs are not supported",
+            ));
+        }
+    };
+
+    let engine_id = scoped_pdu.engine_id.to_vec();
+    let context_name = scoped_pdu.name.to_vec();
+    let pdu = pdus_to_inbound_pdu(scoped_pdu.data)?;
+
+    Ok(V3InboundMessage {
+        msg_id,
+        engine_id,
+        context_name,
+        pdu,
+    })
 }
 
 // ── encode_response ───────────────────────────────────────────────────────────
@@ -346,6 +424,83 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
         .map_err(|e| EncodeError::new(format!("BER encoding of GetResponse failed: {e}")))
 }
 
+// ── encode_v3_response ────────────────────────────────────────────────────────
+
+/// BER-encode a [`GetResponse`] inside a full `SNMPv3` message envelope.
+///
+/// Constructs a `ScopedPdu` from `engine_id` and `context_name`, wraps it in
+/// `ScopedPduData::CleartextPdu`, and builds an `SNMPv3` `Message` with
+/// `HeaderData` indicating USM noAuthNoPriv. The `USMSecurityParameters` are
+/// zero-valued (all fields empty), which is correct for noAuthNoPriv responses
+/// per RFC 3414 §3.1.
+///
+/// # Errors
+///
+/// Returns an [`EncodeError`] if `rasn` fails to BER-encode any part of the message.
+///
+/// # Requirements
+/// Implements: REQ-0068, REQ-0070, REQ-0072
+///
+/// # Examples
+///
+/// ```
+/// use codec::{ErrorStatus, GetResponse, encode_v3_response};
+///
+/// let pdu = GetResponse {
+///     request_id: 1,
+///     error_status: ErrorStatus::NoError,
+///     error_index: 0,
+///     varbinds: vec![],
+/// };
+/// let bytes = encode_v3_response(1, b"engine", b"", &pdu).unwrap();
+/// assert!(!bytes.is_empty());
+/// ```
+pub fn encode_v3_response(
+    msg_id: i32,
+    engine_id: &[u8],
+    context_name: &[u8],
+    pdu: &GetResponse,
+) -> Result<Vec<u8>, EncodeError> {
+    let rasn_response = Response(RasnPdu {
+        request_id: pdu.request_id,
+        error_status: pdu.error_status as u32,
+        error_index: pdu.error_index,
+        variable_bindings: pdu.varbinds.iter().map(varbind_to_rasn).collect(),
+    });
+
+    let scoped_pdu = ScopedPdu {
+        engine_id: engine_id.to_vec().into(),
+        name: context_name.to_vec().into(),
+        data: Pdus::Response(rasn_response),
+    };
+
+    // Zero-valued USM security parameters are correct for noAuthNoPriv responses.
+    // RFC 3414 §3.1 specifies that for noAuthNoPriv, authParameters and
+    // privParameters must be zero-length, and no computation is required.
+    let usm_params = empty_usm_security_parameters();
+
+    let security_parameters_bytes = rasn::ber::encode(&usm_params).map_err(|e| {
+        EncodeError::new(format!("BER encoding of USMSecurityParameters failed: {e}"))
+    })?;
+
+    // flags byte 0x00: noAuthNoPriv, reportable bit clear (response).
+    let v3_message = V3Message {
+        version: 3.into(),
+        global_data: HeaderData {
+            message_id: msg_id.into(),
+            max_size: 65535.into(),
+            flags: rasn::types::OctetString::from(vec![0x00]),
+            // Security model 3 = USM (RFC 3414).
+            security_model: 3.into(),
+        },
+        security_parameters: security_parameters_bytes.into(),
+        scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
+    };
+
+    rasn::ber::encode(&v3_message)
+        .map_err(|e| EncodeError::new(format!("BER encoding of SNMPv3 Message failed: {e}")))
+}
+
 // ── encode_get_request ────────────────────────────────────────────────────────
 
 /// BER-encode a [`GetRequest`] PDU for use in tests that need to send a
@@ -382,6 +537,61 @@ pub fn encode_get_request(pdu: &GetRequest) -> Result<Vec<u8>, EncodeError> {
     });
     rasn::ber::encode(&rasn_pdu)
         .map_err(|e| EncodeError::new(format!("BER encoding of GetRequest failed: {e}")))
+}
+
+// ── encode_v3_get_request ─────────────────────────────────────────────────────
+
+/// BER-encode a [`GetRequest`] inside an SNMPv3 message envelope, for use in
+/// tests that send SNMPv3 frames to the agent over TCP.
+///
+/// This function is the SNMPv3 counterpart of [`encode_get_request`]. It wraps
+/// the GetRequest in a `ScopedPdu` and builds an SNMPv3 `Message` with
+/// USM noAuthNoPriv parameters.
+///
+/// # Errors
+///
+/// Returns an [`EncodeError`] if `rasn` fails to BER-encode any part of the message.
+#[cfg(feature = "test-support")]
+pub fn encode_v3_get_request(
+    msg_id: i32,
+    engine_id: &[u8],
+    context_name: &[u8],
+    pdu: &GetRequest,
+) -> Result<Vec<u8>, EncodeError> {
+    let rasn_pdu = RasnGetRequest(RasnPdu {
+        request_id: pdu.request_id,
+        error_status: 0,
+        error_index: 0,
+        variable_bindings: pdu.varbinds.iter().map(varbind_to_rasn).collect(),
+    });
+
+    let scoped_pdu = ScopedPdu {
+        engine_id: engine_id.to_vec().into(),
+        name: context_name.to_vec().into(),
+        data: Pdus::GetRequest(rasn_pdu),
+    };
+
+    let usm_params = empty_usm_security_parameters();
+
+    let security_parameters_bytes = rasn::ber::encode(&usm_params).map_err(|e| {
+        EncodeError::new(format!("BER encoding of USMSecurityParameters failed: {e}"))
+    })?;
+
+    // flags byte 0x04: reportable bit set (managers set this on requests).
+    let v3_message = V3Message {
+        version: 3.into(),
+        global_data: HeaderData {
+            message_id: msg_id.into(),
+            max_size: 65535.into(),
+            flags: rasn::types::OctetString::from(vec![0x04]),
+            security_model: 3.into(),
+        },
+        security_parameters: security_parameters_bytes.into(),
+        scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
+    };
+
+    rasn::ber::encode(&v3_message)
+        .map_err(|e| EncodeError::new(format!("BER encoding of SNMPv3 Message failed: {e}")))
 }
 
 // ── encode_trap ───────────────────────────────────────────────────────────────
@@ -472,6 +682,10 @@ pub enum DecodeErrorKind {
     UnsupportedPduType,
     /// An OID in a varbind could not be converted.
     InvalidOid,
+    /// The SNMP message version is not the expected value.
+    WrongVersion,
+    /// The scoped PDU is encrypted; privacy is not supported.
+    EncryptedPdu,
 }
 
 impl fmt::Display for DecodeErrorKind {
@@ -480,6 +694,8 @@ impl fmt::Display for DecodeErrorKind {
             Self::Ber => write!(f, "BER decode failure"),
             Self::UnsupportedPduType => write!(f, "unsupported PDU type"),
             Self::InvalidOid => write!(f, "invalid OID"),
+            Self::WrongVersion => write!(f, "wrong SNMP version"),
+            Self::EncryptedPdu => write!(f, "encrypted PDU not supported"),
         }
     }
 }
@@ -692,6 +908,54 @@ fn varbind_from_rasn(varbind: VarBind) -> Result<Varbind, DecodeError> {
 /// Converts a list of rasn-snmp `VarBind`s into our `Vec<Varbind>`.
 fn varbinds_from_rasn(list: Vec<VarBind>) -> Result<Vec<Varbind>, DecodeError> {
     list.into_iter().map(varbind_from_rasn).collect()
+}
+
+// Implements: REQ-0068
+fn empty_usm_security_parameters() -> USMSecurityParameters {
+    USMSecurityParameters {
+        authoritative_engine_id: rasn::types::OctetString::from(vec![]),
+        authoritative_engine_boots: 0.into(),
+        authoritative_engine_time: 0.into(),
+        user_name: rasn::types::OctetString::from(vec![]),
+        authentication_parameters: rasn::types::OctetString::from(vec![]),
+        privacy_parameters: rasn::types::OctetString::from(vec![]),
+    }
+}
+
+// Implements: REQ-0021, REQ-0068
+/// Maps a decoded `Pdus` variant to our `InboundPdu`.
+///
+/// Shared between `decode_pdu` and `decode_v3_message` to avoid duplicating
+/// the match arms for the four inbound PDU types.
+fn pdus_to_inbound_pdu(pdus: Pdus) -> Result<InboundPdu, DecodeError> {
+    match pdus {
+        Pdus::GetRequest(RasnGetRequest(pdu)) => Ok(InboundPdu::GetRequest(GetRequest {
+            request_id: pdu.request_id,
+            varbinds: varbinds_from_rasn(pdu.variable_bindings)?,
+        })),
+        Pdus::GetNextRequest(RasnGetNextRequest(pdu)) => {
+            Ok(InboundPdu::GetNextRequest(GetNextRequest {
+                request_id: pdu.request_id,
+                varbinds: varbinds_from_rasn(pdu.variable_bindings)?,
+            }))
+        }
+        Pdus::GetBulkRequest(RasnGetBulkRequest(bulk)) => {
+            Ok(InboundPdu::GetBulkRequest(GetBulkRequest {
+                request_id: bulk.request_id,
+                non_repeaters: bulk.non_repeaters,
+                max_repetitions: bulk.max_repetitions,
+                varbinds: varbinds_from_rasn(bulk.variable_bindings)?,
+            }))
+        }
+        Pdus::SetRequest(RasnSetRequest(pdu)) => Ok(InboundPdu::SetRequest(SetRequest {
+            request_id: pdu.request_id,
+            varbinds: varbinds_from_rasn(pdu.variable_bindings)?,
+        })),
+        other => Err(DecodeError::new(
+            DecodeErrorKind::UnsupportedPduType,
+            format!("unexpected outbound PDU type: {other:?}"),
+        )),
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1345,6 +1609,202 @@ mod tests {
                 }
                 other => panic!("expected Response, got {other:?}"),
             }
+        }
+    }
+
+    // ── decode_v3_message ─────────────────────────────────────────────────────
+
+    /// Build a minimal SNMPv3 message wrapping a GetRequest for tests.
+    fn encode_test_v3_get_request(
+        msg_id: i32,
+        engine_id: &[u8],
+        context_name: &[u8],
+        request_id: i32,
+        oid: &Oid,
+    ) -> Vec<u8> {
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(std::borrow::Cow::Owned(
+            oid.as_slice().to_vec(),
+        ));
+        let rasn_pdu = RasnGetRequest(RasnPdu {
+            request_id,
+            error_status: 0,
+            error_index: 0,
+            variable_bindings: vec![VarBind {
+                name: rasn_oid,
+                value: RasnVarBindValue::Unspecified,
+            }],
+        });
+        let scoped_pdu = ScopedPdu {
+            engine_id: engine_id.to_vec().into(),
+            name: context_name.to_vec().into(),
+            data: Pdus::GetRequest(rasn_pdu),
+        };
+        let usm_params = empty_usm_security_parameters();
+        let security_params = rasn::ber::encode(&usm_params).unwrap();
+        let v3_msg = V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: msg_id.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x04]),
+                security_model: 3.into(),
+            },
+            security_parameters: security_params.into(),
+            scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
+        };
+        rasn::ber::encode(&v3_msg).unwrap()
+    }
+
+    #[test]
+    fn given_valid_v3_get_request_when_decode_then_fields_extracted() {
+        // Verifies: REQ-0068, REQ-0069, REQ-0070
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        let encoded = encode_test_v3_get_request(42, engine_id, b"", 7, &oid);
+
+        let msg = decode_v3_message(&encoded).unwrap();
+
+        assert_eq!(msg.msg_id, 42);
+        assert_eq!(msg.engine_id, engine_id);
+        assert_eq!(msg.context_name, b"");
+        assert!(matches!(msg.pdu, InboundPdu::GetRequest(ref req) if req.request_id == 7));
+    }
+
+    #[test]
+    fn given_wrong_version_message_when_decode_v3_then_wrong_version_error() {
+        // Verifies: REQ-0073
+        // Build a structurally valid V3Message but with version=1 (SNMPv1).
+        // rasn decodes it successfully at the BER level, then our version check fires.
+        let usm_params = empty_usm_security_parameters();
+        let security_params = rasn::ber::encode(&usm_params).unwrap();
+        let scoped_pdu = ScopedPdu {
+            engine_id: rasn::types::OctetString::from(vec![]),
+            name: rasn::types::OctetString::from(vec![]),
+            data: Pdus::GetRequest(RasnGetRequest(RasnPdu {
+                request_id: 1,
+                error_status: 0,
+                error_index: 0,
+                variable_bindings: vec![],
+            })),
+        };
+        let v3_msg_version_1 = V3Message {
+            version: 1.into(),
+            global_data: HeaderData {
+                message_id: 1.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x04]),
+                security_model: 3.into(),
+            },
+            security_parameters: security_params.into(),
+            scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
+        };
+        let encoded = rasn::ber::encode(&v3_msg_version_1).unwrap();
+
+        let decode_result = decode_v3_message(&encoded);
+
+        assert!(decode_result.is_err());
+        assert_eq!(
+            decode_result.unwrap_err().kind(),
+            &DecodeErrorKind::WrongVersion
+        );
+    }
+
+    #[test]
+    fn given_encrypted_scoped_pdu_when_decode_v3_then_encrypted_pdu_error() {
+        // Verifies: REQ-0073
+        let usm_params = empty_usm_security_parameters();
+        let security_params = rasn::ber::encode(&usm_params).unwrap();
+        let v3_msg = V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 1.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x03]),
+                security_model: 3.into(),
+            },
+            security_parameters: security_params.into(),
+            scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(
+                b"fake-encrypted".to_vec(),
+            )),
+        };
+        let encoded = rasn::ber::encode(&v3_msg).unwrap();
+
+        let decode_result = decode_v3_message(&encoded);
+
+        assert!(decode_result.is_err());
+        assert_eq!(
+            decode_result.unwrap_err().kind(),
+            &DecodeErrorKind::EncryptedPdu
+        );
+    }
+
+    #[test]
+    fn given_invalid_bytes_when_decode_v3_then_ber_error() {
+        // Verifies: REQ-0073
+        let decode_result = decode_v3_message(&[0xFF, 0xFE, 0xFD]);
+        assert!(decode_result.is_err());
+        assert_eq!(decode_result.unwrap_err().kind(), &DecodeErrorKind::Ber);
+    }
+
+    // ── encode_v3_response round-trip ─────────────────────────────────────────
+
+    #[test]
+    fn given_get_response_when_encode_v3_response_then_valid_v3_message() {
+        // Verifies: REQ-0068, REQ-0070, REQ-0072
+        let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let pdu = GetResponse {
+            request_id: 99,
+            error_status: ErrorStatus::NoError,
+            error_index: 0,
+            varbinds: vec![Varbind {
+                oid: oid.clone(),
+                value: VarbindValue::Value(Value::Integer32(42)),
+            }],
+        };
+
+        let encoded = encode_v3_response(5, engine_id, b"", &pdu).unwrap();
+
+        // Decode back as a V3Message to verify structural validity.
+        let decoded: V3Message = rasn::ber::decode(&encoded).expect("must decode as V3Message");
+        let version_number: i64 = decoded.version.try_into().unwrap();
+        assert_eq!(version_number, 3);
+        let msg_id: i32 = decoded.global_data.message_id.try_into().unwrap();
+        assert_eq!(msg_id, 5);
+
+        match decoded.scoped_data {
+            ScopedPduData::CleartextPdu(scoped) => {
+                assert_eq!(scoped.engine_id.as_ref(), engine_id);
+                assert_eq!(scoped.name.as_ref(), b"");
+                assert!(
+                    matches!(scoped.data, Pdus::Response(_)),
+                    "expected Response PDU in ScopedPdu"
+                );
+            }
+            ScopedPduData::EncryptedPdu(_) => panic!("expected cleartext, got encrypted PDU"),
+        }
+    }
+
+    #[test]
+    fn given_v3_request_when_encode_then_decode_round_trip_succeeds() {
+        // Verifies: REQ-0068, REQ-0069, REQ-0070
+        // Encode a v3 GetRequest, decode it, check all fields survive.
+        let engine_id = b"\x80\x00\x1f\x88\x04roundtrip";
+        let oid: Oid = "1.3.6.1.2.1.1.5.0".parse().unwrap();
+        let encoded = encode_test_v3_get_request(100, engine_id, b"ctx", 200, &oid);
+
+        let msg = decode_v3_message(&encoded).unwrap();
+
+        assert_eq!(msg.msg_id, 100);
+        assert_eq!(msg.engine_id, engine_id);
+        assert_eq!(msg.context_name, b"ctx");
+        match &msg.pdu {
+            InboundPdu::GetRequest(req) => {
+                assert_eq!(req.request_id, 200);
+                assert_eq!(req.varbinds.len(), 1);
+                assert_eq!(req.varbinds[0].oid, oid);
+            }
+            other => panic!("expected GetRequest, got {other:?}"),
         }
     }
 }

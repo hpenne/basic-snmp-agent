@@ -13,3 +13,6 @@ libc = "0.2"
 
 [dev-dependencies]
 codec = { path = "../codec", features = ["test-support"] }
+rasn = "0.22"
+rasn-smi = "0.22"
+rasn-snmp = "0.22"

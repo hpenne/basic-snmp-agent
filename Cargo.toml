@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "transport", "codec", "mib", "tests/test-agent"]
+members = [".", "transport", "codec", "mib", "tests/test-agent", "tests/test-agent-mib"]
 resolver = "2"
 
 [package]
@@ -12,3 +12,6 @@ publish = false
 codec = { path = "codec" }
 mib = { path = "mib" }
 transport = { path = "transport" }
+
+[dev-dependencies]
+codec = { path = "codec", features = ["test-support"] }

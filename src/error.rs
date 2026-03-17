@@ -17,6 +17,8 @@ pub enum AgentError {
     UdpSocket(io::Error),
     /// The event loop thread could not be spawned.
     Spawn(io::Error),
+    /// The engine ID length is outside the RFC 3411 §5 range of 5–32 octets.
+    InvalidEngineId,
 }
 
 impl fmt::Display for AgentError {
@@ -28,6 +30,10 @@ impl fmt::Display for AgentError {
             Self::Socket(e) => write!(f, "failed to configure TCP listener: {e}"),
             Self::UdpSocket(e) => write!(f, "failed to create UDP trap socket: {e}"),
             Self::Spawn(e) => write!(f, "failed to spawn event loop thread: {e}"),
+            Self::InvalidEngineId => write!(
+                f,
+                "engine ID length is invalid: must be between 5 and 32 octets (RFC 3411 \u{a7}5)"
+            ),
         }
     }
 }
@@ -37,6 +43,7 @@ impl std::error::Error for AgentError {
         match self {
             Self::Bind { source, .. } => Some(source),
             Self::Socket(e) | Self::UdpSocket(e) | Self::Spawn(e) => Some(e),
+            Self::InvalidEngineId => None,
         }
     }
 }
@@ -126,6 +133,13 @@ mod tests {
         assert!(spawn_error.to_string().contains("event loop"));
     }
 
+    #[test]
+    fn agent_error_invalid_engine_id_display_mentions_rfc() {
+        let invalid_error = AgentError::InvalidEngineId;
+        let msg = invalid_error.to_string();
+        assert!(msg.contains("5") && msg.contains("32"), "{msg}");
+    }
+
     // ── AgentError source ────────────────────────────────────────────────
 
     #[test]
@@ -173,6 +187,12 @@ mod tests {
                 .to_string()
                 .contains("test")
         );
+    }
+
+    #[test]
+    fn agent_error_invalid_engine_id_source_returns_none() {
+        let invalid_error = AgentError::InvalidEngineId;
+        assert!(invalid_error.source().is_none());
     }
 
     // ── SetError Display ─────────────────────────────────────────────────

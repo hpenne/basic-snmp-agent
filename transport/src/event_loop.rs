@@ -135,7 +135,8 @@ pub enum Command {
 /// use transport::event_loop::{Command, EventLoop};
 ///
 /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-/// let (event_loop, _bound_addr, sender) = EventLoop::new(addr).unwrap();
+/// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
+/// let (event_loop, _bound_addr, sender) = EventLoop::new(addr, engine_id).unwrap();
 /// sender.send(Command::Shutdown).unwrap();
 /// ```
 pub struct CommandSender {
@@ -218,7 +219,8 @@ struct ConnectionState {
 /// use transport::event_loop::EventLoop;
 ///
 /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-/// let (event_loop, bound_addr, sender) = EventLoop::new(addr).unwrap();
+/// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
+/// let (event_loop, bound_addr, sender) = EventLoop::new(addr, engine_id).unwrap();
 ///
 /// let handle = std::thread::spawn(move || event_loop.run());
 /// sender.send(transport::event_loop::Command::Shutdown).unwrap();
@@ -236,10 +238,14 @@ pub struct EventLoop {
     connections: HashMap<Token, ConnectionState>,
     /// MIB store; updated by `SetValue` commands from application threads.
     store: mib::Store,
+    /// This agent's `SNMPv3` engine ID; inbound messages with a different engine
+    /// ID are discarded (REQ-0057).
+    engine_id: Vec<u8>,
 }
 
 impl EventLoop {
-    /// Create an [`EventLoop`] bound to `addr`.
+    /// Create an [`EventLoop`] bound to `addr`, using `engine_id` to validate
+    /// inbound `SNMPv3` messages.
     ///
     /// Returns the loop itself, the actual bound address (useful when `addr`
     /// uses port 0 for OS-assigned allocation), and a [`CommandSender`] for
@@ -251,6 +257,9 @@ impl EventLoop {
     /// [`EventLoopError::Pipe`] if the self-pipe cannot be created, or
     /// [`EventLoopError::Registration`] if mio token registration fails.
     ///
+    /// # Requirements
+    /// Implements: REQ-0055, REQ-0068
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -258,10 +267,14 @@ impl EventLoop {
     /// use transport::event_loop::EventLoop;
     ///
     /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-    /// let (event_loop, bound_addr, sender) = EventLoop::new(addr).unwrap();
+    /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
+    /// let (event_loop, bound_addr, sender) = EventLoop::new(addr, engine_id).unwrap();
     /// println!("listening on {bound_addr}");
     /// ```
-    pub fn new(addr: SocketAddr) -> Result<(Self, SocketAddr, CommandSender), EventLoopError> {
+    pub fn new(
+        addr: SocketAddr,
+        engine_id: Vec<u8>,
+    ) -> Result<(Self, SocketAddr, CommandSender), EventLoopError> {
         let poll = Poll::new().map_err(EventLoopError::Registration)?;
         let registry = poll.registry();
 
@@ -298,6 +311,7 @@ impl EventLoop {
             next_token: FIRST_CONN_TOKEN,
             connections: HashMap::new(),
             store: mib::Store::new(),
+            engine_id,
         };
         let sender = CommandSender { tx, pipe_write_fd };
 
@@ -424,6 +438,9 @@ impl EventLoop {
     /// Connection-level I/O errors (e.g. `ConnectionReset`) close and remove
     /// the connection but do not propagate to the caller — a single misbehaving
     /// client must not bring down the entire event loop.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0057, REQ-0058, REQ-0068, REQ-0073
     fn handle_connection_event(&mut self, token: Token) {
         let Some(conn) = self.connections.get_mut(&token) else {
             return;
@@ -490,35 +507,11 @@ impl EventLoop {
             let payload: Vec<u8> = conn.read_buf[4..total_frame_size].to_vec();
             conn.read_buf.drain(..total_frame_size);
 
-            let response = match codec::decode_pdu(&payload) {
-                Err(decode_error) => {
-                    // A malformed PDU is discarded silently; the connection stays
-                    // open because the length prefix already consumed the right
-                    // number of bytes, leaving the stream in a known state.
-                    eprintln!("[event_loop] PDU decode error (token {token:?}): {decode_error}");
-                    continue;
-                }
-                Ok(codec::InboundPdu::GetRequest(req)) => request::handle_get(&req, &self.store),
-                Ok(codec::InboundPdu::GetNextRequest(req)) => {
-                    request::handle_get_next(&req, &self.store)
-                }
-                Ok(codec::InboundPdu::GetBulkRequest(req)) => {
-                    request::handle_get_bulk(&req, &self.store, MAX_BULK_REPETITIONS)
-                }
-                Ok(codec::InboundPdu::SetRequest(req)) => request::handle_set(&req),
+            let Some(framed_response) =
+                Self::dispatch_snmpv3_frame(&payload, token, &self.engine_id, &self.store)
+            else {
+                continue;
             };
-
-            let encoded_response = match codec::encode_response(&response) {
-                Ok(encoded_bytes) => encoded_bytes,
-                Err(encode_error) => {
-                    eprintln!(
-                        "[event_loop] response encode error (token {token:?}): {encode_error}"
-                    );
-                    continue;
-                }
-            };
-
-            let framed_response = frame_response(&encoded_response);
 
             if let Err(write_error) = conn.stream.write_all(&framed_response) {
                 // Close the connection on any write error, including WouldBlock.
@@ -537,6 +530,74 @@ impl EventLoop {
             }
             eprintln!("[event_loop] connection closed (token {token:?})");
         }
+    }
+
+    /// Decode, validate, and dispatch a single RFC 6353 frame payload.
+    ///
+    /// Returns `Some(framed_response)` when the frame produces a response ready
+    /// for writing, or `None` when the frame should be silently discarded
+    /// (invalid encoding, wrong engine ID, or unsupported context name).
+    // Implements: REQ-0057, REQ-0058, REQ-0068, REQ-0073
+    fn dispatch_snmpv3_frame(
+        payload: &[u8],
+        token: Token,
+        engine_id: &[u8],
+        store: &mib::Store,
+    ) -> Option<Vec<u8>> {
+        // Decode as an SNMPv3 message. Non-v3 messages are silently discarded
+        // per REQ-0073; the caller has already consumed the length prefix so the
+        // connection framing remains consistent.
+        let v3_msg = match codec::decode_v3_message(payload) {
+            Err(decode_error) => {
+                eprintln!("[event_loop] SNMPv3 decode error (token {token:?}): {decode_error}");
+                return None;
+            }
+            Ok(msg) => msg,
+        };
+
+        // Verify the engine ID matches ours. Requests for other engines are
+        // silently discarded per REQ-0057.
+        if v3_msg.engine_id != engine_id {
+            eprintln!(
+                "[event_loop] engine ID mismatch on token {token:?}: \
+                 expected {:?}, got {:?}",
+                engine_id, v3_msg.engine_id
+            );
+            return None;
+        }
+
+        // Only the default (empty) context name is supported per REQ-0058.
+        if !v3_msg.context_name.is_empty() {
+            eprintln!(
+                "[event_loop] non-empty context name on token {token:?}: {:?}",
+                v3_msg.context_name
+            );
+            return None;
+        }
+
+        let response = match v3_msg.pdu {
+            codec::InboundPdu::GetRequest(req) => request::handle_get(&req, store),
+            codec::InboundPdu::GetNextRequest(req) => request::handle_get_next(&req, store),
+            codec::InboundPdu::GetBulkRequest(req) => {
+                request::handle_get_bulk(&req, store, MAX_BULK_REPETITIONS)
+            }
+            codec::InboundPdu::SetRequest(req) => request::handle_set(&req),
+        };
+
+        let encoded_response = match codec::encode_v3_response(
+            v3_msg.msg_id,
+            engine_id,
+            &v3_msg.context_name,
+            &response,
+        ) {
+            Ok(encoded_bytes) => encoded_bytes,
+            Err(encode_error) => {
+                eprintln!("[event_loop] response encode error (token {token:?}): {encode_error}");
+                return None;
+            }
+        };
+
+        Some(frame_response(&encoded_response))
     }
 
     /// Allocate the next unique connection token, skipping reserved values.
@@ -638,8 +699,15 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    /// The test engine ID shared across all dispatch tests.
+    const TEST_ENGINE_ID: &[u8] = b"\x80\x00\x1f\x88\x04test";
+
     fn any_loopback() -> SocketAddr {
         "127.0.0.1:0".parse().unwrap()
+    }
+
+    fn test_engine_id() -> Vec<u8> {
+        TEST_ENGINE_ID.to_vec()
     }
 
     /// Read exactly `expected_len` bytes from `stream`, timing out after 2 seconds.
@@ -657,7 +725,8 @@ mod tests {
     #[test]
     fn given_running_event_loop_when_tcp_client_connects_then_connection_is_accepted() {
         // Given: an event loop bound on a random loopback port.
-        let (event_loop, bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let (event_loop, bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         // When: a TCP client connects.
@@ -675,7 +744,8 @@ mod tests {
     #[test]
     fn given_running_event_loop_when_shutdown_command_sent_then_loop_exits_cleanly() {
         // Given: a running event loop.
-        let (event_loop, _bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let (event_loop, _bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         // When: Shutdown is sent.
@@ -689,7 +759,8 @@ mod tests {
     #[test]
     fn given_running_event_loop_when_set_value_command_sent_then_loop_drains_channel() {
         // Given: a running event loop.
-        let (event_loop, _bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let (event_loop, _bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         // When: a SetValue command is followed by Shutdown.
@@ -710,7 +781,8 @@ mod tests {
     #[test]
     fn given_running_event_loop_when_set_value_sent_then_loop_remains_alive_for_shutdown() {
         // Given: a running event loop.
-        let (event_loop, _bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let (event_loop, _bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         // When: a SetValue command is sent and the loop is given time to process it.
@@ -738,7 +810,8 @@ mod tests {
     #[test]
     fn given_set_value_command_when_sent_then_mib_store_is_updated() {
         // Given: a running event loop.
-        let (event_loop, _bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let (event_loop, _bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         let oid: codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -780,7 +853,8 @@ mod tests {
     #[test]
     fn given_no_set_value_when_queried_then_mib_returns_none() {
         // Given: a running event loop with no values inserted.
-        let (event_loop, _bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let (event_loop, _bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         let oid: codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -829,6 +903,7 @@ mod tests {
             next_token: FIRST_CONN_TOKEN,
             connections: HashMap::new(),
             store: mib::Store::new(),
+            engine_id: test_engine_id(),
         };
 
         // Connect to the std listener so the TcpStream is valid. mio's
@@ -919,8 +994,8 @@ mod tests {
 
     // ── RFC 6353 dispatch tests ───────────────────────────────────────────────
 
-    /// Encode a `GetRequest` for `oid` as a framed PDU ready for TCP send.
-    fn framed_get_request(request_id: i32, oid: &codec::Oid) -> Vec<u8> {
+    /// Encode a GetRequest as a framed SNMPv3 PDU ready for TCP send.
+    fn framed_get_request(msg_id: i32, request_id: i32, oid: &codec::Oid) -> Vec<u8> {
         let pdu = codec::GetRequest {
             request_id,
             varbinds: vec![codec::Varbind {
@@ -928,7 +1003,8 @@ mod tests {
                 value: codec::VarbindValue::Unspecified,
             }],
         };
-        let encoded = codec::encode_get_request(&pdu).expect("encode_get_request must succeed");
+        let encoded = codec::encode_v3_get_request(msg_id, TEST_ENGINE_ID, b"", &pdu)
+            .expect("encode_v3_get_request must succeed");
         frame_response(&encoded)
     }
 
@@ -945,16 +1021,67 @@ mod tests {
         read_exact_with_timeout(stream, frame_length)
     }
 
-    /// Decode a raw response payload using the round-trip: encode a known
-    /// `GetResponse` and compare. Returns the expected bytes for assertion.
-    fn expected_response_bytes(response: &codec::GetResponse) -> Vec<u8> {
-        codec::encode_response(response).expect("encode_response must succeed")
+    /// Decode a raw response payload back into a `GetResponse` via the SNMPv3 path,
+    /// so we can assert on request_id and varbind values.
+    fn decode_v3_response_payload(payload: &[u8]) -> codec::GetResponse {
+        use rasn_snmp::v3::{Message as V3Message, ScopedPduData};
+        let v3_msg: V3Message = rasn::ber::decode(payload).expect("must decode as V3Message");
+        let scoped_pdu = match v3_msg.scoped_data {
+            ScopedPduData::CleartextPdu(pdu) => pdu,
+            ScopedPduData::EncryptedPdu(_) => panic!("expected cleartext"),
+        };
+        match scoped_pdu.data {
+            rasn_snmp::v2::Pdus::Response(inner) => {
+                let error_status =
+                    codec::ErrorStatus::from_u32(inner.0.error_status).expect("valid error status");
+                let varbinds = inner
+                    .0
+                    .variable_bindings
+                    .into_iter()
+                    .map(|vb| {
+                        let oid_arcs: Vec<u32> = vb.name.as_ref().to_vec();
+                        let oid = codec::Oid::try_from(oid_arcs).unwrap();
+                        let value = match vb.value {
+                            rasn_snmp::v2::VarBindValue::Value(
+                                rasn_smi::v2::ObjectSyntax::Simple(
+                                    rasn_smi::v2::SimpleSyntax::Integer(n),
+                                ),
+                            ) => codec::VarbindValue::Value(codec::Value::Integer32(
+                                i32::try_from(n).unwrap(),
+                            )),
+                            rasn_snmp::v2::VarBindValue::Value(
+                                rasn_smi::v2::ObjectSyntax::Simple(
+                                    rasn_smi::v2::SimpleSyntax::String(s),
+                                ),
+                            ) => codec::VarbindValue::Value(codec::Value::OctetString(s.to_vec())),
+                            rasn_snmp::v2::VarBindValue::NoSuchObject => {
+                                codec::VarbindValue::NoSuchObject
+                            }
+                            rasn_snmp::v2::VarBindValue::EndOfMibView => {
+                                codec::VarbindValue::EndOfMibView
+                            }
+                            _ => panic!("unexpected VarBindValue variant"),
+                        };
+                        codec::Varbind { oid, value }
+                    })
+                    .collect();
+                codec::GetResponse {
+                    request_id: inner.0.request_id,
+                    error_status,
+                    error_index: inner.0.error_index,
+                    varbinds,
+                }
+            }
+            other => panic!("expected Response PDU in ScopedPdu, got {other:?}"),
+        }
     }
 
     #[test]
     fn given_get_request_when_sent_over_tcp_then_response_is_received() {
+        // Verifies: REQ-0021, REQ-0068, REQ-0069, REQ-0070
         // Given: a running event loop with a known OID in the MIB.
-        let (event_loop, bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let (event_loop, bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -978,26 +1105,22 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("timed out waiting for SetValue confirmation");
 
-        // When: a TCP client sends a framed GetRequest.
+        // When: a TCP client sends a framed SNMPv3 GetRequest.
         let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
         client
-            .write_all(&framed_get_request(1, &oid))
+            .write_all(&framed_get_request(1, 1, &oid))
             .expect("write must succeed");
 
-        // Then: a framed response is received with the expected value.
+        // Then: a framed SNMPv3 response is received with the expected value.
         let response_payload = read_response_payload(&mut client);
-        let expected = expected_response_bytes(&codec::GetResponse {
-            request_id: 1,
-            error_status: codec::ErrorStatus::NoError,
-            error_index: 0,
-            varbinds: vec![codec::Varbind {
-                oid: oid.clone(),
-                value: codec::VarbindValue::Value(codec::Value::Integer32(42)),
-            }],
-        });
+        let response = decode_v3_response_payload(&response_payload);
+        assert_eq!(response.request_id, 1);
+        assert_eq!(response.error_status, codec::ErrorStatus::NoError);
+        assert_eq!(response.varbinds.len(), 1);
+        assert_eq!(response.varbinds[0].oid, oid);
         assert_eq!(
-            response_payload, expected,
-            "response payload must match expected GetResponse BER encoding"
+            response.varbinds[0].value,
+            codec::VarbindValue::Value(codec::Value::Integer32(42))
         );
 
         sender.send(Command::Shutdown).unwrap();
@@ -1009,8 +1132,10 @@ mod tests {
 
     #[test]
     fn given_partial_frame_when_split_across_reads_then_response_is_received() {
+        // Verifies: REQ-0068
         // Given: a running event loop with a known OID in the MIB.
-        let (event_loop, bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let (event_loop, bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: codec::Oid = "1.3.6.1.2.1.1.2.0".parse().unwrap();
@@ -1037,7 +1162,7 @@ mod tests {
         // When: the framed PDU is sent in two separate writes to simulate
         // TCP segmentation where a frame arrives split across packets.
         let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
-        let framed = framed_get_request(2, &oid);
+        let framed = framed_get_request(2, 2, &oid);
         let midpoint = framed.len() / 2;
         client
             .write_all(&framed[..midpoint])
@@ -1051,18 +1176,11 @@ mod tests {
 
         // Then: a complete response is received despite the split delivery.
         let response_payload = read_response_payload(&mut client);
-        let expected = expected_response_bytes(&codec::GetResponse {
-            request_id: 2,
-            error_status: codec::ErrorStatus::NoError,
-            error_index: 0,
-            varbinds: vec![codec::Varbind {
-                oid: oid.clone(),
-                value: codec::VarbindValue::Value(codec::Value::Integer32(7)),
-            }],
-        });
+        let response = decode_v3_response_payload(&response_payload);
+        assert_eq!(response.request_id, 2);
         assert_eq!(
-            response_payload, expected,
-            "split-delivery response payload must match expected GetResponse BER encoding"
+            response.varbinds[0].value,
+            codec::VarbindValue::Value(codec::Value::Integer32(7))
         );
 
         sender.send(Command::Shutdown).unwrap();
@@ -1074,8 +1192,10 @@ mod tests {
 
     #[test]
     fn given_invalid_pdu_bytes_when_received_then_connection_stays_open() {
+        // Verifies: REQ-0073
         // Given: a running event loop.
-        let (event_loop, bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let (event_loop, bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: codec::Oid = "1.3.6.1.2.1.1.3.0".parse().unwrap();
@@ -1109,23 +1229,16 @@ mod tests {
             .write_all(&framed_garbage)
             .expect("garbage write must succeed");
 
-        // Then: a valid GetRequest sent on the same connection still receives a response.
+        // Then: a valid SNMPv3 GetRequest sent on the same connection still receives a response.
         client
-            .write_all(&framed_get_request(3, &oid))
+            .write_all(&framed_get_request(3, 3, &oid))
             .expect("valid request write must succeed");
         let response_payload = read_response_payload(&mut client);
-        let expected = expected_response_bytes(&codec::GetResponse {
-            request_id: 3,
-            error_status: codec::ErrorStatus::NoError,
-            error_index: 0,
-            varbinds: vec![codec::Varbind {
-                oid: oid.clone(),
-                value: codec::VarbindValue::Value(codec::Value::Integer32(99)),
-            }],
-        });
+        let response = decode_v3_response_payload(&response_payload);
+        assert_eq!(response.request_id, 3);
         assert_eq!(
-            response_payload, expected,
-            "valid request after garbage must still receive a correct response"
+            response.varbinds[0].value,
+            codec::VarbindValue::Value(codec::Value::Integer32(99))
         );
 
         sender.send(Command::Shutdown).unwrap();
@@ -1137,8 +1250,10 @@ mod tests {
 
     #[test]
     fn given_zero_length_frame_when_received_then_connection_stays_open() {
+        // Verifies: REQ-0073
         // Given: a running event loop with a known OID in the MIB.
-        let (event_loop, bound_addr, sender) = EventLoop::new(any_loopback()).unwrap();
+        let (event_loop, bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: codec::Oid = "1.3.6.1.2.1.1.4.0".parse().unwrap();
@@ -1169,24 +1284,148 @@ mod tests {
             .write_all(&[0u8, 0, 0, 0])
             .expect("zero-length frame write must succeed");
 
-        // Then: a valid GetRequest sent on the same connection still receives a response,
+        // Then: a valid SNMPv3 GetRequest sent on the same connection still receives a response,
         // confirming the connection survived the zero-length frame.
         client
-            .write_all(&framed_get_request(4, &oid))
+            .write_all(&framed_get_request(4, 4, &oid))
             .expect("valid request write must succeed");
         let response_payload = read_response_payload(&mut client);
-        let expected = expected_response_bytes(&codec::GetResponse {
-            request_id: 4,
-            error_status: codec::ErrorStatus::NoError,
-            error_index: 0,
+        let response = decode_v3_response_payload(&response_payload);
+        assert_eq!(response.request_id, 4);
+        assert_eq!(
+            response.varbinds[0].value,
+            codec::VarbindValue::Value(codec::Value::Integer32(55))
+        );
+
+        sender.send(Command::Shutdown).unwrap();
+        loop_handle
+            .join()
+            .expect("event loop thread panicked")
+            .unwrap();
+    }
+
+    #[test]
+    fn given_wrong_engine_id_when_request_sent_then_discarded_silently() {
+        // Verifies: REQ-0057
+        // Given: a running event loop with a known OID in the MIB.
+        let (event_loop, bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+        let loop_handle = thread::spawn(move || event_loop.run());
+
+        let oid: codec::Oid = "1.3.6.1.2.1.1.5.0".parse().unwrap();
+        sender
+            .send(Command::SetValue {
+                oid: oid.clone(),
+                value: codec::Value::Integer32(77),
+            })
+            .unwrap();
+
+        let (confirm_tx, confirm_rx) = std::sync::mpsc::sync_channel(1);
+        sender
+            .send(Command::QueryValue {
+                oid: oid.clone(),
+                reply: confirm_tx,
+            })
+            .unwrap();
+        confirm_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("timed out waiting for SetValue confirmation");
+
+        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+
+        // When: a request with the wrong engine ID is sent, it should be discarded.
+        let wrong_engine_id = b"\x80\x00\x1f\x88\x04wrong";
+        let pdu = codec::GetRequest {
+            request_id: 10,
             varbinds: vec![codec::Varbind {
                 oid: oid.clone(),
-                value: codec::VarbindValue::Value(codec::Value::Integer32(55)),
+                value: codec::VarbindValue::Unspecified,
             }],
-        });
+        };
+        let wrong_encoded = codec::encode_v3_get_request(10, wrong_engine_id, b"", &pdu)
+            .expect("encode must succeed");
+        let framed_wrong = frame_response(&wrong_encoded);
+        client.write_all(&framed_wrong).expect("write must succeed");
+
+        // Then: immediately sending a correct request gets a response,
+        // confirming the wrong-engine request was silently discarded.
+        client
+            .write_all(&framed_get_request(11, 11, &oid))
+            .expect("valid request write must succeed");
+        let response_payload = read_response_payload(&mut client);
+        let response = decode_v3_response_payload(&response_payload);
+        assert_eq!(response.request_id, 11);
         assert_eq!(
-            response_payload, expected,
-            "valid request after zero-length frame must still receive a correct response"
+            response.varbinds[0].value,
+            codec::VarbindValue::Value(codec::Value::Integer32(77))
+        );
+
+        sender.send(Command::Shutdown).unwrap();
+        loop_handle
+            .join()
+            .expect("event loop thread panicked")
+            .unwrap();
+    }
+
+    #[test]
+    fn given_non_empty_context_name_when_request_sent_then_discarded_silently() {
+        // Verifies: REQ-0058
+        // A request with a non-empty context name must be silently discarded;
+        // the connection must stay open so a subsequent valid request succeeds.
+
+        // Given: a running event loop with a known OID in the MIB.
+        let (event_loop, bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+        let loop_handle = thread::spawn(move || event_loop.run());
+
+        let oid: codec::Oid = "1.3.6.1.2.1.1.6.0".parse().unwrap();
+        sender
+            .send(Command::SetValue {
+                oid: oid.clone(),
+                value: codec::Value::Integer32(88),
+            })
+            .unwrap();
+
+        let (confirm_tx, confirm_rx) = std::sync::mpsc::sync_channel(1);
+        sender
+            .send(Command::QueryValue {
+                oid: oid.clone(),
+                reply: confirm_tx,
+            })
+            .unwrap();
+        confirm_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("timed out waiting for SetValue confirmation");
+
+        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+
+        // When: a request with a non-empty context name is sent, it should be discarded.
+        let pdu = codec::GetRequest {
+            request_id: 20,
+            varbinds: vec![codec::Varbind {
+                oid: oid.clone(),
+                value: codec::VarbindValue::Unspecified,
+            }],
+        };
+        let bad_context_encoded =
+            codec::encode_v3_get_request(20, TEST_ENGINE_ID, b"badcontext", &pdu)
+                .expect("encode must succeed");
+        let framed_bad_context = frame_response(&bad_context_encoded);
+        client
+            .write_all(&framed_bad_context)
+            .expect("write must succeed");
+
+        // Then: no response arrives for the bad-context request (connection stays open).
+        // Confirm by sending a valid request on the same connection and receiving a response.
+        client
+            .write_all(&framed_get_request(21, 21, &oid))
+            .expect("valid request write must succeed");
+        let response_payload = read_response_payload(&mut client);
+        let response = decode_v3_response_payload(&response_payload);
+        assert_eq!(response.request_id, 21);
+        assert_eq!(
+            response.varbinds[0].value,
+            codec::VarbindValue::Value(codec::Value::Integer32(88))
         );
 
         sender.send(Command::Shutdown).unwrap();

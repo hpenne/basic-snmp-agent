@@ -17,11 +17,11 @@ mod pdu;
 mod value;
 
 pub use oid::{Oid, OidErrorCategory, ParseOidError};
-#[cfg(feature = "test-support")]
-pub use pdu::encode_get_request;
 pub use pdu::{
     DecodeError, DecodeErrorKind, EncodeError, ErrorStatus, GetBulkRequest, GetNextRequest,
-    GetRequest, GetResponse, InboundPdu, SetRequest, Varbind, VarbindValue, WireTrapPdu,
-    decode_pdu, encode_response, encode_trap,
+    GetRequest, GetResponse, InboundPdu, SetRequest, V3InboundMessage, Varbind, VarbindValue,
+    WireTrapPdu, decode_pdu, decode_v3_message, encode_response, encode_trap, encode_v3_response,
 };
+#[cfg(feature = "test-support")]
+pub use pdu::{encode_get_request, encode_v3_get_request};
 pub use value::Value;

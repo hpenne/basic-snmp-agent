@@ -188,12 +188,16 @@ impl Agent {
 /// ```
 pub struct AgentBuilder {
     listen_addr: SocketAddr,
+    /// `SNMPv3` engine ID for this agent instance. Inbound requests with a
+    /// different engine ID are silently discarded (REQ-0057).
+    engine_id: Vec<u8>,
 }
 
 impl AgentBuilder {
     /// Create a builder with default settings.
     ///
     /// Default listen address: `0.0.0.0:10161` (IANA-assigned SNMP-over-TLS port).
+    /// Default engine ID: enterprise-format OID-based identifier (REQ-0055).
     ///
     /// # Panics
     ///
@@ -204,6 +208,9 @@ impl AgentBuilder {
             listen_addr: "0.0.0.0:10161"
                 .parse()
                 .expect("default listen address is valid"),
+            // Default engine ID: enterprise OID format (0x80 = enterprise,
+            // 0x00 0x1f 0x88 = enterprise number 8072, 0x04 = text format).
+            engine_id: b"\x80\x00\x1f\x88\x04basic-snmp-agent".to_vec(),
         }
     }
 
@@ -216,26 +223,45 @@ impl AgentBuilder {
         self
     }
 
+    /// Override the `SNMPv3` engine ID.
+    ///
+    /// The engine ID identifies this agent uniquely in the network. Inbound
+    /// `SNMPv3` messages with a different engine ID are silently discarded.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0055
+    #[must_use]
+    pub fn engine_id(mut self, engine_id: Vec<u8>) -> Self {
+        self.engine_id = engine_id;
+        self
+    }
+
     /// Construct and start the agent.
     ///
     /// Binds the TCP listener on [`listen_addr`][`Self::listen_addr`], creates
     /// the UDP socket for outbound traps, and spawns the event loop thread.
     ///
     /// # Requirements
-    /// Implements: REQ-0037
+    /// Implements: REQ-0037, REQ-0055
     ///
     /// # Errors
     ///
-    /// Returns an [`AgentError`] if the TCP listener cannot be bound
-    /// ([`AgentError::Bind`]), the event loop infrastructure cannot be
-    /// initialised ([`AgentError::Socket`]), the UDP trap socket cannot be
-    /// created ([`AgentError::UdpSocket`]), or the event loop thread cannot be
-    /// spawned ([`AgentError::Spawn`]).
+    /// Returns an [`AgentError`] if the engine ID length is outside the RFC 3411 §5
+    /// range of 5–32 octets ([`AgentError::InvalidEngineId`]), the TCP listener
+    /// cannot be bound ([`AgentError::Bind`]), the event loop infrastructure cannot
+    /// be initialised ([`AgentError::Socket`]), the UDP trap socket cannot be created
+    /// ([`AgentError::UdpSocket`]), or the event loop thread cannot be spawned
+    /// ([`AgentError::Spawn`]).
     pub fn build(self) -> Result<Agent, AgentError> {
+        // RFC 3411 §5: SnmpEngineID must be between 5 and 32 octets inclusive.
+        if self.engine_id.len() < 5 || self.engine_id.len() > 32 {
+            return Err(AgentError::InvalidEngineId);
+        }
+
         let listen_addr = self.listen_addr;
 
-        let (event_loop, _bound_addr, command_sender) =
-            EventLoop::new(listen_addr).map_err(|e| match e {
+        let (event_loop, _bound_addr, command_sender) = EventLoop::new(listen_addr, self.engine_id)
+            .map_err(|e| match e {
                 EventLoopError::Bind { addr, source } => AgentError::Bind { addr, source },
                 EventLoopError::Pipe(source) | EventLoopError::Registration(source) => {
                     AgentError::Socket(source)
@@ -311,5 +337,48 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].destination, dest);
         assert!(results[0].outcome.is_ok());
+    }
+
+    #[test]
+    fn given_custom_engine_id_when_build_then_agent_starts() {
+        // Verifies: REQ-0055
+        let custom_engine_id = b"\x80\x00\x1f\x88\x04custom".to_vec();
+        let agent = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .engine_id(custom_engine_id)
+            .build();
+
+        assert!(
+            agent.is_ok(),
+            "expected agent to build with custom engine ID"
+        );
+    }
+
+    #[test]
+    fn given_engine_id_too_short_when_build_then_invalid_engine_id_error() {
+        // Verifies: REQ-0055
+        let too_short = b"ab".to_vec(); // 2 bytes, below the 5-byte minimum
+        let result = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .engine_id(too_short)
+            .build();
+        assert!(
+            matches!(result, Err(AgentError::InvalidEngineId)),
+            "expected InvalidEngineId error for too-short engine ID"
+        );
+    }
+
+    #[test]
+    fn given_engine_id_too_long_when_build_then_invalid_engine_id_error() {
+        // Verifies: REQ-0055
+        let too_long = vec![0u8; 33]; // 33 bytes, above the 32-byte maximum
+        let result = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .engine_id(too_long)
+            .build();
+        assert!(
+            matches!(result, Err(AgentError::InvalidEngineId)),
+            "expected InvalidEngineId error for too-long engine ID"
+        );
     }
 }

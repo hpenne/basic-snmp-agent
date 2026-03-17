@@ -1,0 +1,8 @@
+[package]
+name = "test-agent-mib"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+basic-snmp-agent = { path = "../../" }

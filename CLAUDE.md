@@ -79,6 +79,7 @@ The project currently has a single binary entry point at `src/main.rs`. As SNMP 
 ### Requirement traceability
 
 Every Rust module, struct, and function must be annotated with the requirements it implements. Every unit test must be annotated with the requirements it verifies.
+*DO NOT* put such annotations on test utilities (like under tests/test-agent), only on tests and production code.
 
 **Public items** — add a `# Requirements` section to the doc comment:
 
@@ -123,6 +124,12 @@ Use `grep -r 'Implements: REQ-'` to find all implementation sites, `grep -r 'Ver
 - Order code so that a reader starting from the top understands the high-level intent, with details filled in below.
 - Keep Related Things Together: Group related structs, enums, and trait implementations, rather than splitting them arbitrarily across the file.
 - Avoid using "cfg" to write code that is only used for test support. Test using the existing public APIs instead.
+
+## Tool preferences
+- Prefer native file editing tools (Edit, MultiEdit) over shell scripts for text manipulation
+- Do not use Python or sed/awk one-liners for file edits; use the Edit tool directly
+- For complex find-replace across multiple files, prefer `sd` over Python regex or sed
+- Do not use Python for text manipulation tasks that `sd` or the Edit tool can handle
 
 ## Testing
 
