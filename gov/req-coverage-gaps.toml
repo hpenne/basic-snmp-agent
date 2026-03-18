@@ -12,3 +12,18 @@ rationale = "The empty-destinations error is returned before any PDU is sent. A 
 req     = "REQ-0046"
 missing = ["rust_test", "behave_test"]
 rationale = "Absence/negative constraint: the non-existence of a send_inform API is enforced by the type system at compile time. No runtime test can verify the absence of a method; the constraint is satisfied by the public API having no such function."
+
+[[gap]]
+req     = "REQ-0028"
+missing = ["behave_test"]
+rationale = "Negative max-repetitions values are rejected at BER decode level (rasn cannot store a negative INTEGER in a u32 field). Net-snmp CLI tools cannot send negative max-repetitions, so a Behave system test is not feasible; the behaviour is covered by a unit test."
+
+[[gap]]
+req     = "REQ-0033"
+missing = ["code", "rust_test", "behave_test"]
+rationale = "TLS transport (RFC-0006) is not yet implemented. REQ-0033 requires silently discarding PDUs from unverified TLS peers; that path does not exist until the TLS layer is built. Coverage will be added in the RFC-0006 implementation work item."
+
+[[gap]]
+req     = "REQ-0059"
+missing = ["code", "rust_test", "behave_test"]
+rationale = "REQ-0059 is a SHOULD: the agent SHOULD respond with a Report PDU incrementing snmpUnknownContexts. The current implementation silently discards requests with a non-empty context name (the required minimum). The Report PDU enhancement is deferred and will be tracked separately."

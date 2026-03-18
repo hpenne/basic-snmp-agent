@@ -955,10 +955,19 @@ fn pdus_to_inbound_pdu(pdus: Pdus) -> Result<InboundPdu, DecodeError> {
             }))
         }
         Pdus::GetBulkRequest(RasnGetBulkRequest(bulk)) => {
+            // RFC 3416 §4.2.3 (REQ-0028): if the wire INTEGER for max-repetitions
+            // is negative, treat it as zero.  BER INTEGER is signed, but rasn
+            // decodes into u32 by reinterpreting the sign bit, so a negative
+            // value arrives here as a number greater than i32::MAX.
+            let max_repetitions = if bulk.max_repetitions > i32::MAX as u32 {
+                0
+            } else {
+                bulk.max_repetitions
+            };
             Ok(InboundPdu::GetBulkRequest(GetBulkRequest {
                 request_id: bulk.request_id,
                 non_repeaters: bulk.non_repeaters,
-                max_repetitions: bulk.max_repetitions,
+                max_repetitions,
                 varbinds: varbinds_from_rasn(bulk.variable_bindings)?,
             }))
         }
@@ -1770,6 +1779,62 @@ mod tests {
         let decode_result = decode_v3_message(&[0xFF, 0xFE, 0xFD]);
         assert!(decode_result.is_err());
         assert_eq!(decode_result.unwrap_err().kind(), &DecodeErrorKind::Ber);
+    }
+
+    #[test]
+    fn given_getbulk_with_out_of_range_max_repetitions_when_decode_v3_then_treated_as_zero() {
+        // Verifies: REQ-0028
+        // max_repetitions values outside the SNMP protocol range (0..2147483647
+        // per RFC 3416 §4.2.3) must be treated as zero.  Such values arise from
+        // negative BER INTEGER wire values whose sign bit rasn reinterprets as a
+        // magnitude bit, yielding a u32 value greater than i32::MAX.
+        use rasn_snmp::v2::{BulkPdu, GetBulkRequest as RasnGetBulkRequest, VarBind, VarBindValue};
+
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(
+            std::borrow::Cow::Owned(oid.as_slice().to_vec()),
+        );
+
+        // Encode a GetBulkRequest with max_repetitions = 2^31 (one past i32::MAX).
+        // This value is outside the protocol range 0..2147483647 and must be
+        // treated as zero by the agent.
+        let rasn_pdu = RasnGetBulkRequest(BulkPdu {
+            request_id: 42,
+            non_repeaters: 0,
+            max_repetitions: i32::MAX as u32 + 1,  // 2147483648
+            variable_bindings: vec![VarBind { name: rasn_oid, value: VarBindValue::Unspecified }],
+        });
+        let scoped_pdu = ScopedPdu {
+            engine_id: engine_id.to_vec().into(),
+            name: vec![].into(),
+            data: Pdus::GetBulkRequest(rasn_pdu),
+        };
+        let usm_params = empty_usm_security_parameters();
+        let security_params = rasn::ber::encode(&usm_params).unwrap();
+        let v3_msg = V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 5.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x04]),
+                security_model: 3.into(),
+            },
+            security_parameters: security_params.into(),
+            scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
+        };
+        let encoded = rasn::ber::encode(&v3_msg).unwrap();
+
+        let result = decode_v3_message(&encoded).expect("message must decode");
+        match result.pdu {
+            InboundPdu::GetBulkRequest(bulk) => {
+                assert_eq!(
+                    bulk.max_repetitions, 0,
+                    "out-of-range max_repetitions must be clamped to 0"
+                );
+            }
+            other => panic!("expected GetBulkRequest, got {other:?}"),
+        }
     }
 
     // ── encode_v3_response round-trip ─────────────────────────────────────────
