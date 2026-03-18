@@ -5,11 +5,11 @@ test: clippy rust-test python-test behave-test
 
 # Lint with pedantic Clippy warnings.
 clippy:
-	cargo clippy -- -W clippy::pedantic
+	cargo clippy -- -W clippy::pedantic -D warnings
 
 # Rust unit tests and doc tests.
 rust-test:
-	cargo test
+	cargo test --workspace
 	cargo test --doc
 
 # Python unit tests for the tooling scripts.

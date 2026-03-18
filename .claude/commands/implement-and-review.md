@@ -3,8 +3,8 @@ Review and iterate on the implementation of: $ARGUMENTS
 Follow this loop (max 3 iterations):
 1. Use the **implementer** subagent to write the code and tests. **Capture its agent ID** — you will resume it in later steps instead of launching a new instance.
 2. Run the following to verify the build is clean before proceeding:
-   - `cargo clippy -- -W clippy::pedantic` (must produce no warnings or errors)
-   - `cargo test` (all unit and integration tests)
+   - `cargo clippy -- -W clippy::pedantic -D warnings` (must produce no warnings or errors)
+   - `cargo test --workspace` (all unit and integration tests)
    - `cargo test --doc` (doc tests)
    If any fail, **resume** the implementer (using its agent ID) and pass only the failures — do not repeat the original task description.
 3. Use the **reviewer** subagent (opus) to review the result. For new or untracked files, tell the reviewer which files to read. For changes to tracked files, pass the `git diff` output.

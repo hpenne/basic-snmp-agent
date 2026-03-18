@@ -491,9 +491,19 @@ impl EventLoop {
                 break;
             }
 
-            // Incomplete length field; wait for more data on the next read event.
-            let Some((content_length, length_field_bytes)) = parse_ber_length(&conn.read_buf[1..]) else {
-                break;
+            // Distinguish incomplete data (wait for more) from invalid encoding (close).
+            let (content_length, length_field_bytes) = match parse_ber_length(&conn.read_buf[1..]) {
+                Ok(Some(parsed)) => parsed,
+                Ok(None) => break,
+                Err(()) => {
+                    // Invalid BER length encoding (e.g., indefinite-length form 0x80).
+                    // The stream is unrecoverable; close the connection.
+                    eprintln!(
+                        "[event_loop] invalid BER length encoding on token {token:?}, closing"
+                    );
+                    closed = true;
+                    break;
+                }
             };
 
             let total_frame_bytes = 1 + length_field_bytes + content_length;
@@ -592,6 +602,7 @@ impl EventLoop {
             codec::InboundPdu::SetRequest(req) => request::handle_set(&req),
         };
 
+        // context_name is always empty here: non-empty values were rejected above.
         let encoded_response = match codec::encode_v3_response(
             v3_msg.msg_id,
             engine_id,
@@ -689,37 +700,40 @@ fn drain_pipe(fd: RawFd) {
 
 /// Parse a BER length field starting at `buf[0]`.
 ///
-/// Returns `Some((content_length, length_field_bytes))` when enough bytes are
-/// available, or `None` when the buffer is incomplete or the encoding is
-/// unsupported (indefinite-length or more than 4 length octets).
+/// Returns:
+/// - `Ok(Some((content_length, length_field_bytes)))` — parsed successfully.
+/// - `Ok(None)` — buffer is incomplete; caller should wait for more data.
+/// - `Err(())` — invalid encoding (indefinite-length form `0x80`, or more than
+///   4 length octets); caller should close the connection.
 ///
 /// BER length encoding (X.690 §8.1.3):
 /// - Short form: `buf[0]` bit 7 is 0; length = `buf[0]` (0–127); field is 1 byte.
 /// - Long form: `buf[0]` bit 7 is 1; low 7 bits = number of subsequent octets N;
 ///   content length is encoded in the next N octets (big-endian).
 // Implements: REQ-0071
-fn parse_ber_length(buf: &[u8]) -> Option<(usize, usize)> {
+fn parse_ber_length(buf: &[u8]) -> Result<Option<(usize, usize)>, ()> {
     if buf.is_empty() {
-        return None;
+        return Ok(None);
     }
     if buf[0] & 0x80 == 0 {
         // Short form: the byte itself is the length.
-        return Some((buf[0] as usize, 1));
+        return Ok(Some((buf[0] as usize, 1)));
     }
     let num_octets = (buf[0] & 0x7f) as usize;
     if num_octets == 0 || num_octets > 4 {
-        // Indefinite-length (0x80) or absurdly large (>4 bytes): not supported.
-        return None;
+        // Indefinite-length (0x80) or absurdly large (>4 bytes) is a protocol
+        // error; the connection cannot recover.
+        return Err(());
     }
     if buf.len() < 1 + num_octets {
         // Incomplete length field; caller should wait for more data.
-        return None;
+        return Ok(None);
     }
     let mut content_length: usize = 0;
     for &byte in &buf[1..=num_octets] {
         content_length = (content_length << 8) | (byte as usize);
     }
-    Some((content_length, 1 + num_octets))
+    Ok(Some((content_length, 1 + num_octets)))
 }
 
 #[cfg(test)]
@@ -1029,47 +1043,47 @@ mod tests {
     fn given_short_form_length_when_parsed_then_returns_correct_length_and_field_size() {
         // Verifies: REQ-0071
         // Short form: single byte, bit 7 clear.
-        assert_eq!(parse_ber_length(&[0x00]), Some((0, 1)));
-        assert_eq!(parse_ber_length(&[0x7f]), Some((127, 1)));
-        assert_eq!(parse_ber_length(&[0x05, 0xAA, 0xBB]), Some((5, 1)));
+        assert_eq!(parse_ber_length(&[0x00]), Ok(Some((0, 1))));
+        assert_eq!(parse_ber_length(&[0x7f]), Ok(Some((127, 1))));
+        assert_eq!(parse_ber_length(&[0x05, 0xAA, 0xBB]), Ok(Some((5, 1))));
     }
 
     #[test]
     fn given_long_form_one_octet_when_parsed_then_returns_correct_length_and_field_size() {
         // Verifies: REQ-0071
         // Long form: 0x81 means one subsequent octet carries the length.
-        assert_eq!(parse_ber_length(&[0x81, 0x80]), Some((128, 2)));
-        assert_eq!(parse_ber_length(&[0x81, 0xFF]), Some((255, 2)));
+        assert_eq!(parse_ber_length(&[0x81, 0x80]), Ok(Some((128, 2))));
+        assert_eq!(parse_ber_length(&[0x81, 0xFF]), Ok(Some((255, 2))));
     }
 
     #[test]
     fn given_long_form_two_octets_when_parsed_then_returns_correct_length_and_field_size() {
         // Verifies: REQ-0071
         // Long form: 0x82 means two subsequent octets carry the length.
-        assert_eq!(parse_ber_length(&[0x82, 0x01, 0x00]), Some((256, 3)));
-        assert_eq!(parse_ber_length(&[0x82, 0xFF, 0xFF]), Some((65535, 3)));
+        assert_eq!(parse_ber_length(&[0x82, 0x01, 0x00]), Ok(Some((256, 3))));
+        assert_eq!(parse_ber_length(&[0x82, 0xFF, 0xFF]), Ok(Some((65535, 3))));
     }
 
     #[test]
     fn given_incomplete_buffer_when_parsed_then_returns_none() {
         // Verifies: REQ-0071
-        assert_eq!(parse_ber_length(&[]), None);
+        assert_eq!(parse_ber_length(&[]), Ok(None));
         // Long form but not enough length octets.
-        assert_eq!(parse_ber_length(&[0x82, 0x01]), None);
+        assert_eq!(parse_ber_length(&[0x82, 0x01]), Ok(None));
     }
 
     #[test]
-    fn given_indefinite_length_when_parsed_then_returns_none() {
+    fn given_indefinite_length_when_parsed_then_returns_error() {
         // Verifies: REQ-0071
-        // 0x80 = indefinite-length form; not supported.
-        assert_eq!(parse_ber_length(&[0x80]), None);
+        // 0x80 = indefinite-length form; irrecoverable protocol error.
+        assert_eq!(parse_ber_length(&[0x80]), Err(()));
     }
 
     #[test]
-    fn given_oversized_length_field_when_parsed_then_returns_none() {
+    fn given_oversized_length_field_when_parsed_then_returns_error() {
         // Verifies: REQ-0071
-        // 0x85 = 5 subsequent octets; more than 4 is not supported.
-        assert_eq!(parse_ber_length(&[0x85, 0, 0, 0, 0, 1]), None);
+        // 0x85 = 5 subsequent octets; more than 4 is not supported, irrecoverable.
+        assert_eq!(parse_ber_length(&[0x85, 0, 0, 0, 0, 1]), Err(()));
     }
 
     // ── RFC 3430 dispatch tests ───────────────────────────────────────────────
@@ -1090,29 +1104,28 @@ mod tests {
 
     /// Read a complete RFC 3430 BER frame (tag + length + content) from the stream.
     fn read_framed_response(stream: &mut std::net::TcpStream) -> Vec<u8> {
-        // Read tag byte and first length byte together.
-        let header = read_exact_with_timeout(stream, 2);
-        assert_eq!(header[0], 0x30, "expected SEQUENCE tag 0x30 in response");
+        let tag = read_exact_with_timeout(stream, 1);
+        assert_eq!(tag[0], 0x30, "expected SEQUENCE tag 0x30 in response");
 
-        let (content_len, extra_len_bytes) = if header[1] & 0x80 == 0 {
-            // Short form: no extra length octets.
-            (header[1] as usize, vec![])
-        } else {
-            let num_extra = (header[1] & 0x7f) as usize;
-            let extra = read_exact_with_timeout(stream, num_extra);
-            let mut len = 0usize;
-            for &b in &extra {
-                len = (len << 8) | b as usize;
+        // Reuse parse_ber_length so the test helper stays consistent with
+        // the production framing logic and cannot silently diverge.
+        let mut length_buf = Vec::with_capacity(5);
+        let (content_len, length_field_bytes) = loop {
+            let next_byte = read_exact_with_timeout(stream, 1);
+            length_buf.push(next_byte[0]);
+            match parse_ber_length(&length_buf) {
+                Ok(Some(parsed)) => break parsed,
+                Ok(None) => continue,
+                Err(()) => panic!("invalid BER length encoding in response from event loop"),
             }
-            (len, extra)
         };
 
         let content = read_exact_with_timeout(stream, content_len);
 
-        // Reconstruct the full BER frame so decode_v3_response_payload can parse it.
-        let mut frame = Vec::with_capacity(2 + extra_len_bytes.len() + content_len);
-        frame.extend_from_slice(&header);
-        frame.extend_from_slice(&extra_len_bytes);
+        // Reconstruct the complete BER frame for decode_v3_response_payload.
+        let mut frame = Vec::with_capacity(1 + length_field_bytes + content_len);
+        frame.extend_from_slice(&tag);
+        frame.extend_from_slice(&length_buf[..length_field_bytes]);
         frame.extend_from_slice(&content);
         frame
     }
@@ -1524,6 +1537,43 @@ mod tests {
         assert_eq!(
             response.varbinds[0].value,
             codec::VarbindValue::Value(codec::Value::Integer32(88))
+        );
+
+        sender.send(Command::Shutdown).unwrap();
+        loop_handle
+            .join()
+            .expect("event loop thread panicked")
+            .unwrap();
+    }
+
+    #[test]
+    fn given_indefinite_length_ber_frame_when_received_then_connection_is_closed() {
+        // Verifies: REQ-0071
+        // A client sending 0x30 0x80 (SEQUENCE + indefinite-length form) must
+        // cause the connection to be closed, not stalled indefinitely.
+
+        // Given: a running event loop.
+        let (event_loop, bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+        let loop_handle = thread::spawn(move || event_loop.run());
+
+        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+
+        // When: a frame with indefinite-length encoding is sent.
+        // 0x30 = SEQUENCE tag, 0x80 = indefinite-length (unsupported).
+        client
+            .write_all(&[0x30u8, 0x80])
+            .expect("write must succeed");
+
+        // Then: the server closes the connection; reading must return 0 bytes (EOF).
+        let mut read_buf = [0u8; 1];
+        let bytes_read = client.read(&mut read_buf).expect("read must not error");
+        assert_eq!(
+            bytes_read, 0,
+            "server must close connection on invalid BER length"
         );
 
         sender.send(Command::Shutdown).unwrap();
