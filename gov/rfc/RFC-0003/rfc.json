@@ -3,12 +3,12 @@
   "title": "MIB Store",
   "version": "0.1.0",
   "status": "normative",
-  "phase": "impl",
+  "phase": "test",
   "owners": [
     "@Helge Penne"
   ],
   "created": "2026-03-16",
-  "updated": "2026-03-16",
+  "updated": "2026-03-19",
   "sections": [
     {
       "title": "Summary"
