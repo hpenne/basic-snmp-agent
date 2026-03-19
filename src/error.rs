@@ -137,7 +137,7 @@ mod tests {
     fn agent_error_invalid_engine_id_display_mentions_rfc() {
         let invalid_error = AgentError::InvalidEngineId;
         let msg = invalid_error.to_string();
-        assert!(msg.contains("5") && msg.contains("32"), "{msg}");
+        assert!(msg.contains('5') && msg.contains("32"), "{msg}");
     }
 
     // ── AgentError source ────────────────────────────────────────────────

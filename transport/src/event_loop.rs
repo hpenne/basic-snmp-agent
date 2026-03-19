@@ -1089,7 +1089,7 @@ mod tests {
 
     // ── RFC 3430 dispatch tests ───────────────────────────────────────────────
 
-    /// Encode a GetRequest as a raw BER SNMPv3 frame ready for TCP send (RFC 3430).
+    /// Encode a `GetRequest` as a raw BER `SNMPv3` frame ready for TCP send (RFC 3430).
     fn framed_get_request(msg_id: i32, request_id: i32, oid: &codec::Oid) -> Vec<u8> {
         let pdu = codec::GetRequest {
             request_id,
@@ -1116,7 +1116,7 @@ mod tests {
             length_buf.push(next_byte[0]);
             match parse_ber_length(&length_buf) {
                 Ok(Some(parsed)) => break parsed,
-                Ok(None) => continue,
+                Ok(None) => {}
                 Err(()) => panic!("invalid BER length encoding in response from event loop"),
             }
         };
@@ -1131,8 +1131,8 @@ mod tests {
         frame
     }
 
-    /// Decode a raw BER response frame back into a `GetResponse` via the SNMPv3 path,
-    /// so we can assert on request_id and varbind values.
+    /// Decode a raw BER response frame back into a `GetResponse` via the `SNMPv3` path,
+    /// so we can assert on `request_id` and varbind values.
     fn decode_v3_response_payload(ber_frame: &[u8]) -> codec::GetResponse {
         use rasn_snmp::v3::{Message as V3Message, ScopedPduData};
         let v3_msg: V3Message = rasn::ber::decode(ber_frame).expect("must decode as V3Message");
@@ -1335,7 +1335,7 @@ mod tests {
         // BER frame parses correctly but the SNMP decode fails. The event loop
         // must discard the malformed PDU silently and keep the connection open.
         let garbage_content: &[u8] = &[0xFF, 0xFE, 0xFD];
-        let mut garbage_frame = vec![0x30u8, garbage_content.len() as u8];
+        let mut garbage_frame = vec![0x30u8, u8::try_from(garbage_content.len()).unwrap()];
         garbage_frame.extend_from_slice(garbage_content);
         client
             .write_all(&garbage_frame)

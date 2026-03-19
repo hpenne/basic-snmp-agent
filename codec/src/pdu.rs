@@ -563,11 +563,11 @@ pub fn encode_get_request(pdu: &GetRequest) -> Result<Vec<u8>, EncodeError> {
 
 // ── encode_v3_get_request ─────────────────────────────────────────────────────
 
-/// BER-encode a [`GetRequest`] inside an SNMPv3 message envelope, for use in
-/// tests that send SNMPv3 frames to the agent over TCP.
+/// BER-encode a [`GetRequest`] inside an `SNMPv3` message envelope, for use in
+/// tests that send `SNMPv3` frames to the agent over TCP.
 ///
-/// This function is the SNMPv3 counterpart of [`encode_get_request`]. It wraps
-/// the GetRequest in a `ScopedPdu` and builds an SNMPv3 `Message` with
+/// This function is the `SNMPv3` counterpart of [`encode_get_request`]. It wraps
+/// the `GetRequest` in a `ScopedPdu` and builds an `SNMPv3` `Message` with
 /// USM noAuthNoPriv parameters.
 ///
 /// # Errors
@@ -1005,8 +1005,8 @@ mod tests {
         }
     }
 
-    /// Encode a GetBulkRequest inside a minimal V3 message, ready for `decode_v3_message`.
-    /// Used by the GetBulk clamping tests to avoid repeating the V3 framing boilerplate.
+    /// Encode a `GetBulkRequest` inside a minimal V3 message, ready for `decode_v3_message`.
+    /// Used by the `GetBulk` clamping tests to avoid repeating the V3 framing boilerplate.
     fn encode_getbulk_v3(non_repeaters: u32, max_repetitions: u32) -> Vec<u8> {
         use rasn_snmp::v2::{BulkPdu, GetBulkRequest as RasnGetBulkRequest, VarBind, VarBindValue};
 
@@ -1695,7 +1695,7 @@ mod tests {
 
     // ── decode_v3_message ─────────────────────────────────────────────────────
 
-    /// Build a minimal SNMPv3 message wrapping a GetRequest for tests.
+    /// Build a minimal `SNMPv3` message wrapping a `GetRequest` for tests.
     fn encode_test_v3_get_request(
         msg_id: i32,
         engine_id: &[u8],
