@@ -556,7 +556,7 @@ impl EventLoop {
     /// ready for writing — when the frame produces a response, or `None` when
     /// the frame should be silently discarded (invalid encoding, wrong engine
     /// ID, or unsupported context name).
-    // Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0068, REQ-0073
+    // Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073
     fn dispatch_snmpv3_frame(
         ber_frame: &[u8],
         token: Token,
@@ -854,6 +854,7 @@ mod tests {
 
     #[test]
     fn given_set_value_command_when_sent_then_mib_store_is_updated() {
+        // Verifies: REQ-0066
         // Given: a running event loop.
         let (event_loop, _bound_addr, sender) =
             EventLoop::new(any_loopback(), test_engine_id()).unwrap();
@@ -1187,7 +1188,7 @@ mod tests {
 
     #[test]
     fn given_get_request_when_sent_over_tcp_then_response_is_received() {
-        // Verifies: REQ-0021, REQ-0068, REQ-0069, REQ-0070, REQ-0071
+        // Verifies: REQ-0021, REQ-0066, REQ-0068, REQ-0069, REQ-0070, REQ-0071
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
             EventLoop::new(any_loopback(), test_engine_id()).unwrap();

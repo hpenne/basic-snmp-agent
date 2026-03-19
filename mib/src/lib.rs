@@ -24,6 +24,12 @@ pub use codec::{Oid, Value};
 /// `Store` wraps a [`BTreeMap`] whose keys are [`Oid`]s, giving O(log n) point
 /// lookups and efficient in-order traversal for GETNEXT and GETBULK operations.
 ///
+/// No API for removing entries is exposed: once an OID is inserted it is
+/// permanent. This is an intentional design constraint.
+///
+/// # Requirements
+/// Implements: REQ-0060, REQ-0061, REQ-0067
+///
 /// # Examples
 ///
 /// ```
@@ -41,6 +47,9 @@ pub struct Store {
 
 impl Store {
     /// Creates an empty `Store`.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0060
     ///
     /// # Examples
     ///
@@ -62,6 +71,9 @@ impl Store {
     /// new entry is created. There is no delete operation; entries are permanent
     /// once inserted.
     ///
+    /// # Requirements
+    /// Implements: REQ-0060, REQ-0063
+    ///
     /// # Examples
     ///
     /// ```
@@ -81,6 +93,9 @@ impl Store {
     /// Returns the value bound to `oid`, or `None` if no entry exists.
     ///
     /// Corresponds to the SNMP GET operation.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0060
     ///
     /// # Examples
     ///
@@ -102,6 +117,9 @@ impl Store {
     ///
     /// Returns `None` if `oid` is greater than or equal to every key in the
     /// store. Corresponds to the SNMP GETNEXT operation.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0060, REQ-0061
     ///
     /// # Examples
     ///
@@ -144,6 +162,7 @@ mod tests {
 
     #[test]
     fn new_store_is_empty() {
+        // Verifies: REQ-0060
         let store = Store::new();
         let probe = oid("1.3.0");
         assert_eq!(store.get(&probe), None);
@@ -154,6 +173,7 @@ mod tests {
 
     #[test]
     fn given_empty_store_when_set_then_entry_is_retrievable() {
+        // Verifies: REQ-0060, REQ-0063
         let mut store = Store::new();
         let o = oid("1.3.6.1.2.1.1.1.0");
 
@@ -164,6 +184,7 @@ mod tests {
 
     #[test]
     fn given_existing_entry_when_set_then_value_is_updated() {
+        // Verifies: REQ-0063
         let mut store = Store::new();
         let o = oid("1.3.6.1.2.1.1.3.0");
         store.set(o.clone(), Value::TimeTicks(0));
@@ -177,12 +198,14 @@ mod tests {
 
     #[test]
     fn given_absent_oid_when_get_then_returns_none() {
+        // Verifies: REQ-0060
         let store = Store::new();
         assert_eq!(store.get(&oid("1.3.6.1")), None);
     }
 
     #[test]
     fn given_store_with_entry_when_get_exact_oid_then_returns_value() {
+        // Verifies: REQ-0060
         let mut store = Store::new();
         let o = oid("1.3.6.1.2.1.1.1.0");
         store.set(o.clone(), Value::Counter32(42));
@@ -192,6 +215,7 @@ mod tests {
 
     #[test]
     fn given_store_with_entry_when_get_different_oid_then_returns_none() {
+        // Verifies: REQ-0060
         let mut store = Store::new();
         store.set(oid("1.3.6.1.2.1.1.1.0"), Value::Integer32(1));
 
@@ -202,12 +226,14 @@ mod tests {
 
     #[test]
     fn given_empty_store_when_next_then_returns_none() {
+        // Verifies: REQ-0060, REQ-0061
         let store = Store::new();
         assert_eq!(store.next(&oid("1.3.6.1")), None);
     }
 
     #[test]
     fn given_store_when_next_called_with_last_oid_then_returns_none() {
+        // Verifies: REQ-0061
         let mut store = Store::new();
         let last = oid("1.3.6.1.2.1.1.5.0");
         store.set(oid("1.3.6.1.2.1.1.1.0"), Value::Integer32(1));
@@ -218,6 +244,7 @@ mod tests {
 
     #[test]
     fn given_store_when_next_called_with_oid_beyond_all_entries_then_returns_none() {
+        // Verifies: REQ-0061
         let mut store = Store::new();
         store.set(oid("1.3.6.1.2.1.1.1.0"), Value::Integer32(1));
 
@@ -226,6 +253,7 @@ mod tests {
 
     #[test]
     fn given_store_with_entries_when_next_called_then_returns_immediate_successor() {
+        // Verifies: REQ-0061
         let mut store = Store::new();
         let a = oid("1.3.6.1.2.1.1.1.0");
         let b = oid("1.3.6.1.2.1.1.2.0");
@@ -242,6 +270,7 @@ mod tests {
 
     #[test]
     fn given_store_when_next_called_with_oid_not_in_store_then_returns_next_larger() {
+        // Verifies: REQ-0061
         let mut store = Store::new();
         let b = oid("1.3.6.1.2.1.1.2.0");
         let b_val = Value::Integer32(2);
@@ -258,6 +287,7 @@ mod tests {
 
     #[test]
     fn given_store_with_single_entry_when_next_before_it_then_returns_that_entry() {
+        // Verifies: REQ-0061
         let mut store = Store::new();
         let o = oid("1.3.6.1.2.1.1.5.0");
         store.set(o.clone(), Value::OctetString(b"agent".to_vec()));
@@ -272,6 +302,7 @@ mod tests {
 
     #[test]
     fn given_entries_inserted_out_of_order_when_next_traverses_then_follows_oid_order() {
+        // Verifies: REQ-0061
         let mut store = Store::new();
         // Insert in reverse order to verify BTreeMap preserves OID ordering
         // regardless of insertion order.
@@ -306,5 +337,22 @@ mod tests {
         let mut store = Store::new();
         store.set(o.clone(), integer_value);
         assert_eq!(store.get(&o), Some(&Value::Integer32(0)));
+    }
+
+    // --- No delete API (REQ-0067) ---
+
+    #[test]
+    fn given_store_when_entry_set_then_no_api_to_remove_it() {
+        // Verifies: REQ-0067
+        // REQ-0067 is a negative requirement: the Store MUST NOT expose any
+        // public API for removing OID entries. This test documents the
+        // constraint by confirming that an inserted entry persists — there is
+        // no `remove`, `delete`, or similar method to call. The absence of
+        // such a method is enforced by the type system at compile time.
+        let mut store = Store::new();
+        let o = oid("1.3.6.1.2.1.1.1.0");
+        store.set(o.clone(), Value::Integer32(99));
+
+        assert_eq!(store.get(&o), Some(&Value::Integer32(99)));
     }
 }

@@ -62,7 +62,7 @@ pub struct TrapPdu {
 /// Missing OIDs yield `NoSuchObject`; present OIDs yield their current value.
 ///
 /// # Requirements
-/// Implements: REQ-0021, REQ-0022, REQ-0023
+/// Implements: REQ-0021, REQ-0022, REQ-0023, REQ-0066
 #[must_use]
 pub fn handle_get(req: &GetRequest, store: &Store) -> GetResponse {
     let varbinds = req
@@ -93,7 +93,7 @@ pub fn handle_get(req: &GetRequest, store: &Store) -> GetResponse {
 /// If no successor exists for an OID, the varbind carries `EndOfMibView`.
 ///
 /// # Requirements
-/// Implements: REQ-0021, REQ-0022, REQ-0024, REQ-0025
+/// Implements: REQ-0021, REQ-0022, REQ-0024, REQ-0025, REQ-0066
 #[must_use]
 pub fn handle_get_next(req: &GetNextRequest, store: &Store) -> GetResponse {
     let varbinds = req
@@ -136,7 +136,7 @@ pub fn handle_get_next(req: &GetNextRequest, store: &Store) -> GetResponse {
 /// defence-in-depth measure against large positive values.
 ///
 /// # Requirements
-/// Implements: REQ-0021, REQ-0022, REQ-0024, REQ-0025, REQ-0026, REQ-0027, REQ-0028, REQ-0029, REQ-0030, REQ-0031
+/// Implements: REQ-0021, REQ-0022, REQ-0024, REQ-0025, REQ-0026, REQ-0027, REQ-0028, REQ-0029, REQ-0030, REQ-0031, REQ-0066
 #[must_use]
 pub fn handle_get_bulk(
     req: &GetBulkRequest,
@@ -290,7 +290,7 @@ mod tests {
 
     #[test]
     fn given_present_oid_when_get_then_returns_value() {
-        // Verifies: REQ-0021, REQ-0022
+        // Verifies: REQ-0021, REQ-0022, REQ-0066
         let store = store_with(&[("1.3.6.1.2.1.1.1.0", Value::OctetString(b"agent".to_vec()))]);
         let req = GetRequest {
             request_id: 42,
@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn given_successor_exists_when_get_next_then_returns_next_oid_and_value() {
-        // Verifies: REQ-0021, REQ-0022, REQ-0024
+        // Verifies: REQ-0021, REQ-0022, REQ-0024, REQ-0066
         let store = store_with(&[
             ("1.3.6.1.2.1.1.1.0", Value::Integer32(1)),
             ("1.3.6.1.2.1.1.2.0", Value::Integer32(2)),
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn given_bulk_request_with_repeaters_when_handled_then_walks_mib_forward() {
-        // Verifies: REQ-0021, REQ-0022, REQ-0026
+        // Verifies: REQ-0021, REQ-0022, REQ-0026, REQ-0066
         let store = store_with(&[
             ("1.3.6.1.2.1.1.1.0", Value::Integer32(1)),
             ("1.3.6.1.2.1.1.2.0", Value::Integer32(2)),

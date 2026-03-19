@@ -2,7 +2,7 @@ Review all uncommitted changes in the working tree.
 
 Follow this loop (max 3 iterations):
 1. Run the following to verify the build is clean before reviewing:
-   - `cargo clippy -- -W clippy::pedantic -D warnings` (must produce no warnings or errors)
+   - `cargo clippy --workspace --all-targets -- -W clippy::pedantic -D warnings` (must produce no warnings or errors)
    - `cargo test --workspace` (all unit and integration tests)
    - `cargo test --doc` (doc tests)
    If any of these fail, use the **implementer** subagent to fix them (passing the failures and `git diff HEAD` as context), **capture its agent ID**, then re-run all checks. If checks still fail after the implementer's fix, report the remaining failures to the user and stop.

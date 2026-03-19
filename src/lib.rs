@@ -161,6 +161,9 @@ impl Agent {
     /// Uses upsert semantics: if the OID already exists, its value is updated;
     /// otherwise a new entry is created. Safe to call from any thread.
     ///
+    /// # Requirements
+    /// Implements: REQ-0062, REQ-0063, REQ-0064, REQ-0065
+    ///
     /// # Errors
     ///
     /// Returns [`SetError::Disconnected`] if the event loop has terminated.
@@ -380,5 +383,42 @@ mod tests {
             matches!(result, Err(AgentError::InvalidEngineId)),
             "expected InvalidEngineId error for too-long engine ID"
         );
+    }
+
+    #[test]
+    fn given_agent_when_set_called_then_returns_ok() {
+        // Verifies: REQ-0062
+        let agent = test_agent();
+        let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+
+        let result = agent.set(oid, Value::Integer32(42));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn given_agent_when_set_called_from_another_thread_then_returns_ok() {
+        // Verifies: REQ-0064
+        let agent = test_agent();
+        let agent_clone = agent.clone();
+        let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+
+        let thread_result = std::thread::spawn(move || agent_clone.set(oid, Value::Integer32(1)))
+            .join()
+            .unwrap();
+
+        assert!(thread_result.is_ok());
+    }
+
+    #[test]
+    fn given_non_mut_agent_when_set_called_then_compiles_and_returns_ok() {
+        // Verifies: REQ-0065
+        // `agent` is a non-`mut` binding; `set` takes `&self`, so no `mut` is needed.
+        let agent = test_agent();
+        let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+
+        let result = agent.set(oid, Value::Integer32(7));
+
+        assert!(result.is_ok());
     }
 }
