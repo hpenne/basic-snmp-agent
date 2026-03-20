@@ -1,4 +1,54 @@
 [[gap]]
+req     = "REQ-0001"
+missing = ["behave_test"]
+rationale = "Structural constraint: the crate being a library (not a binary) is enforced by the Cargo manifest and verified at compile time. A Behave system test cannot introspect the crate type."
+
+[[gap]]
+req     = "REQ-0002"
+missing = ["behave_test"]
+rationale = "Architectural constraint: every Behave scenario implicitly relies on the public Agent type, but tagging every scenario with REQ-0002 would dilute traceability without adding information. The constraint is verified by compilation and unit tests."
+
+[[gap]]
+req     = "REQ-0003"
+missing = ["behave_test"]
+rationale = "Structural constraint: the absence of global mutable state is a design property enforced by the Rust type system (no static mut, no lazy_static). A Behave system test cannot observe the absence of global state."
+
+[[gap]]
+req     = "REQ-0048"
+missing = ["behave_test"]
+rationale = "Architectural constraint: the event loop running on a dedicated OS thread is an implementation detail not observable at the system-test boundary. Verified by unit tests that spawn and join the event loop thread."
+
+[[gap]]
+req     = "REQ-0049"
+missing = ["behave_test"]
+rationale = "Build constraint: the absence of an async runtime dependency is enforced by the Cargo manifest (no tokio/async-std). A Behave system test cannot inspect build dependencies."
+
+[[gap]]
+req     = "REQ-0053"
+missing = ["behave_test"]
+rationale = "Architectural constraint: the absence of blocking operations on the event loop thread is a design property verified by code review and the non-blocking I/O patterns used throughout. A Behave test cannot directly observe whether a call blocks."
+
+[[gap]]
+req     = "REQ-0054"
+missing = ["behave_test"]
+rationale = "Architectural constraint: keeping long-running work off the event loop thread is a design property enforced by the synchronous event loop architecture. Not directly observable at the system-test boundary."
+
+[[gap]]
+req     = "REQ-0064"
+missing = ["behave_test"]
+rationale = "Type system constraint: Agent being Send+Sync, making set() safe to call from any thread, is enforced by the Rust type checker at compile time. A Behave system test cannot exercise thread-safety properties."
+
+[[gap]]
+req     = "REQ-0065"
+missing = ["behave_test"]
+rationale = "Type signature constraint: set() taking &self rather than &mut self is enforced by the Rust type system and verified by unit tests that call it on a non-mut binding. A Behave system test cannot introspect method signatures."
+
+[[gap]]
+req     = "REQ-0067"
+missing = ["behave_test"]
+rationale = "Negative/absence constraint: the non-existence of a delete/remove API on Agent or Store is enforced by the type system at compile time. No runtime test can verify the absence of a method."
+
+[[gap]]
 req     = "REQ-0039"
 missing = ["behave_test"]
 rationale = "Structural type constraint: TrapPdu having no sysUpTime.0 field is enforced by the Rust type definition and verified at compile time via struct-literal tests. A Behave system test cannot introspect struct shape."

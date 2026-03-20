@@ -214,6 +214,9 @@ struct ConnectionState {
 /// Call [`run`][`EventLoop::run`] from a dedicated OS thread. The loop exits
 /// when it receives [`Command::Shutdown`].
 ///
+/// # Requirements
+/// Implements: REQ-0048, REQ-0050, REQ-0051, REQ-0052, REQ-0053, REQ-0054
+///
 /// # Examples
 ///
 /// ```no_run
@@ -260,7 +263,7 @@ impl EventLoop {
     /// [`EventLoopError::Registration`] if mio token registration fails.
     ///
     /// # Requirements
-    /// Implements: REQ-0055, REQ-0068, REQ-0069, REQ-0072
+    /// Implements: REQ-0048, REQ-0050, REQ-0055, REQ-0068, REQ-0069, REQ-0072
     ///
     /// # Examples
     ///
@@ -324,6 +327,9 @@ impl EventLoop {
     ///
     /// Intended to be called from a dedicated OS thread. Blocks until shutdown.
     ///
+    /// # Requirements
+    /// Implements: REQ-0048, REQ-0051, REQ-0052, REQ-0053, REQ-0054
+    ///
     /// # Errors
     ///
     /// Returns an error if `mio::Poll::poll` fails unrecoverably.
@@ -362,6 +368,7 @@ impl EventLoop {
     /// Transient accept errors (e.g. `EMFILE`, `ENFILE`, `ECONNABORTED`) are
     /// logged and skipped rather than killing the event loop, because a single
     /// resource-exhaustion moment should not bring down the agent.
+    // Implements: REQ-0051
     fn accept_connections(&mut self) {
         loop {
             match self.listener.accept() {
@@ -406,6 +413,7 @@ impl EventLoop {
     ///
     /// Returns `true` if a [`Command::Shutdown`] was received, signalling the
     /// loop should exit.
+    // Implements: REQ-0052
     fn drain_commands(&mut self) -> bool {
         loop {
             match self.rx.try_recv() {
@@ -769,6 +777,7 @@ mod tests {
 
     #[test]
     fn given_running_event_loop_when_tcp_client_connects_then_connection_is_accepted() {
+        // Verifies: REQ-0050, REQ-0051
         // Given: an event loop bound on a random loopback port.
         let (event_loop, bound_addr, sender) =
             EventLoop::new(any_loopback(), test_engine_id()).unwrap();
@@ -788,6 +797,7 @@ mod tests {
 
     #[test]
     fn given_running_event_loop_when_shutdown_command_sent_then_loop_exits_cleanly() {
+        // Verifies: REQ-0048, REQ-0052, REQ-0053, REQ-0054
         // Given: a running event loop.
         let (event_loop, _bound_addr, sender) =
             EventLoop::new(any_loopback(), test_engine_id()).unwrap();
@@ -803,6 +813,7 @@ mod tests {
 
     #[test]
     fn given_running_event_loop_when_set_value_command_sent_then_loop_drains_channel() {
+        // Verifies: REQ-0052
         // Given: a running event loop.
         let (event_loop, _bound_addr, sender) =
             EventLoop::new(any_loopback(), test_engine_id()).unwrap();
@@ -1188,7 +1199,7 @@ mod tests {
 
     #[test]
     fn given_get_request_when_sent_over_tcp_then_response_is_received() {
-        // Verifies: REQ-0021, REQ-0066, REQ-0068, REQ-0069, REQ-0070, REQ-0071
+        // Verifies: REQ-0021, REQ-0051, REQ-0066, REQ-0068, REQ-0069, REQ-0070, REQ-0071
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
             EventLoop::new(any_loopback(), test_engine_id()).unwrap();

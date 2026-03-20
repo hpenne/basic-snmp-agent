@@ -10,6 +10,9 @@
 //! `Clone + Send + Sync` and holds only channel senders, so it can be shared
 //! freely across threads.
 //!
+//! # Requirements
+//! Implements: REQ-0001, REQ-0002, REQ-0003, REQ-0049
+//!
 //! # Quick start
 //!
 //! ```no_run
@@ -86,7 +89,7 @@ impl Drop for AgentInner {
 /// Construct an `Agent` via [`AgentBuilder`].
 ///
 /// # Requirements
-/// Implements: REQ-0046
+/// Implements: REQ-0002, REQ-0003, REQ-0046
 ///
 /// # Examples
 ///
@@ -245,7 +248,7 @@ impl AgentBuilder {
     /// the UDP socket for outbound traps, and spawns the event loop thread.
     ///
     /// # Requirements
-    /// Implements: REQ-0037, REQ-0055
+    /// Implements: REQ-0037, REQ-0048, REQ-0050, REQ-0051, REQ-0052, REQ-0053, REQ-0054, REQ-0055
     ///
     /// # Errors
     ///
@@ -322,7 +325,7 @@ mod tests {
 
     #[test]
     fn given_trap_pdu_with_varbinds_when_send_trap_then_result_ok() {
-        // Verifies: REQ-0034, REQ-0040, REQ-0042
+        // Verifies: REQ-0034, REQ-0040, REQ-0042, REQ-0050
         let agent = test_agent();
         let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
         let dest = receiver.local_addr().unwrap();
@@ -344,7 +347,7 @@ mod tests {
 
     #[test]
     fn given_custom_engine_id_when_build_then_agent_starts() {
-        // Verifies: REQ-0055
+        // Verifies: REQ-0001, REQ-0002, REQ-0048, REQ-0049, REQ-0055
         let custom_engine_id = b"\x80\x00\x1f\x88\x04custom".to_vec();
         let agent = AgentBuilder::new()
             .listen_addr("127.0.0.1:0".parse().unwrap())
@@ -398,7 +401,7 @@ mod tests {
 
     #[test]
     fn given_agent_when_set_called_from_another_thread_then_returns_ok() {
-        // Verifies: REQ-0064
+        // Verifies: REQ-0003, REQ-0064
         let agent = test_agent();
         let agent_clone = agent.clone();
         let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();

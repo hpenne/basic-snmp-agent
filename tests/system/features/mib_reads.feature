@@ -6,7 +6,7 @@ Feature: SNMP MIB reads over plain TCP
   Background:
     Given a test-agent-mib instance is running with engine ID "0x80001f8804746573742d6167656e742d6d6962"
 
-  @REQ-0021 @REQ-0022 @REQ-0023 @REQ-0055 @REQ-0068 @REQ-0069 @REQ-0070 @REQ-0071 @REQ-0072 @REQ-0073
+  @REQ-0021 @REQ-0022 @REQ-0023 @REQ-0050 @REQ-0051 @REQ-0052 @REQ-0055 @REQ-0060 @REQ-0062 @REQ-0063 @REQ-0066 @REQ-0068 @REQ-0069 @REQ-0070 @REQ-0071 @REQ-0072 @REQ-0073
   Scenario: GET returns the value for a present OID
     When snmpget queries OID "1.3.6.1.2.1.1.1.0" from the agent
     Then the SNMP response contains OID "1.3.6.1.2.1.1.1.0" with string value "basic-snmp-agent test instance"
@@ -16,7 +16,7 @@ Feature: SNMP MIB reads over plain TCP
     When snmpget queries OID "1.3.6.1.2.1.99.1.0" from the agent
     Then the SNMP response contains OID "1.3.6.1.2.1.99.1.0" with exception "No Such Object"
 
-  @REQ-0021 @REQ-0022 @REQ-0024 @REQ-0068 @REQ-0073
+  @REQ-0021 @REQ-0022 @REQ-0024 @REQ-0061 @REQ-0066 @REQ-0068 @REQ-0073
   Scenario: GETNEXT returns the lexicographically next OID
     When snmpgetnext queries OID "1.3.6.1.2.1.1.1.0" from the agent
     Then the SNMP response contains OID "1.3.6.1.2.1.1.3.0"
@@ -26,7 +26,7 @@ Feature: SNMP MIB reads over plain TCP
     When snmpgetnext queries OID "1.3.6.1.2.1.1.5.0" from the agent
     Then the SNMP response contains exception "No more variables left in this MIB View"
 
-  @REQ-0021 @REQ-0022 @REQ-0026 @REQ-0027 @REQ-0068 @REQ-0073
+  @REQ-0021 @REQ-0022 @REQ-0026 @REQ-0027 @REQ-0061 @REQ-0066 @REQ-0068 @REQ-0073
   Scenario: GETBULK with max-repetitions=0 returns only non-repeater varbinds
     When snmpbulkget with non-repeaters=1 and max-repetitions=0 queries OID "1.3.6.1.2.1.1.1.0" from the agent
     Then the SNMP response contains OID "1.3.6.1.2.1.1.3.0"
