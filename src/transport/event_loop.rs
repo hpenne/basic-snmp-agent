@@ -762,8 +762,31 @@ mod tests {
         TEST_ENGINE_ID.to_vec()
     }
 
+    /// Set an OID in the MIB and block until the event loop has processed it.
+    ///
+    /// Sends `SetValue` followed by a `QueryValue` on a rendezvous channel.
+    /// Because the event loop drains commands in order, receiving the `QueryValue`
+    /// reply guarantees the preceding `SetValue` has already been applied.
+    fn set_and_wait(sender: &CommandSender, oid: &crate::codec::Oid, value: crate::codec::Value) {
+        sender
+            .send(Command::SetValue {
+                oid: oid.clone(),
+                value,
+            })
+            .unwrap();
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        sender
+            .send(Command::QueryValue {
+                oid: oid.clone(),
+                reply: reply_tx,
+            })
+            .unwrap();
+        reply_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("timed out waiting for SetValue to be processed");
+    }
+
     /// Read exactly `expected_len` bytes from `stream`, timing out after 2 seconds.
-    #[cfg(feature = "test-support")]
     fn read_exact_with_timeout(stream: &mut std::net::TcpStream, expected_len: usize) -> Vec<u8> {
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
@@ -1100,22 +1123,70 @@ mod tests {
 
     // ── RFC 3430 dispatch tests ───────────────────────────────────────────────
 
-    #[cfg(feature = "test-support")]
-    /// Encode a `GetRequest` as a raw BER `SNMPv3` frame ready for TCP send (RFC 3430).
+    /// Encode a `GetRequest` as a raw BER `SNMPv3` frame ready for TCP send (RFC 3430),
+    /// using the test engine ID and an empty context name.
     fn framed_get_request(msg_id: i32, request_id: i32, oid: &crate::codec::Oid) -> Vec<u8> {
-        let pdu = crate::codec::GetRequest {
-            request_id,
-            varbinds: vec![crate::codec::Varbind {
-                oid: oid.clone(),
-                value: crate::codec::VarbindValue::Unspecified,
-            }],
-        };
-        // Raw BER output from the codec IS the RFC 3430 frame — no prefix needed.
-        crate::codec::encode_v3_get_request(msg_id, TEST_ENGINE_ID, b"", &pdu)
-            .expect("encode_v3_get_request must succeed")
+        framed_get_request_custom(msg_id, request_id, oid, TEST_ENGINE_ID, b"")
     }
 
-    #[cfg(feature = "test-support")]
+    /// Like [`framed_get_request`] but with explicit engine ID and context name,
+    /// for tests that need to verify the agent's handling of non-standard values.
+    fn framed_get_request_custom(
+        msg_id: i32,
+        request_id: i32,
+        oid: &crate::codec::Oid,
+        engine_id: &[u8],
+        context_name: &[u8],
+    ) -> Vec<u8> {
+        use rasn_snmp::v2::{
+            GetRequest as RasnGetRequest, Pdu as RasnPdu, Pdus, VarBind,
+            VarBindValue as RasnVarBindValue,
+        };
+        use rasn_snmp::v3::{
+            HeaderData, Message as V3Message, ScopedPdu, ScopedPduData, USMSecurityParameters,
+        };
+
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(
+            std::borrow::Cow::Owned(oid.as_slice().to_vec()),
+        );
+        let rasn_pdu = RasnGetRequest(RasnPdu {
+            request_id,
+            error_status: 0,
+            error_index: 0,
+            variable_bindings: vec![VarBind {
+                name: rasn_oid,
+                value: RasnVarBindValue::Unspecified,
+            }],
+        });
+        let scoped_pdu = ScopedPdu {
+            engine_id: engine_id.to_vec().into(),
+            name: context_name.to_vec().into(),
+            data: Pdus::GetRequest(rasn_pdu),
+        };
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: rasn::types::OctetString::from(vec![]),
+            authoritative_engine_boots: 0.into(),
+            authoritative_engine_time: 0.into(),
+            user_name: rasn::types::OctetString::from(vec![]),
+            authentication_parameters: rasn::types::OctetString::from(vec![]),
+            privacy_parameters: rasn::types::OctetString::from(vec![]),
+        };
+        let security_parameters_bytes =
+            rasn::ber::encode(&usm_params).expect("USMSecurityParameters must encode");
+        let v3_message = V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: msg_id.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x04]),
+                security_model: 3.into(),
+            },
+            security_parameters: security_parameters_bytes.into(),
+            scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
+        };
+        rasn::ber::encode(&v3_message).expect("V3Message must encode")
+    }
+
     /// Read a complete RFC 3430 BER frame (tag + length + content) from the stream.
     fn read_framed_response(stream: &mut std::net::TcpStream) -> Vec<u8> {
         let tag = read_exact_with_timeout(stream, 1);
@@ -1146,7 +1217,6 @@ mod tests {
 
     /// Decode a raw BER response frame back into a `GetResponse` via the `SNMPv3` path,
     /// so we can assert on `request_id` and varbind values.
-    #[cfg(feature = "test-support")]
     fn decode_v3_response_payload(ber_frame: &[u8]) -> crate::codec::GetResponse {
         use rasn_snmp::v3::{Message as V3Message, ScopedPduData};
         let v3_msg: V3Message = rasn::ber::decode(ber_frame).expect("must decode as V3Message");
@@ -1202,7 +1272,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "test-support")]
     #[test]
     fn given_get_request_when_sent_over_tcp_then_response_is_received() {
         // Verifies: REQ-0021, REQ-0051, REQ-0066, REQ-0068, REQ-0069, REQ-0070, REQ-0071
@@ -1212,25 +1281,9 @@ mod tests {
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
-        sender
-            .send(Command::SetValue {
-                oid: oid.clone(),
-                value: crate::codec::Value::Integer32(42),
-            })
-            .unwrap();
-
-        // Wait for the SetValue to be processed before connecting, so the MIB
-        // is populated before the GetRequest arrives and dispatch cannot race.
-        let (confirm_tx, confirm_rx) = std::sync::mpsc::sync_channel(1);
-        sender
-            .send(Command::QueryValue {
-                oid: oid.clone(),
-                reply: confirm_tx,
-            })
-            .unwrap();
-        confirm_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("timed out waiting for SetValue confirmation");
+        // Populate the MIB and wait for the event loop to process it before
+        // connecting, so dispatch cannot race with the SetValue.
+        set_and_wait(&sender, &oid, crate::codec::Value::Integer32(42));
 
         // When: a TCP client sends a raw BER SNMPv3 GetRequest (RFC 3430 framing).
         let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
@@ -1257,7 +1310,6 @@ mod tests {
             .unwrap();
     }
 
-    #[cfg(feature = "test-support")]
     #[test]
     fn given_partial_frame_when_split_across_reads_then_response_is_received() {
         // Verifies: REQ-0068, REQ-0071
@@ -1267,25 +1319,7 @@ mod tests {
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.2.0".parse().unwrap();
-        sender
-            .send(Command::SetValue {
-                oid: oid.clone(),
-                value: crate::codec::Value::Integer32(7),
-            })
-            .unwrap();
-
-        // Wait for the SetValue to be processed before connecting, so the MIB
-        // is populated before the GetRequest arrives and dispatch cannot race.
-        let (confirm_tx, confirm_rx) = std::sync::mpsc::sync_channel(1);
-        sender
-            .send(Command::QueryValue {
-                oid: oid.clone(),
-                reply: confirm_tx,
-            })
-            .unwrap();
-        confirm_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("timed out waiting for SetValue confirmation");
+        set_and_wait(&sender, &oid, crate::codec::Value::Integer32(7));
 
         // When: the framed PDU is sent in two separate writes to simulate
         // TCP segmentation where a frame arrives split across packets.
@@ -1318,7 +1352,6 @@ mod tests {
             .unwrap();
     }
 
-    #[cfg(feature = "test-support")]
     #[test]
     fn given_invalid_snmp_payload_in_sequence_when_received_then_connection_stays_open() {
         // Verifies: REQ-0073
@@ -1328,25 +1361,7 @@ mod tests {
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.3.0".parse().unwrap();
-        sender
-            .send(Command::SetValue {
-                oid: oid.clone(),
-                value: crate::codec::Value::Integer32(99),
-            })
-            .unwrap();
-
-        // Wait for the SetValue to be processed before connecting, so the MIB
-        // is populated before the GetRequest arrives and dispatch cannot race.
-        let (confirm_tx, confirm_rx) = std::sync::mpsc::sync_channel(1);
-        sender
-            .send(Command::QueryValue {
-                oid: oid.clone(),
-                reply: confirm_tx,
-            })
-            .unwrap();
-        confirm_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("timed out waiting for SetValue confirmation");
+        set_and_wait(&sender, &oid, crate::codec::Value::Integer32(99));
 
         let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
 
@@ -1379,7 +1394,6 @@ mod tests {
             .unwrap();
     }
 
-    #[cfg(feature = "test-support")]
     #[test]
     fn given_empty_sequence_frame_when_received_then_connection_stays_open() {
         // Verifies: REQ-0073
@@ -1389,23 +1403,7 @@ mod tests {
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.4.0".parse().unwrap();
-        sender
-            .send(Command::SetValue {
-                oid: oid.clone(),
-                value: crate::codec::Value::Integer32(55),
-            })
-            .unwrap();
-
-        let (confirm_tx, confirm_rx) = std::sync::mpsc::sync_channel(1);
-        sender
-            .send(Command::QueryValue {
-                oid: oid.clone(),
-                reply: confirm_tx,
-            })
-            .unwrap();
-        confirm_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("timed out waiting for SetValue confirmation");
+        set_and_wait(&sender, &oid, crate::codec::Value::Integer32(55));
 
         let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
 
@@ -1436,7 +1434,6 @@ mod tests {
             .unwrap();
     }
 
-    #[cfg(feature = "test-support")]
     #[test]
     fn given_wrong_engine_id_when_request_sent_then_discarded_silently() {
         // Verifies: REQ-0057
@@ -1446,37 +1443,13 @@ mod tests {
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.5.0".parse().unwrap();
-        sender
-            .send(Command::SetValue {
-                oid: oid.clone(),
-                value: crate::codec::Value::Integer32(77),
-            })
-            .unwrap();
-
-        let (confirm_tx, confirm_rx) = std::sync::mpsc::sync_channel(1);
-        sender
-            .send(Command::QueryValue {
-                oid: oid.clone(),
-                reply: confirm_tx,
-            })
-            .unwrap();
-        confirm_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("timed out waiting for SetValue confirmation");
+        set_and_wait(&sender, &oid, crate::codec::Value::Integer32(77));
 
         let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
 
         // When: a request with the wrong engine ID is sent, it should be discarded.
         let wrong_engine_id = b"\x80\x00\x1f\x88\x04wrong";
-        let pdu = crate::codec::GetRequest {
-            request_id: 10,
-            varbinds: vec![crate::codec::Varbind {
-                oid: oid.clone(),
-                value: crate::codec::VarbindValue::Unspecified,
-            }],
-        };
-        let wrong_encoded = crate::codec::encode_v3_get_request(10, wrong_engine_id, b"", &pdu)
-            .expect("encode must succeed");
+        let wrong_encoded = framed_get_request_custom(10, 10, &oid, wrong_engine_id, b"");
         client
             .write_all(&wrong_encoded)
             .expect("write must succeed");
@@ -1501,7 +1474,6 @@ mod tests {
             .unwrap();
     }
 
-    #[cfg(feature = "test-support")]
     #[test]
     fn given_non_empty_context_name_when_request_sent_then_discarded_silently() {
         // Verifies: REQ-0056, REQ-0058
@@ -1514,37 +1486,13 @@ mod tests {
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.6.0".parse().unwrap();
-        sender
-            .send(Command::SetValue {
-                oid: oid.clone(),
-                value: crate::codec::Value::Integer32(88),
-            })
-            .unwrap();
-
-        let (confirm_tx, confirm_rx) = std::sync::mpsc::sync_channel(1);
-        sender
-            .send(Command::QueryValue {
-                oid: oid.clone(),
-                reply: confirm_tx,
-            })
-            .unwrap();
-        confirm_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("timed out waiting for SetValue confirmation");
+        set_and_wait(&sender, &oid, crate::codec::Value::Integer32(88));
 
         let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
 
         // When: a request with a non-empty context name is sent, it should be discarded.
-        let pdu = crate::codec::GetRequest {
-            request_id: 20,
-            varbinds: vec![crate::codec::Varbind {
-                oid: oid.clone(),
-                value: crate::codec::VarbindValue::Unspecified,
-            }],
-        };
         let bad_context_encoded =
-            crate::codec::encode_v3_get_request(20, TEST_ENGINE_ID, b"badcontext", &pdu)
-                .expect("encode must succeed");
+            framed_get_request_custom(20, 20, &oid, TEST_ENGINE_ID, b"badcontext");
         client
             .write_all(&bad_context_encoded)
             .expect("write must succeed");

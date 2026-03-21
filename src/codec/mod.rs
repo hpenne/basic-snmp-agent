@@ -22,6 +22,4 @@ pub use pdu::{
     GetRequest, GetResponse, InboundPdu, SetRequest, V3InboundMessage, Varbind, VarbindValue,
     WireTrapPdu, decode_pdu, decode_v3_message, encode_response, encode_trap, encode_v3_response,
 };
-#[cfg(feature = "test-support")]
-pub use pdu::{encode_get_request, encode_v3_get_request};
 pub use value::Value;
