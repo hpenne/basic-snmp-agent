@@ -22,8 +22,8 @@ use rasn_snmp::v3::{
     HeaderData, Message as V3Message, ScopedPdu, ScopedPduData, USMSecurityParameters,
 };
 
-use crate::Oid;
-use crate::Value;
+use super::Oid;
+use super::Value;
 
 // ── VarbindValue ─────────────────────────────────────────────────────────────
 
@@ -296,7 +296,7 @@ pub struct WireTrapPdu {
 /// # Examples
 ///
 /// ```no_run
-/// use codec::decode_pdu;
+/// use basic_snmp_agent::codec::decode_pdu;
 ///
 /// let bytes: &[u8] = &[/* raw BER PDU bytes */];
 /// match decode_pdu(bytes) {
@@ -337,7 +337,7 @@ pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
 /// # Examples
 ///
 /// ```no_run
-/// use codec::decode_v3_message;
+/// use basic_snmp_agent::codec::decode_v3_message;
 ///
 /// let bytes: &[u8] = &[/* raw BER SNMPv3 message bytes */];
 /// match decode_v3_message(bytes) {
@@ -414,7 +414,7 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> 
 /// # Examples
 ///
 /// ```
-/// use codec::{Oid, Value, ErrorStatus, GetResponse, Varbind, VarbindValue, encode_response};
+/// use basic_snmp_agent::codec::{Oid, Value, ErrorStatus, GetResponse, Varbind, VarbindValue, encode_response};
 ///
 /// let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
 /// let pdu = GetResponse {
@@ -457,7 +457,7 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
 /// # Examples
 ///
 /// ```
-/// use codec::{ErrorStatus, GetResponse, encode_v3_response};
+/// use basic_snmp_agent::codec::{ErrorStatus, GetResponse, encode_v3_response};
 ///
 /// let pdu = GetResponse {
 ///     request_id: 1,
@@ -529,7 +529,7 @@ pub fn encode_v3_response(
 /// well-formed inbound PDU to the agent over TCP.
 ///
 /// Production code never needs to encode a `GetRequest` (only managers do);
-/// this function exists so that integration tests in the `transport` crate can
+/// this function exists so that integration tests in the `transport` module can
 /// construct valid wire frames without taking a direct dependency on `rasn`.
 ///
 /// # Errors
@@ -539,7 +539,7 @@ pub fn encode_v3_response(
 /// # Examples
 ///
 /// ```
-/// use codec::{Oid, GetRequest, Varbind, VarbindValue, encode_get_request};
+/// use basic_snmp_agent::codec::{Oid, GetRequest, Varbind, VarbindValue, encode_get_request};
 ///
 /// let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
 /// let pdu = GetRequest {
@@ -637,7 +637,7 @@ pub fn encode_v3_get_request(
 /// # Examples
 ///
 /// ```
-/// use codec::{Oid, Value, WireTrapPdu, Varbind, VarbindValue, encode_trap};
+/// use basic_snmp_agent::codec::{Oid, Value, WireTrapPdu, Varbind, VarbindValue, encode_trap};
 ///
 /// let oid: Oid = "1.3.6.1.6.3.1.1.4.1.0".parse().unwrap();
 /// let pdu = WireTrapPdu {

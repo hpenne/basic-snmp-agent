@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::Oid;
+use super::Oid;
 
 /// An `SMIv2` value carried in an SNMP varbind.
 ///
@@ -11,7 +11,7 @@ use crate::Oid;
 /// # Examples
 ///
 /// ```
-/// use codec::{Oid, Value};
+/// use basic_snmp_agent::codec::{Oid, Value};
 ///
 /// let v = Value::Integer32(-1);
 /// let ip = Value::IpAddress([192, 168, 1, 1]);
@@ -65,7 +65,7 @@ impl fmt::Display for Value {
 /// # Examples
 ///
 /// ```
-/// use codec::Value;
+/// use basic_snmp_agent::codec::Value;
 ///
 /// let v = Value::from(b"hello".as_slice());
 /// assert_eq!(v, Value::OctetString(b"hello".to_vec()));
@@ -81,7 +81,7 @@ impl From<&[u8]> for Value {
 /// # Examples
 ///
 /// ```
-/// use codec::Value;
+/// use basic_snmp_agent::codec::Value;
 ///
 /// let v = Value::from(vec![0x01u8, 0x02, 0x03]);
 /// assert_eq!(v, Value::OctetString(vec![0x01, 0x02, 0x03]));
@@ -97,7 +97,7 @@ impl From<Vec<u8>> for Value {
 /// # Examples
 ///
 /// ```
-/// use codec::Value;
+/// use basic_snmp_agent::codec::Value;
 ///
 /// let v = Value::from("hello");
 /// assert_eq!(v, Value::OctetString(b"hello".to_vec()));

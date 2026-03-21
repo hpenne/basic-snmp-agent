@@ -26,7 +26,7 @@ use std::str::FromStr;
 /// # Examples
 ///
 /// ```
-/// use codec::Oid;
+/// use basic_snmp_agent::codec::Oid;
 ///
 /// let oid: Oid = "1.3.6.1.2.1".parse().unwrap();
 /// assert_eq!(oid.to_string(), "1.3.6.1.2.1");
@@ -56,7 +56,7 @@ impl Oid {
     /// # Examples
     ///
     /// ```
-    /// use codec::Oid;
+    /// use basic_snmp_agent::codec::Oid;
     ///
     /// let oid = Oid::from_slice(&[1, 3, 6, 1]);
     /// assert_eq!(oid.to_string(), "1.3.6.1");
@@ -99,7 +99,7 @@ impl TryFrom<Vec<u32>> for Oid {
     /// # Examples
     ///
     /// ```
-    /// use codec::Oid;
+    /// use basic_snmp_agent::codec::Oid;
     ///
     /// assert!(Oid::try_from(vec![1u32, 3, 6, 1]).is_ok());
     /// assert!(Oid::try_from(vec![2u32, 999]).is_ok());

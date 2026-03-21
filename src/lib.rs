@@ -2,7 +2,7 @@
 //!
 //! This crate is the public API surface. It exposes [`Agent`], the primary
 //! entry point for embedding applications, and ties together the [`codec`],
-//! [`mib`], and [`transport`] crates.
+//! [`mib`], and [`transport`] modules.
 //!
 //! The agent runs its event loop on a dedicated OS thread spawned at
 //! construction time. Application threads communicate with the event loop
@@ -35,19 +35,22 @@
 //! }
 //! ```
 
+pub mod codec;
 mod error;
+pub mod mib;
+pub mod transport;
 
 use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-pub use codec::{Oid, Value, Varbind, VarbindValue};
+pub use crate::codec::{Oid, Value, Varbind, VarbindValue};
+pub use crate::transport::{TrapPdu, TrapResult};
 pub use error::{AgentError, SetError, TrapError};
-pub use transport::{TrapPdu, TrapResult};
 
-use transport::event_loop::{Command, EventLoop, EventLoopError};
-use transport::trap::TrapSender;
+use crate::transport::event_loop::{Command, EventLoop, EventLoopError};
+use crate::transport::trap::TrapSender;
 
 // ── AgentInner ───────────────────────────────────────────────────────────────
 
@@ -57,7 +60,7 @@ use transport::trap::TrapSender;
 /// traps. [`Drop`] sends a [`Command::Shutdown`] and joins the event loop
 /// thread, ensuring clean termination when all [`Agent`] clones are dropped.
 struct AgentInner {
-    command_sender: transport::event_loop::CommandSender,
+    command_sender: crate::transport::event_loop::CommandSender,
     trap_sender: TrapSender,
     thread_handle: Mutex<Option<std::thread::JoinHandle<io::Result<()>>>>,
 }

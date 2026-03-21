@@ -1,6 +1,6 @@
 //! ASN.1/BER codec primitives for SNMP.
 //!
-//! This crate provides:
+//! This module provides:
 //!
 //! - [`Oid`]: an SNMP Object Identifier represented as a sequence of unsigned
 //!   32-bit components, with dotted-decimal [`Display`](std::fmt::Display) and

@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "transport", "codec", "mib", "tests/test-agent", "tests/test-agent-mib"]
+members = [".", "tests/test-agent", "tests/test-agent-mib"]
 resolver = "2"
 
 [package]
@@ -8,10 +8,14 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-[dependencies]
-codec = { path = "codec" }
-mib = { path = "mib" }
-transport = { path = "transport" }
+[features]
+## Enables `encode_get_request` and `encode_v3_get_request`, which are only needed by test code.
+test-support = []
 
-[dev-dependencies]
-codec = { path = "codec", features = ["test-support"] }
+[dependencies]
+rasn = "0.22"
+rasn-smi = "0.22"
+rasn-snmp = "0.22"
+mio = { version = "1", features = ["net", "os-poll", "os-ext"] }
+rustls = "0.23"
+libc = "0.2"

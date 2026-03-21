@@ -22,7 +22,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
 
-use crate::request;
+use crate::transport::request;
 
 /// mio token for the TCP listener.
 const LISTENER_TOKEN: Token = Token(0);
@@ -93,22 +93,21 @@ impl std::error::Error for EventLoopError {
 pub enum Command {
     /// Upsert a single OID in the MIB store.
     SetValue {
-        oid: codec::Oid,
-        value: codec::Value,
+        oid: crate::codec::Oid,
+        value: crate::codec::Value,
     },
     /// Shut down the event loop cleanly.
     Shutdown,
     /// Query a single OID from the MIB store and send the result back.
     ///
-    /// Compiled only for unit tests within *this crate* (`cfg(test)`).
-    /// Integration tests in `transport/tests/` compile the crate without
-    /// `cfg(test)` and therefore cannot see this variant. Production code has
-    /// no need to read values back out of the event loop — SNMP GET dispatch
-    /// handles that.
+    /// Compiled only for unit tests within this module (`cfg(test)`).
+    /// External consumers compile the crate without `cfg(test)` and therefore
+    /// cannot see this variant. Production code has no need to read values back
+    /// out of the event loop — SNMP GET dispatch handles that.
     #[cfg(test)]
     QueryValue {
-        oid: codec::Oid,
-        reply: std::sync::mpsc::SyncSender<Option<codec::Value>>,
+        oid: crate::codec::Oid,
+        reply: std::sync::mpsc::SyncSender<Option<crate::codec::Value>>,
     },
 }
 
@@ -134,7 +133,7 @@ pub enum Command {
 ///
 /// ```no_run
 /// use std::net::SocketAddr;
-/// use transport::event_loop::{Command, EventLoop};
+/// use basic_snmp_agent::transport::event_loop::{Command, EventLoop};
 ///
 /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
 /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
@@ -221,14 +220,14 @@ struct ConnectionState {
 ///
 /// ```no_run
 /// use std::net::SocketAddr;
-/// use transport::event_loop::EventLoop;
+/// use basic_snmp_agent::transport::event_loop::EventLoop;
 ///
 /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
 /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
 /// let (event_loop, bound_addr, sender) = EventLoop::new(addr, engine_id).unwrap();
 ///
 /// let handle = std::thread::spawn(move || event_loop.run());
-/// sender.send(transport::event_loop::Command::Shutdown).unwrap();
+/// sender.send(basic_snmp_agent::transport::event_loop::Command::Shutdown).unwrap();
 /// handle.join().unwrap().unwrap();
 /// ```
 pub struct EventLoop {
@@ -242,7 +241,7 @@ pub struct EventLoop {
     next_token: usize,
     connections: HashMap<Token, ConnectionState>,
     /// MIB store; updated by `SetValue` commands from application threads.
-    store: mib::Store,
+    store: crate::mib::Store,
     /// This agent's `SNMPv3` engine ID; inbound messages with a different engine
     /// ID are discarded (REQ-0057).
     engine_id: Vec<u8>,
@@ -269,7 +268,7 @@ impl EventLoop {
     ///
     /// ```no_run
     /// use std::net::SocketAddr;
-    /// use transport::event_loop::EventLoop;
+    /// use basic_snmp_agent::transport::event_loop::EventLoop;
     ///
     /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
     /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
@@ -315,7 +314,7 @@ impl EventLoop {
             rx,
             next_token: FIRST_CONN_TOKEN,
             connections: HashMap::new(),
-            store: mib::Store::new(),
+            store: crate::mib::Store::new(),
             engine_id,
         };
         let sender = CommandSender { tx, pipe_write_fd };
@@ -569,11 +568,11 @@ impl EventLoop {
         ber_frame: &[u8],
         token: Token,
         engine_id: &[u8],
-        store: &mib::Store,
+        store: &crate::mib::Store,
     ) -> Option<Vec<u8>> {
         // Decode as an SNMPv3 message. Non-v3 messages are silently discarded
         // per REQ-0073.
-        let v3_msg = match codec::decode_v3_message(ber_frame) {
+        let v3_msg = match crate::codec::decode_v3_message(ber_frame) {
             Err(decode_error) => {
                 eprintln!("[event_loop] SNMPv3 decode error (token {token:?}): {decode_error}");
                 return None;
@@ -602,16 +601,16 @@ impl EventLoop {
         }
 
         let response = match v3_msg.pdu {
-            codec::InboundPdu::GetRequest(req) => request::handle_get(&req, store),
-            codec::InboundPdu::GetNextRequest(req) => request::handle_get_next(&req, store),
-            codec::InboundPdu::GetBulkRequest(req) => {
+            crate::codec::InboundPdu::GetRequest(req) => request::handle_get(&req, store),
+            crate::codec::InboundPdu::GetNextRequest(req) => request::handle_get_next(&req, store),
+            crate::codec::InboundPdu::GetBulkRequest(req) => {
                 request::handle_get_bulk(&req, store, MAX_BULK_REPETITIONS)
             }
-            codec::InboundPdu::SetRequest(req) => request::handle_set(&req),
+            crate::codec::InboundPdu::SetRequest(req) => request::handle_set(&req),
         };
 
         // context_name is always empty here: non-empty values were rejected above.
-        let encoded_response = match codec::encode_v3_response(
+        let encoded_response = match crate::codec::encode_v3_response(
             v3_msg.msg_id,
             engine_id,
             &v3_msg.user_name,
@@ -764,6 +763,7 @@ mod tests {
     }
 
     /// Read exactly `expected_len` bytes from `stream`, timing out after 2 seconds.
+    #[cfg(feature = "test-support")]
     fn read_exact_with_timeout(stream: &mut std::net::TcpStream, expected_len: usize) -> Vec<u8> {
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
@@ -820,11 +820,11 @@ mod tests {
         let handle = thread::spawn(move || event_loop.run());
 
         // When: a SetValue command is followed by Shutdown.
-        let oid: codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
         sender
             .send(Command::SetValue {
                 oid,
-                value: codec::Value::Integer32(42),
+                value: crate::codec::Value::Integer32(42),
             })
             .unwrap();
         sender.send(Command::Shutdown).unwrap();
@@ -842,11 +842,11 @@ mod tests {
         let handle = thread::spawn(move || event_loop.run());
 
         // When: a SetValue command is sent and the loop is given time to process it.
-        let oid: codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
         sender
             .send(Command::SetValue {
                 oid,
-                value: codec::Value::Integer32(42),
+                value: crate::codec::Value::Integer32(42),
             })
             .unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -871,13 +871,13 @@ mod tests {
             EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
-        let oid: codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
 
         // When: a SetValue command is sent.
         sender
             .send(Command::SetValue {
                 oid: oid.clone(),
-                value: codec::Value::Integer32(99),
+                value: crate::codec::Value::Integer32(99),
             })
             .unwrap();
 
@@ -899,7 +899,7 @@ mod tests {
             .expect("timed out waiting for QueryValue reply");
         assert_eq!(
             stored_value,
-            Some(codec::Value::Integer32(99)),
+            Some(crate::codec::Value::Integer32(99)),
             "expected MIB store to hold Integer32(99) for oid {oid:?}"
         );
 
@@ -914,7 +914,7 @@ mod tests {
             EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
-        let oid: codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
 
         // When: the OID is queried without having been set.
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
@@ -959,7 +959,7 @@ mod tests {
             rx: mpsc::channel::<Command>().1,
             next_token: FIRST_CONN_TOKEN,
             connections: HashMap::new(),
-            store: mib::Store::new(),
+            store: crate::mib::Store::new(),
             engine_id: test_engine_id(),
         };
 
@@ -1100,20 +1100,22 @@ mod tests {
 
     // ── RFC 3430 dispatch tests ───────────────────────────────────────────────
 
+    #[cfg(feature = "test-support")]
     /// Encode a `GetRequest` as a raw BER `SNMPv3` frame ready for TCP send (RFC 3430).
-    fn framed_get_request(msg_id: i32, request_id: i32, oid: &codec::Oid) -> Vec<u8> {
-        let pdu = codec::GetRequest {
+    fn framed_get_request(msg_id: i32, request_id: i32, oid: &crate::codec::Oid) -> Vec<u8> {
+        let pdu = crate::codec::GetRequest {
             request_id,
-            varbinds: vec![codec::Varbind {
+            varbinds: vec![crate::codec::Varbind {
                 oid: oid.clone(),
-                value: codec::VarbindValue::Unspecified,
+                value: crate::codec::VarbindValue::Unspecified,
             }],
         };
         // Raw BER output from the codec IS the RFC 3430 frame — no prefix needed.
-        codec::encode_v3_get_request(msg_id, TEST_ENGINE_ID, b"", &pdu)
+        crate::codec::encode_v3_get_request(msg_id, TEST_ENGINE_ID, b"", &pdu)
             .expect("encode_v3_get_request must succeed")
     }
 
+    #[cfg(feature = "test-support")]
     /// Read a complete RFC 3430 BER frame (tag + length + content) from the stream.
     fn read_framed_response(stream: &mut std::net::TcpStream) -> Vec<u8> {
         let tag = read_exact_with_timeout(stream, 1);
@@ -1144,7 +1146,8 @@ mod tests {
 
     /// Decode a raw BER response frame back into a `GetResponse` via the `SNMPv3` path,
     /// so we can assert on `request_id` and varbind values.
-    fn decode_v3_response_payload(ber_frame: &[u8]) -> codec::GetResponse {
+    #[cfg(feature = "test-support")]
+    fn decode_v3_response_payload(ber_frame: &[u8]) -> crate::codec::GetResponse {
         use rasn_snmp::v3::{Message as V3Message, ScopedPduData};
         let v3_msg: V3Message = rasn::ber::decode(ber_frame).expect("must decode as V3Message");
         let scoped_pdu = match v3_msg.scoped_data {
@@ -1153,40 +1156,42 @@ mod tests {
         };
         match scoped_pdu.data {
             rasn_snmp::v2::Pdus::Response(inner) => {
-                let error_status =
-                    codec::ErrorStatus::from_u32(inner.0.error_status).expect("valid error status");
+                let error_status = crate::codec::ErrorStatus::from_u32(inner.0.error_status)
+                    .expect("valid error status");
                 let varbinds = inner
                     .0
                     .variable_bindings
                     .into_iter()
                     .map(|vb| {
                         let oid_arcs: Vec<u32> = vb.name.as_ref().to_vec();
-                        let oid = codec::Oid::try_from(oid_arcs).unwrap();
+                        let oid = crate::codec::Oid::try_from(oid_arcs).unwrap();
                         let value = match vb.value {
                             rasn_snmp::v2::VarBindValue::Value(
                                 rasn_smi::v2::ObjectSyntax::Simple(
                                     rasn_smi::v2::SimpleSyntax::Integer(n),
                                 ),
-                            ) => codec::VarbindValue::Value(codec::Value::Integer32(
+                            ) => crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(
                                 i32::try_from(n).unwrap(),
                             )),
                             rasn_snmp::v2::VarBindValue::Value(
                                 rasn_smi::v2::ObjectSyntax::Simple(
                                     rasn_smi::v2::SimpleSyntax::String(s),
                                 ),
-                            ) => codec::VarbindValue::Value(codec::Value::OctetString(s.to_vec())),
+                            ) => crate::codec::VarbindValue::Value(
+                                crate::codec::Value::OctetString(s.to_vec()),
+                            ),
                             rasn_snmp::v2::VarBindValue::NoSuchObject => {
-                                codec::VarbindValue::NoSuchObject
+                                crate::codec::VarbindValue::NoSuchObject
                             }
                             rasn_snmp::v2::VarBindValue::EndOfMibView => {
-                                codec::VarbindValue::EndOfMibView
+                                crate::codec::VarbindValue::EndOfMibView
                             }
                             _ => panic!("unexpected VarBindValue variant"),
                         };
-                        codec::Varbind { oid, value }
+                        crate::codec::Varbind { oid, value }
                     })
                     .collect();
-                codec::GetResponse {
+                crate::codec::GetResponse {
                     request_id: inner.0.request_id,
                     error_status,
                     error_index: inner.0.error_index,
@@ -1197,6 +1202,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "test-support")]
     #[test]
     fn given_get_request_when_sent_over_tcp_then_response_is_received() {
         // Verifies: REQ-0021, REQ-0051, REQ-0066, REQ-0068, REQ-0069, REQ-0070, REQ-0071
@@ -1205,11 +1211,11 @@ mod tests {
             EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
-        let oid: codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
         sender
             .send(Command::SetValue {
                 oid: oid.clone(),
-                value: codec::Value::Integer32(42),
+                value: crate::codec::Value::Integer32(42),
             })
             .unwrap();
 
@@ -1236,12 +1242,12 @@ mod tests {
         let response_frame = read_framed_response(&mut client);
         let response = decode_v3_response_payload(&response_frame);
         assert_eq!(response.request_id, 1);
-        assert_eq!(response.error_status, codec::ErrorStatus::NoError);
+        assert_eq!(response.error_status, crate::codec::ErrorStatus::NoError);
         assert_eq!(response.varbinds.len(), 1);
         assert_eq!(response.varbinds[0].oid, oid);
         assert_eq!(
             response.varbinds[0].value,
-            codec::VarbindValue::Value(codec::Value::Integer32(42))
+            crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(42))
         );
 
         sender.send(Command::Shutdown).unwrap();
@@ -1251,6 +1257,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(feature = "test-support")]
     #[test]
     fn given_partial_frame_when_split_across_reads_then_response_is_received() {
         // Verifies: REQ-0068, REQ-0071
@@ -1259,11 +1266,11 @@ mod tests {
             EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
-        let oid: codec::Oid = "1.3.6.1.2.1.1.2.0".parse().unwrap();
+        let oid: crate::codec::Oid = "1.3.6.1.2.1.1.2.0".parse().unwrap();
         sender
             .send(Command::SetValue {
                 oid: oid.clone(),
-                value: codec::Value::Integer32(7),
+                value: crate::codec::Value::Integer32(7),
             })
             .unwrap();
 
@@ -1301,7 +1308,7 @@ mod tests {
         assert_eq!(response.request_id, 2);
         assert_eq!(
             response.varbinds[0].value,
-            codec::VarbindValue::Value(codec::Value::Integer32(7))
+            crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(7))
         );
 
         sender.send(Command::Shutdown).unwrap();
@@ -1311,6 +1318,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(feature = "test-support")]
     #[test]
     fn given_invalid_snmp_payload_in_sequence_when_received_then_connection_stays_open() {
         // Verifies: REQ-0073
@@ -1319,11 +1327,11 @@ mod tests {
             EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
-        let oid: codec::Oid = "1.3.6.1.2.1.1.3.0".parse().unwrap();
+        let oid: crate::codec::Oid = "1.3.6.1.2.1.1.3.0".parse().unwrap();
         sender
             .send(Command::SetValue {
                 oid: oid.clone(),
-                value: codec::Value::Integer32(99),
+                value: crate::codec::Value::Integer32(99),
             })
             .unwrap();
 
@@ -1361,7 +1369,7 @@ mod tests {
         assert_eq!(response.request_id, 3);
         assert_eq!(
             response.varbinds[0].value,
-            codec::VarbindValue::Value(codec::Value::Integer32(99))
+            crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(99))
         );
 
         sender.send(Command::Shutdown).unwrap();
@@ -1371,6 +1379,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(feature = "test-support")]
     #[test]
     fn given_empty_sequence_frame_when_received_then_connection_stays_open() {
         // Verifies: REQ-0073
@@ -1379,11 +1388,11 @@ mod tests {
             EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
-        let oid: codec::Oid = "1.3.6.1.2.1.1.4.0".parse().unwrap();
+        let oid: crate::codec::Oid = "1.3.6.1.2.1.1.4.0".parse().unwrap();
         sender
             .send(Command::SetValue {
                 oid: oid.clone(),
-                value: codec::Value::Integer32(55),
+                value: crate::codec::Value::Integer32(55),
             })
             .unwrap();
 
@@ -1417,7 +1426,7 @@ mod tests {
         assert_eq!(response.request_id, 4);
         assert_eq!(
             response.varbinds[0].value,
-            codec::VarbindValue::Value(codec::Value::Integer32(55))
+            crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(55))
         );
 
         sender.send(Command::Shutdown).unwrap();
@@ -1427,6 +1436,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(feature = "test-support")]
     #[test]
     fn given_wrong_engine_id_when_request_sent_then_discarded_silently() {
         // Verifies: REQ-0057
@@ -1435,11 +1445,11 @@ mod tests {
             EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
-        let oid: codec::Oid = "1.3.6.1.2.1.1.5.0".parse().unwrap();
+        let oid: crate::codec::Oid = "1.3.6.1.2.1.1.5.0".parse().unwrap();
         sender
             .send(Command::SetValue {
                 oid: oid.clone(),
-                value: codec::Value::Integer32(77),
+                value: crate::codec::Value::Integer32(77),
             })
             .unwrap();
 
@@ -1458,14 +1468,14 @@ mod tests {
 
         // When: a request with the wrong engine ID is sent, it should be discarded.
         let wrong_engine_id = b"\x80\x00\x1f\x88\x04wrong";
-        let pdu = codec::GetRequest {
+        let pdu = crate::codec::GetRequest {
             request_id: 10,
-            varbinds: vec![codec::Varbind {
+            varbinds: vec![crate::codec::Varbind {
                 oid: oid.clone(),
-                value: codec::VarbindValue::Unspecified,
+                value: crate::codec::VarbindValue::Unspecified,
             }],
         };
-        let wrong_encoded = codec::encode_v3_get_request(10, wrong_engine_id, b"", &pdu)
+        let wrong_encoded = crate::codec::encode_v3_get_request(10, wrong_engine_id, b"", &pdu)
             .expect("encode must succeed");
         client
             .write_all(&wrong_encoded)
@@ -1481,7 +1491,7 @@ mod tests {
         assert_eq!(response.request_id, 11);
         assert_eq!(
             response.varbinds[0].value,
-            codec::VarbindValue::Value(codec::Value::Integer32(77))
+            crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(77))
         );
 
         sender.send(Command::Shutdown).unwrap();
@@ -1491,6 +1501,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(feature = "test-support")]
     #[test]
     fn given_non_empty_context_name_when_request_sent_then_discarded_silently() {
         // Verifies: REQ-0056, REQ-0058
@@ -1502,11 +1513,11 @@ mod tests {
             EventLoop::new(any_loopback(), test_engine_id()).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
-        let oid: codec::Oid = "1.3.6.1.2.1.1.6.0".parse().unwrap();
+        let oid: crate::codec::Oid = "1.3.6.1.2.1.1.6.0".parse().unwrap();
         sender
             .send(Command::SetValue {
                 oid: oid.clone(),
-                value: codec::Value::Integer32(88),
+                value: crate::codec::Value::Integer32(88),
             })
             .unwrap();
 
@@ -1524,15 +1535,15 @@ mod tests {
         let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
 
         // When: a request with a non-empty context name is sent, it should be discarded.
-        let pdu = codec::GetRequest {
+        let pdu = crate::codec::GetRequest {
             request_id: 20,
-            varbinds: vec![codec::Varbind {
+            varbinds: vec![crate::codec::Varbind {
                 oid: oid.clone(),
-                value: codec::VarbindValue::Unspecified,
+                value: crate::codec::VarbindValue::Unspecified,
             }],
         };
         let bad_context_encoded =
-            codec::encode_v3_get_request(20, TEST_ENGINE_ID, b"badcontext", &pdu)
+            crate::codec::encode_v3_get_request(20, TEST_ENGINE_ID, b"badcontext", &pdu)
                 .expect("encode must succeed");
         client
             .write_all(&bad_context_encoded)
@@ -1548,7 +1559,7 @@ mod tests {
         assert_eq!(response.request_id, 21);
         assert_eq!(
             response.varbinds[0].value,
-            codec::VarbindValue::Value(codec::Value::Integer32(88))
+            crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(88))
         );
 
         sender.send(Command::Shutdown).unwrap();

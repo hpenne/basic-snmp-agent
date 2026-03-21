@@ -13,7 +13,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::request::{TrapPdu, build_wire_trap};
+use crate::transport::request::{TrapPdu, build_wire_trap};
 
 /// The UDP MTU cap for outbound trap datagrams (ADR-0008).
 const TRAP_MTU_BYTES: usize = 1500;
@@ -44,8 +44,8 @@ pub struct TrapResult {
 /// ```no_run
 /// use std::net::SocketAddr;
 /// use std::time::Instant;
-/// use transport::trap::TrapSender;
-/// use transport::TrapPdu;
+/// use basic_snmp_agent::transport::trap::TrapSender;
+/// use basic_snmp_agent::TrapPdu;
 ///
 /// let sender = TrapSender::new(Instant::now()).unwrap();
 /// let pdu = TrapPdu {
@@ -96,7 +96,7 @@ impl TrapSender {
     ///
     /// ```no_run
     /// use std::time::Instant;
-    /// use transport::trap::TrapSender;
+    /// use basic_snmp_agent::transport::trap::TrapSender;
     ///
     /// let sender = TrapSender::new(Instant::now()).unwrap();
     /// ```
@@ -123,8 +123,8 @@ impl TrapSender {
     /// ```no_run
     /// use std::net::SocketAddr;
     /// use std::time::Instant;
-    /// use transport::trap::TrapSender;
-    /// use transport::TrapPdu;
+    /// use basic_snmp_agent::transport::trap::TrapSender;
+    /// use basic_snmp_agent::TrapPdu;
     ///
     /// let sender = TrapSender::new(Instant::now()).unwrap();
     /// let pdu = TrapPdu {
@@ -139,7 +139,7 @@ impl TrapSender {
     pub fn send_trap(&self, pdu: &TrapPdu, destinations: &[SocketAddr]) -> Vec<TrapResult> {
         let wire_pdu = build_wire_trap(pdu, self.start_time);
 
-        let encoded_pdu = match codec::encode_trap(&wire_pdu) {
+        let encoded_pdu = match crate::codec::encode_trap(&wire_pdu) {
             Ok(encoded_pdu) => encoded_pdu,
             Err(e) => {
                 let error_message = format!("trap PDU encoding failed: {e}");
@@ -185,9 +185,9 @@ fn encode_error_for_all(destinations: &[SocketAddr], message: &str) -> Vec<TrapR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codec::{Value, Varbind, VarbindValue};
+    use crate::codec::{Value, Varbind, VarbindValue};
 
-    fn trap_oid() -> codec::Oid {
+    fn trap_oid() -> crate::codec::Oid {
         "1.3.6.1.6.3.1.1.5.1".parse().unwrap()
     }
 
@@ -229,8 +229,8 @@ mod tests {
 
         // And: the receiver socket actually received a non-empty datagram that
         // matches the encoded bytes for the same PDU.
-        let wire_pdu = crate::request::build_wire_trap(&pdu, sender.start_time);
-        let expected_encoded_pdu = codec::encode_trap(&wire_pdu).unwrap();
+        let wire_pdu = crate::transport::request::build_wire_trap(&pdu, sender.start_time);
+        let expected_encoded_pdu = crate::codec::encode_trap(&wire_pdu).unwrap();
         let mut recv_buf = vec![0u8; TRAP_MTU_BYTES];
         let (bytes_received, _src) = receiver.recv_from(&mut recv_buf).unwrap();
         assert!(bytes_received > 0, "expected non-empty datagram");

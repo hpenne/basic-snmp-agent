@@ -12,12 +12,12 @@
 //!
 //! The store lives entirely on the event loop thread and requires no internal
 //! synchronisation. Thread-safe write access from application threads is provided
-//! by the channel-based command mechanism in the `transport` crate.
+//! by the channel-based command mechanism in the `transport` module.
 
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
-pub use codec::{Oid, Value};
+pub use crate::codec::{Oid, Value};
 
 /// An OID-keyed value store that preserves lexicographic ordering.
 ///
@@ -33,7 +33,7 @@ pub use codec::{Oid, Value};
 /// # Examples
 ///
 /// ```
-/// use mib::{Oid, Store, Value};
+/// use basic_snmp_agent::mib::{Oid, Store, Value};
 ///
 /// let mut store = Store::new();
 /// let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -54,7 +54,7 @@ impl Store {
     /// # Examples
     ///
     /// ```
-    /// use mib::Store;
+    /// use basic_snmp_agent::mib::Store;
     ///
     /// let store = Store::new();
     /// ```
@@ -77,7 +77,7 @@ impl Store {
     /// # Examples
     ///
     /// ```
-    /// use mib::{Oid, Store, Value};
+    /// use basic_snmp_agent::mib::{Oid, Store, Value};
     ///
     /// let mut store = Store::new();
     /// let oid: Oid = "1.3.6.1.2.1.1.3.0".parse().unwrap();
@@ -100,7 +100,7 @@ impl Store {
     /// # Examples
     ///
     /// ```
-    /// use mib::{Oid, Store, Value};
+    /// use basic_snmp_agent::mib::{Oid, Store, Value};
     ///
     /// let mut store = Store::new();
     /// let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -124,7 +124,7 @@ impl Store {
     /// # Examples
     ///
     /// ```
-    /// use mib::{Oid, Store, Value};
+    /// use basic_snmp_agent::mib::{Oid, Store, Value};
     ///
     /// let mut store = Store::new();
     /// let a: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();

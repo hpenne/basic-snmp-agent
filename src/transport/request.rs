@@ -5,11 +5,11 @@
 //! purely on codec types and the MIB store, making it straightforward to unit
 //! test without spinning up a socket.
 
-use codec::{
+use crate::codec::{
     ErrorStatus, GetBulkRequest, GetNextRequest, GetRequest, GetResponse, Oid, SetRequest, Value,
     Varbind, VarbindValue,
 };
-use mib::Store;
+use crate::mib::Store;
 use std::sync::LazyLock;
 use std::time::Instant;
 
@@ -31,7 +31,7 @@ static SNMP_TRAP_OID_OID: LazyLock<Oid> =
 /// automatically prepends the mandatory `sysUpTime.0` and `snmpTrapOID.0`
 /// varbinds before encoding per RFC 3416 §4.2.6.
 ///
-/// This type is re-exported from the `transport` crate root and from `basic_snmp_agent`.
+/// This type is re-exported from the crate root via `basic_snmp_agent`.
 ///
 /// # Requirements
 /// Implements: REQ-0039, REQ-0040
@@ -39,7 +39,7 @@ static SNMP_TRAP_OID_OID: LazyLock<Oid> =
 /// # Examples
 ///
 /// ```
-/// use transport::TrapPdu;
+/// use basic_snmp_agent::TrapPdu;
 ///
 /// let pdu = TrapPdu {
 ///     request_id: 1,
@@ -238,7 +238,7 @@ pub fn handle_set(req: &SetRequest) -> GetResponse {
 ///
 /// # Requirements
 /// Implements: REQ-0037, REQ-0038, REQ-0041
-pub fn build_wire_trap(api_pdu: &TrapPdu, start_time: Instant) -> codec::WireTrapPdu {
+pub fn build_wire_trap(api_pdu: &TrapPdu, start_time: Instant) -> crate::codec::WireTrapPdu {
     let sys_up_time = elapsed_hundredths(start_time);
 
     let mut varbinds = vec![
@@ -253,7 +253,7 @@ pub fn build_wire_trap(api_pdu: &TrapPdu, start_time: Instant) -> codec::WireTra
     ];
     varbinds.extend_from_slice(&api_pdu.varbinds);
 
-    codec::WireTrapPdu {
+    crate::codec::WireTrapPdu {
         request_id: api_pdu.request_id,
         varbinds,
     }
