@@ -1,0 +1,22 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-PLAINTCP"
+title = "Plain TCP Transport"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+[REQ-0068] The agent MUST accept inbound SNMP connections over plain TCP (RFC 3430).
+[REQ-0069] The agent MUST bind a TCP socket on port 10161 by default.
+[REQ-0070] The agent MUST accept a configuration parameter to override the listen address and port.
+[REQ-0071] The agent MUST use the BER length field to determine message boundaries on the TCP byte
+           stream, as specified in RFC 3430 §3.
+[REQ-0072] The agent MUST support both IPv4 and IPv6 for inbound connections.
+[REQ-0073] After framing, the agent MUST silently discard any payload that does not decode as a valid
+           SNMPv3 message.
+
+Rationale: Plain TCP is a temporary transport used to enable end-to-end inbound request testing with
+net-snmp client tools before TLS is introduced. It provides no authentication or encryption.
+RFC-0006:C-TRANSPORT supersedes this clause."""

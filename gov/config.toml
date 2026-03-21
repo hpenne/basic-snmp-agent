@@ -13,7 +13,7 @@ docs_output = "docs"
 # agent_dir = ".claude"
 
 [schema]
-version = 1
+version = 2
 
 # [work_item]
 # ID strategy for work items (default: sequential)

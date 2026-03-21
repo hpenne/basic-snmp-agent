@@ -1,0 +1,18 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-CRATE"
+title = "Library Crate Structure"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+[REQ-0001] The crate MUST be a library crate (`lib.rs`); it MUST NOT include a binary entry point.
+
+[REQ-0002] The crate MUST expose a public `Agent` type as its primary entry point for embedding applications.
+
+[REQ-0003] The crate MUST NOT depend on any global mutable state; all configuration and runtime state MUST be encapsulated within the `Agent` instance.
+
+**Rationale:**
+A library crate allows embedding applications to host the agent in-process without a separate binary. Avoiding global state allows multiple `Agent` instances to coexist in the same process if needed, and simplifies testing."""

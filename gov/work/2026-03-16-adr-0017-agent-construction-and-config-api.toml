@@ -1,5 +1,6 @@
+#:schema ../schema/work.schema.json
+
 [govctl]
-schema = 1
 id = "WI-2026-03-16-003"
 title = "ADR-0017: Agent construction and config API"
 status = "queue"

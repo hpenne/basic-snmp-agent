@@ -1,0 +1,30 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-TRANSPORT"
+title = "TLS and UDP Transport"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+[REQ-0004] The agent MUST listen for inbound SNMP connections over TLS as specified in RFC 6353.
+[REQ-0005] The agent MUST bind a TCP socket on port 10161 (the IANA-assigned SNMP-over-TLS port) by default.
+[REQ-0006] It MUST accept a configuration parameter to override the listen address and port.
+[REQ-0007] The agent MUST use the TLS message framing defined in RFC 6353 §5 (length-prefixed SNMP messages over the TLS record layer).
+
+[REQ-0008] The agent MUST send outbound trap PDUs over plain UDP with no encryption or authentication.
+[REQ-0009] The default destination port for traps MUST be 162.
+
+[REQ-0010] The agent MUST support SNMPv3 only.
+[REQ-0011] After TLS decryption, the agent MUST silently discard any payload that does not decode as a valid SNMPv3 message.
+[REQ-0012] Trap PDUs MUST also be valid SNMPv3 messages.
+
+[REQ-0013] The agent MUST support IPv4 and IPv6.
+
+[REQ-0014] The initial implementation SHOULD use the `rustls` crate as the TLS engine.
+
+**Rationale:**
+RFC 6353 defines SNMP over TLS, providing confidentiality and certificate-based peer authentication for inbound requests.
+Plain UDP for traps avoids the complexity of maintaining TLS connections to trap destinations and is sufficient for unacknowledged notifications.
+Port 10161 is the IANA-assigned port for SNMP over TLS."""

@@ -1,5 +1,6 @@
+#:schema ../schema/adr.schema.json
+
 [govctl]
-schema = 1
 id = "ADR-0011"
 title = "codec: Value enum as public API with ObjectSyntax conversion"
 status = "accepted"

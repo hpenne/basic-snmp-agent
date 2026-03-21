@@ -1,0 +1,26 @@
+#:schema ../../schema/rfc.schema.json
+
+[govctl]
+id = "RFC-0002"
+title = "Crate and Runtime"
+version = "0.1.0"
+status = "normative"
+phase = "test"
+owners = ["@Helge Penne"]
+created = "2026-03-16"
+updated = "2026-03-20"
+
+[[sections]]
+title = "Summary"
+
+[[sections]]
+title = "Specification"
+clauses = [
+    "clauses/C-CRATE.toml",
+    "clauses/C-RUNTIME.toml",
+]
+
+[[changelog]]
+version = "0.1.0"
+date = "2026-03-16"
+notes = "Initial draft"

@@ -1,0 +1,37 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-INBOUND"
+title = "Inbound Request Handling"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+[REQ-0021] The agent MUST handle GetRequest, GetNextRequest, and GetBulkRequest PDUs by resolving each requested OID against the internal MIB store and returning the values in a Response PDU.
+
+[REQ-0022] The agent MUST copy the request-id from the incoming PDU into the corresponding Response PDU unchanged.
+
+[REQ-0023] The agent MUST return a `noSuchObject` exception varbind for any OID in a GetRequest that is not present in the MIB store.
+
+[REQ-0024] The agent MUST return an `endOfMibView` exception varbind for a GetNextRequest or GetBulkRequest OID for which no lexicographically next OID exists in the MIB store.
+[REQ-0025] If the MIB store is empty, every OID in a GetNextRequest or GetBulkRequest MUST result in an `endOfMibView` exception varbind.
+
+[REQ-0026] The agent MUST apply the `non-repeaters` and `max-repetitions` fields of a GetBulkRequest as specified in RFC 3416 §4.2.3.
+[REQ-0027] If `max-repetitions` is zero, the agent MUST return only the non-repeater varbinds.
+
+[REQ-0028] If the BER-decoded `max-repetitions` value is negative (outside the protocol range of 0..2147483647), the agent MUST treat it as zero.
+
+[REQ-0029] The agent MUST accept a configurable maximum `max-repetitions` cap.
+[REQ-0030] If an incoming GetBulkRequest specifies a `max-repetitions` value exceeding this cap, the agent MUST clamp it to the configured maximum.
+[REQ-0031] The default cap MUST be 100.
+
+[REQ-0032] The agent MUST respond to any SetRequest with a Response PDU containing error-status `notWritable` (value 17) and the error-index set to the index of the first varbind.
+
+[REQ-0033] The agent MUST silently discard any PDU received over a TLS connection whose peer certificate was not successfully verified.
+
+**Rationale:**
+These behaviours follow RFC 3416.
+Returning `notWritable` for SET requests informs the manager that the agent explicitly does not support writes, which is preferable to silent discard as it allows managers to report a clear error.
+Discarding PDUs from unverified peers enforces the certificate authentication requirement.
+Clamping `max-repetitions` prevents resource exhaustion from requests with excessively large repetition counts."""

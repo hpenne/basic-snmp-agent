@@ -1,5 +1,6 @@
+#:schema ../schema/work.schema.json
+
 [govctl]
-schema = 1
 id = "WI-2026-03-16-002"
 title = "RFC 6353 framing and PDU dispatch over plain TCP"
 status = "done"

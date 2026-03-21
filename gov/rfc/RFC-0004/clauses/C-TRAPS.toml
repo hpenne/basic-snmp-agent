@@ -1,0 +1,37 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-TRAPS"
+title = "Outbound Trap Sending"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+[REQ-0034] The library MUST expose a public function on `Agent` for sending SNMPv3 Trap PDUs (SNMPv2-Trap-PDU as defined in RFC 3416 §4.2.6).
+[REQ-0035] The function MUST block until delivery to all destinations has been attempted and MUST return per-destination results.
+
+[REQ-0036] The agent MUST send traps over plain UDP with no encryption or authentication.
+
+[REQ-0037] The agent MUST record the time of `Agent` construction and use it as the basis for generating `sysUpTime.0` values.
+[REQ-0038] The agent MUST automatically populate `sysUpTime.0` as the first varbind of every outbound Trap PDU.
+[REQ-0039] The `TrapPdu` type MUST NOT include a field for `sysUpTime.0`.
+
+[REQ-0040] The function MUST accept a `TrapPdu` value containing the trap OID (`snmpTrapOID.0`) and a list of additional varbinds representing the trap payload.
+[REQ-0041] The agent MUST prepend `sysUpTime.0` and `snmpTrapOID.0` as the first two varbinds in the outbound PDU as required by RFC 3416 §4.2.6.
+
+[REQ-0042] The function MUST accept a list of destination socket addresses.
+[REQ-0043] The function MUST return an error immediately if the destination list is empty, without sending any PDU.
+
+[REQ-0044] The agent MUST send the trap to every destination in the list.
+[REQ-0045] Failure to deliver to one destination MUST NOT prevent delivery attempts to the remaining destinations.
+
+[REQ-0046] The agent MUST NOT send SNMP Inform PDUs; only unacknowledged Trap PDUs are supported.
+
+[REQ-0047] The function MUST return a result indicating per-destination success or failure so that the caller can log or act on individual delivery errors.
+
+**Rationale:**
+Having the library generate `sysUpTime.0` from its own construction time removes a burden from the caller and ensures the value is consistent and accurate.
+RFC 3416 §4.2.6 mandates `sysUpTime.0` and `snmpTrapOID.0` as the first two varbinds; enforcing this in the library prevents malformed traps.
+A blocking call with per-destination results gives the caller a simple synchronous API while the actual sending is handled by the event loop via the command channel.
+Plain UDP keeps trap delivery simple; traps are unacknowledged notifications and do not require the overhead of TLS."""

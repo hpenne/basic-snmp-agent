@@ -1,0 +1,27 @@
+#:schema ../../schema/rfc.schema.json
+
+[govctl]
+id = "RFC-0005"
+title = "Plain TCP Transport and Inbound Requests"
+version = "0.1.0"
+status = "normative"
+phase = "test"
+owners = ["@Helge Penne"]
+created = "2026-03-16"
+updated = "2026-03-17"
+
+[[sections]]
+title = "Summary"
+
+[[sections]]
+title = "Specification"
+clauses = [
+    "clauses/C-INBOUND.toml",
+    "clauses/C-ENGINE.toml",
+    "clauses/C-PLAINTCP.toml",
+]
+
+[[changelog]]
+version = "0.1.0"
+date = "2026-03-16"
+notes = "Initial draft"

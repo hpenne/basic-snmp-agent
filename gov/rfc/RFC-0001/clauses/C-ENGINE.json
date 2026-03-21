@@ -1,9 +1,0 @@
-{
-  "clause_id": "C-ENGINE",
-  "title": "Engine ID and Context",
-  "kind": "normative",
-  "status": "superseded",
-  "text": "[REQ-0055] The agent MUST accept a configurable `snmpEngineID` at construction time.\n\n[REQ-0056] The agent MUST support only the default context (empty `contextName`).\n\n[REQ-0057] The agent MUST silently discard any scoped PDU whose `contextEngineID` does not match the agent's configured `snmpEngineID`.\n\n[REQ-0058] The agent MUST silently discard any scoped PDU whose `contextName` is not the empty string.\n[REQ-0059] The agent SHOULD additionally respond with a Report PDU incrementing `snmpUnknownContexts` as specified in RFC 3412.\n\n**Rationale:**\nSNMPv3 requires an authoritative engine ID to identify the agent. Supporting only the default context keeps the scope simple while remaining compliant for single-context deployments. Silent discard is the safe minimum-viable response to mismatched context fields; the SHOULD for a Report PDU allows a conformant implementation later without mandating it now.",
-  "superseded_by": "RFC-0005:C-ENGINE",
-  "since": "0.1.0"
-}

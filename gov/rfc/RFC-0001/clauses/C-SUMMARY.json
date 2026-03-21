@@ -1,8 +1,0 @@
-{
-  "clause_id": "C-SUMMARY",
-  "title": "Summary",
-  "kind": "informative",
-  "status": "active",
-  "text": "This RFC specifies the design and behaviour of `basic-snmp-agent`, a Rust library crate implementing an SNMPv3 agent.\nInbound requests are served over TLS; outbound traps are sent over plain UDP.\n\n**Scope:** Covers the library crate structure, TLS transport for inbound requests, plain UDP transport for outbound traps, X.509 certificate authentication for inbound connections, inbound request handling (GET, GETNEXT, GETBULK), the internal MIB store with application-driven updates, and outbound trap sending.\nSNMPv1, SNMPv2c, USM, SET handling beyond error responses, MIB compilation, and SNMP Inform notifications are out of scope.\n\n**Rationale:** A library crate allows embedding applications to instrument themselves without running a separate agent process.\nTLS provides strong, certificate-based security for inbound requests without the weaknesses of community strings.\nPlain UDP for traps keeps outbound delivery simple and avoids the complexity of maintaining TLS connections to potentially many trap destinations.\nA push-based internal MIB store gives the application full control over when values change while keeping the library's request path simple and lock-free from the application's perspective.",
-  "since": "0.1.0"
-}
