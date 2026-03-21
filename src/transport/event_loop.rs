@@ -1146,9 +1146,9 @@ mod tests {
             HeaderData, Message as V3Message, ScopedPdu, ScopedPduData, USMSecurityParameters,
         };
 
-        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(
-            std::borrow::Cow::Owned(oid.as_slice().to_vec()),
-        );
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(std::borrow::Cow::Owned(
+            oid.as_slice().to_vec(),
+        ));
         let rasn_pdu = RasnGetRequest(RasnPdu {
             request_id,
             error_status: 0,
