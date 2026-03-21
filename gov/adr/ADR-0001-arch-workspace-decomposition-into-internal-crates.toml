@@ -2,7 +2,7 @@
 
 [govctl]
 id = "ADR-0001"
-title = "arch: Workspace decomposition into internal crates"
+title = "arch: Single-crate layout with internal modules"
 status = "accepted"
 date = "2026-03-04"
 refs = ["RFC-0001"]
@@ -10,29 +10,32 @@ refs = ["RFC-0001"]
 [content]
 context = """
 The RFC specifies a library crate with several distinct concerns: TLS transport, ASN.1/BER codec, MIB storage, and SNMP protocol logic.
-Putting everything in a single crate would couple unrelated concerns and make the codebase harder to navigate and test.
-The project needs a clear decomposition.
-"""
+The project needs a clear decomposition to keep unrelated concerns separate and the codebase easy to navigate.
+An initial multi-crate workspace approach (four crates: basic-snmp-agent, transport, codec, mib) was implemented but subsequently converted to a single crate with modules, as the inter-crate boundary overhead outweighed the benefits at this project scale."""
 decision = """
-Decompose the project into a Cargo workspace with four internal crates:
+Organise the project as a single Cargo crate (basic-snmp-agent) with internal modules mirroring the original crate decomposition:
 
-- basic-snmp-agent: Top-level library crate. Exposes the public Agent type, ties together the other crates, owns the event loop thread.
-- transport: TCP listener, TLS session management (rustls), UDP socket for outbound traps, certificate handling, event loop implementation.
-- codec: ASN.1/BER encoding and decoding, SNMPv3 message framing, PDU type definitions.
-- mib: MIB store (OID-to-value map, lexicographic ordering, upsert API).
+- src/codec/: ASN.1/BER encoding and decoding, SNMPv3 message framing, PDU type definitions.
+- src/mib.rs: MIB store (OID-to-value map, lexicographic ordering, upsert API).
+- src/transport/: TCP listener, TLS session management (rustls), UDP socket for outbound traps, certificate handling, event loop implementation.
+- src/lib.rs: Public API surface. Exposes the Agent type and re-exports selected items from the internal modules.
 
-Dependencies flow inward: basic-snmp-agent depends on transport, codec, and mib. transport depends on codec and mib. codec and mib are independent of each other."""
+Visibility rules replace crate boundaries: items needed across module boundaries are pub(crate); items on the public API surface are pub.
+Files were moved with git mv from the original crate layout, preserving git blame and log history."""
 consequences = """
-Each crate can be compiled and tested independently.
-The dependency graph is acyclic and shallow.
-The codec and mib crates have no knowledge of transport or networking, making them easy to unit test.
-The trade-off is slightly more boilerplate (multiple Cargo.toml files, workspace configuration) but this is minimal for four crates.
-"""
+No Cargo workspace boilerplate beyond the two test-utility members (tests/test-agent, tests/test-agent-mib).
+A single cargo build / cargo test invocation covers the whole codebase.
+Module visibility (pub, pub(crate), private) enforces the same dependency flow as crate boundaries did.
+Git history is preserved: files were moved with git mv, so blame and log remain intact.
+The trade-off is that Rust cannot enforce strict crate-level isolation between modules; a developer could add a pub use that bypasses the intended layering.
+This is acceptable at the current project scale."""
 
 [[content.alternatives]]
-text = "Single crate with modules: simpler setup but couples all concerns; harder to enforce dependency boundaries"
-status = "considered"
+text = "Multi-crate Cargo workspace (the original implementation, 2026-03-04): each concern in its own crate with compiler-enforced boundaries."
+status = "rejected"
+rejection_reason = "The overhead of multiple Cargo.toml files, workspace configuration, and inter-crate visibility friction outweighed the benefit at this project scale."
 
 [[content.alternatives]]
-text = "Finer-grained crates (separate pdu crate from codec): PDU types and BER encoding are tightly coupled; splitting them creates circular dependency pressure"
-status = "considered"
+text = "Finer-grained modules (separate pdu module from codec): PDU types and BER encoding are tightly coupled; splitting them creates circular dependency pressure."
+status = "rejected"
+rejection_reason = "Tight coupling between PDU types and BER encoding makes separation impractical without introducing circular imports."
