@@ -18,9 +18,8 @@ Generic "parse failed" errors are insufficient for troubleshooting; the error mu
 """
 decision = """
 Parse errors must include sufficient detail to identify the specific message field that failed.
-The codec crate must produce structured error types that name the field (e.g., "msgVersion", "contextEngineID", "variable-bindings[3].value") and describe the failure reason (e.g., unexpected tag, truncated data, invalid length).
-These errors are used for logging; the transport layer still silently discards the message on the wire.
-"""
+The codec module must produce structured error types that name the field (e.g., "msgVersion", "contextEngineID", "variable-bindings[3].value") and describe the failure reason (e.g., unexpected tag, truncated data, invalid length).
+These errors are used for logging; the transport layer still silently discards the message on the wire."""
 consequences = """
 Operators can diagnose parse failures from log output without packet captures.
 The codec wraps rasn's decode errors with field-path context, adding a thin layer on top of rasn's built-in error reporting.

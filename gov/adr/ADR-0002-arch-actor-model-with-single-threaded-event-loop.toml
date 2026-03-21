@@ -16,7 +16,7 @@ The agent needs an execution model to handle inbound TLS connections carrying SN
 The agent must also accept MIB updates and trap requests from application threads."""
 decision = """
 Use a single-threaded event loop running on a dedicated OS thread as an actor.
-The event loop owns the TCP listener, all TLS connections, the UDP socket for traps, and the MIB store.
+The event loop owns the TCP listener, all TLS connections, and the MIB store.
 It accepts incoming TCP connections, performs TLS handshakes, reads framed SNMPv3 messages from established TLS connections, and handles SNMP request dispatch.
 Commands from the application (MIB updates, trap requests) arrive via channels and are drained between polls.
 No async runtime is used."""

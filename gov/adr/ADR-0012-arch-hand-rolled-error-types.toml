@@ -12,21 +12,18 @@ refs = [
 
 [content]
 context = """
-Multiple crates need error types: codec for parse errors, transport for I/O and DTLS errors, agent for public API errors.
-A consistent error handling strategy is needed across the workspace.
-"""
+Multiple modules need error types: codec for parse errors, transport for I/O and TLS errors, agent for public API errors.
+A consistent error handling strategy is needed across the codebase."""
 decision = """
-Define custom error types by hand in each crate.
+Define custom error types by hand in each module.
 No error-handling crates (thiserror, anyhow, eyre) are used.
-Each crate defines its own error enum implementing std::fmt::Display and std::error::Error manually.
-Crate-boundary errors wrap inner errors as the source via std::error::Error::source().
-"""
+Each module defines its own error enum implementing std::fmt::Display and std::error::Error manually.
+Module-boundary errors wrap inner errors as the source via std::error::Error::source()."""
 consequences = """
 Zero additional dependencies for error handling.
-Error types are fully under our control and tailored to each crate's needs.
+Error types are fully under our control and tailored to each module's needs.
 The negative trade-off is more boilerplate per error type (manual Display and Error impls), but the number of error variants is small and the boilerplate is straightforward.
-Error chains are preserved via source(), so callers can inspect root causes.
-"""
+Error chains are preserved via source(), so callers can inspect root causes."""
 
 [[content.alternatives]]
 text = "thiserror: reduces boilerplate with derive macros but adds a proc-macro dependency for minimal benefit given the small number of error types"

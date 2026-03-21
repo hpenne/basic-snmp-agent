@@ -12,10 +12,9 @@ refs = [
 
 [content]
 context = """
-The codec crate needs an ASN.1/BER library to encode and decode SNMPv3 messages.
+The codec module needs an ASN.1/BER library to encode and decode SNMPv3 messages.
 The library must support BER (not just DER), implicit tagging, and SEQUENCE OF — all required by SNMP.
-Ideally it should have existing SNMP type definitions to avoid hand-rolling message structures.
-"""
+Ideally it should have existing SNMP type definitions to avoid hand-rolling message structures."""
 decision = """
 Use rasn as the ASN.1/BER codec and rasn-snmp for SNMPv3 message type definitions.
 rasn provides compile-time ASN.1 validation via derive macros, full BER encode/decode, implicit tagging, and no unsafe code.

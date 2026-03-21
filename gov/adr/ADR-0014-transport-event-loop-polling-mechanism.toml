@@ -20,12 +20,12 @@ decision = """
 Use mio as the event loop polling mechanism.
 The event loop creates a mio::Poll instance and registers the TCP listener, each accepted TLS connection, and the read end of a self-pipe for command wakeup.
 Each source is assigned a mio::Token for dispatch.
-When the application calls set() or send_trap(), it pushes a command to the mpsc channel and writes one byte to the pipe to wake the event loop immediately.
+When the application calls set(), it pushes a command to the mpsc channel and writes one byte to the pipe to wake the event loop immediately.
 The event loop drains the pipe byte(s) and the mpsc channel, processes commands, and sends results back via a std::sync::mpsc channel used as a oneshot.
 TLS connections are registered on accept and deregistered on close or timeout (ADR-0015).
 The UDP socket for outbound traps does not need to be registered with mio since it is used for sending only."""
 consequences = """
-Near-instant wakeup on external API calls (set, send_trap) with no polling latency.
+Near-instant wakeup on set() calls with no polling latency.
 The event loop blocks in mio::Poll::poll() when idle, consuming no CPU.
 mio uses epoll on Linux and kqueue on macOS, providing efficient O(1) fd registration and event notification.
 Dynamic registration and deregistration of TLS connections is handled cleanly via mio's register/deregister API.

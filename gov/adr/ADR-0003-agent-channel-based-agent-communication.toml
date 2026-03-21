@@ -40,5 +40,6 @@ text = "Callback/trait-based pull model: application registers a callback to res
 status = "considered"
 
 [[content.alternatives]]
-text = '{"text": "Command::SendTrap via event loop channel: adds an unnecessary round-trip and reply channel; the UDP socket is never polled by mio so routing trap sends through the event loop provides no benefit over a direct synchronous call", "status": "rejected"}'
-status = "considered"
+text = "Command::SendTrap via event loop channel: adds an unnecessary round-trip and reply channel; the UDP socket is never polled by mio so routing trap sends through the event loop provides no benefit over a direct synchronous call"
+status = "rejected"
+rejection_reason = "Unnecessary complexity: direct synchronous call is simpler and equally correct"

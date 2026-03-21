@@ -26,7 +26,7 @@ The test infrastructure consists of four components:
 The binary accepts a command-line argument pointing to a trap definition file.
 If provided, it reads the file, sends the specified traps at startup, and then continues serving inbound requests.
 The trap file uses JSON format; the binary deserialises it using serde_json, scoped as a dev-dependency of the test-agent crate only.
-The binary uses only the public API types of the workspace crates (transport::TrapSender, transport::TrapPdu, codec::Oid, codec::Value, codec::Varbind, and related types).
+The binary uses only the public API of the basic-snmp-agent crate (TrapSender, TrapPdu, Oid, Value, Varbind, and related types).
 Behave starts the binary as a subprocess per scenario (with or without a trap file) and stops it afterwards.
 
 2. A custom net-snmp Docker image: built from a Dockerfile checked into the repository (tests/system/docker/).
