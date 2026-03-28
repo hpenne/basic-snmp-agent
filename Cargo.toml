@@ -1,5 +1,6 @@
 [workspace]
 members = [".", "tests/test-agent", "tests/test-agent-mib"]
+exclude = ["fuzz"]
 resolver = "2"
 
 [package]

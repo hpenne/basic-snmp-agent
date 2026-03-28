@@ -17,10 +17,12 @@
 //! This module uses [`codec`] for `SNMPv3` message framing and [`mib`] for
 //! OID resolution during request handling.
 
+pub mod dispatch;
 pub mod event_loop;
 pub mod request;
 pub mod trap;
 
+pub use dispatch::process_snmpv3_request;
 pub use event_loop::EventLoopError;
 pub use request::TrapPdu;
 pub use trap::{TrapResult, TrapSender};

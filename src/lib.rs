@@ -46,6 +46,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 pub use crate::codec::{Oid, Value, Varbind, VarbindValue};
+pub use crate::transport::process_snmpv3_request;
 pub use crate::transport::{TrapPdu, TrapResult};
 pub use error::{AgentError, SetError, TrapError};
 

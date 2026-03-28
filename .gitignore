@@ -4,3 +4,5 @@
 /mutants.out.old/
 /.idea
 /docs/
+/fuzz/corpus
+/fuzz/target

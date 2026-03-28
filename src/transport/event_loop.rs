@@ -22,8 +22,6 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
 
-use crate::transport::request;
-
 /// mio token for the TCP listener.
 const LISTENER_TOKEN: Token = Token(0);
 
@@ -38,7 +36,7 @@ const FIRST_CONN_TOKEN: usize = 2;
 /// Caps the `max-repetitions` field from the wire to prevent a single large
 /// bulk request from monopolising the event loop for an extended period.
 // Implements: REQ-0029, REQ-0031
-const MAX_BULK_REPETITIONS: u32 = 100;
+pub(crate) const MAX_BULK_REPETITIONS: u32 = 100;
 
 /// Maximum accepted RFC 3430 frame total size (tag + length + content),
 /// matching the `SNMPv3` `maxMessageSize` upper bound. Frames whose total
@@ -532,7 +530,7 @@ impl EventLoop {
             conn.read_buf.drain(..total_frame_bytes);
 
             let Some(encoded_response) =
-                Self::dispatch_snmpv3_frame(&ber_frame, token, &self.engine_id, &self.store)
+                Self::dispatch_snmpv3_frame(&ber_frame, &self.engine_id, &self.store)
             else {
                 continue;
             };
@@ -558,74 +556,14 @@ impl EventLoop {
 
     /// Decode, validate, and dispatch a single RFC 3430 BER frame.
     ///
-    /// `ber_frame` is the complete BER bytes including the SEQUENCE tag, length
-    /// field, and content. Returns `Some(encoded_response)` — raw BER bytes
-    /// ready for writing — when the frame produces a response, or `None` when
-    /// the frame should be silently discarded (invalid encoding, wrong engine
-    /// ID, or unsupported context name).
+    /// Thin wrapper around [`crate::transport::dispatch::process_snmpv3_request`].
     // Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073
     fn dispatch_snmpv3_frame(
         ber_frame: &[u8],
-        token: Token,
         engine_id: &[u8],
         store: &crate::mib::Store,
     ) -> Option<Vec<u8>> {
-        // Decode as an SNMPv3 message. Non-v3 messages are silently discarded
-        // per REQ-0073.
-        let v3_msg = match crate::codec::decode_v3_message(ber_frame) {
-            Err(decode_error) => {
-                eprintln!("[event_loop] SNMPv3 decode error (token {token:?}): {decode_error}");
-                return None;
-            }
-            Ok(msg) => msg,
-        };
-
-        // Verify the engine ID matches ours. Requests for other engines are
-        // silently discarded per REQ-0057.
-        if v3_msg.engine_id != engine_id {
-            eprintln!(
-                "[event_loop] engine ID mismatch on token {token:?}: \
-                 expected {:?}, got {:?}",
-                engine_id, v3_msg.engine_id
-            );
-            return None;
-        }
-
-        // Only the default (empty) context name is supported per REQ-0058.
-        if !v3_msg.context_name.is_empty() {
-            eprintln!(
-                "[event_loop] non-empty context name on token {token:?}: {:?}",
-                v3_msg.context_name
-            );
-            return None;
-        }
-
-        let response = match v3_msg.pdu {
-            crate::codec::InboundPdu::GetRequest(req) => request::handle_get(&req, store),
-            crate::codec::InboundPdu::GetNextRequest(req) => request::handle_get_next(&req, store),
-            crate::codec::InboundPdu::GetBulkRequest(req) => {
-                request::handle_get_bulk(&req, store, MAX_BULK_REPETITIONS)
-            }
-            crate::codec::InboundPdu::SetRequest(req) => request::handle_set(&req),
-        };
-
-        // context_name is always empty here: non-empty values were rejected above.
-        let encoded_response = match crate::codec::encode_v3_response(
-            v3_msg.msg_id,
-            engine_id,
-            &v3_msg.user_name,
-            &v3_msg.context_name,
-            &response,
-        ) {
-            Ok(encoded_bytes) => encoded_bytes,
-            Err(encode_error) => {
-                eprintln!("[event_loop] response encode error (token {token:?}): {encode_error}");
-                return None;
-            }
-        };
-
-        // The encoded response is already a complete BER frame — no prefix needed.
-        Some(encoded_response)
+        crate::transport::dispatch::process_snmpv3_request(ber_frame, engine_id, store)
     }
 
     /// Allocate the next unique connection token, skipping reserved values.
