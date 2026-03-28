@@ -11,6 +11,8 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+rasn = "0.22"
+rasn-snmp = "0.22"
 
 [dependencies.basic-snmp-agent]
 path = ".."
@@ -18,5 +20,11 @@ path = ".."
 [[bin]]
 name = "snmpv3_request"
 path = "fuzz_targets/snmpv3_request.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "generate_seeds"
+path = "generate_seeds.rs"
 test = false
 doc = false
