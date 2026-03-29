@@ -94,6 +94,9 @@ jobs:
           key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-fuzz-
 
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
       - name: Generate seeds
         run: make fuzz-gen-seeds
 
