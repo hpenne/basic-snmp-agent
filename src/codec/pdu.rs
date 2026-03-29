@@ -895,57 +895,6 @@ fn pdus_to_inbound_pdu(pdus: Pdus) -> Result<InboundPdu, DecodeError> {
 mod tests {
     use super::*;
 
-    fn empty_usm_security_parameters() -> USMSecurityParameters {
-        USMSecurityParameters {
-            authoritative_engine_id: rasn::types::OctetString::from(vec![]),
-            authoritative_engine_boots: 0.into(),
-            authoritative_engine_time: 0.into(),
-            user_name: rasn::types::OctetString::from(vec![]),
-            authentication_parameters: rasn::types::OctetString::from(vec![]),
-            privacy_parameters: rasn::types::OctetString::from(vec![]),
-        }
-    }
-
-    /// Encode a `GetBulkRequest` inside a minimal V3 message, ready for `decode_v3_message`.
-    /// Used by the `GetBulk` clamping tests to avoid repeating the V3 framing boilerplate.
-    fn encode_getbulk_v3(non_repeaters: u32, max_repetitions: u32) -> Vec<u8> {
-        use rasn_snmp::v2::{BulkPdu, GetBulkRequest as RasnGetBulkRequest, VarBind, VarBindValue};
-
-        let engine_id = b"\x80\x00\x1f\x88\x04test";
-        let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
-        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(std::borrow::Cow::Owned(
-            oid.as_slice().to_vec(),
-        ));
-        let rasn_pdu = RasnGetBulkRequest(BulkPdu {
-            request_id: 42,
-            non_repeaters,
-            max_repetitions,
-            variable_bindings: vec![VarBind {
-                name: rasn_oid,
-                value: VarBindValue::Unspecified,
-            }],
-        });
-        let scoped_pdu = ScopedPdu {
-            engine_id: engine_id.to_vec().into(),
-            name: vec![].into(),
-            data: Pdus::GetBulkRequest(rasn_pdu),
-        };
-        let usm_params = empty_usm_security_parameters();
-        let security_params = rasn::ber::encode(&usm_params).unwrap();
-        let v3_msg = V3Message {
-            version: 3.into(),
-            global_data: HeaderData {
-                message_id: 5.into(),
-                max_size: 65535.into(),
-                flags: rasn::types::OctetString::from(vec![0x04]),
-                security_model: 3.into(),
-            },
-            security_parameters: security_params.into(),
-            scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
-        };
-        rasn::ber::encode(&v3_msg).unwrap()
-    }
-
     fn sysname_oid() -> Oid {
         "1.3.6.1.2.1.1.5.0".parse().unwrap()
     }
@@ -1594,55 +1543,12 @@ mod tests {
         }
     }
 
-    // ── decode_v3_message ─────────────────────────────────────────────────────
-
-    /// Build a minimal `SNMPv3` message wrapping a `GetRequest` for tests.
-    fn encode_test_v3_get_request(
-        msg_id: i32,
-        engine_id: &[u8],
-        context_name: &[u8],
-        request_id: i32,
-        oid: &Oid,
-    ) -> Vec<u8> {
-        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(std::borrow::Cow::Owned(
-            oid.as_slice().to_vec(),
-        ));
-        let rasn_pdu = RasnGetRequest(RasnPdu {
-            request_id,
-            error_status: 0,
-            error_index: 0,
-            variable_bindings: vec![VarBind {
-                name: rasn_oid,
-                value: RasnVarBindValue::Unspecified,
-            }],
-        });
-        let scoped_pdu = ScopedPdu {
-            engine_id: engine_id.to_vec().into(),
-            name: context_name.to_vec().into(),
-            data: Pdus::GetRequest(rasn_pdu),
-        };
-        let usm_params = empty_usm_security_parameters();
-        let security_params = rasn::ber::encode(&usm_params).unwrap();
-        let v3_msg = V3Message {
-            version: 3.into(),
-            global_data: HeaderData {
-                message_id: msg_id.into(),
-                max_size: 65535.into(),
-                flags: rasn::types::OctetString::from(vec![0x04]),
-                security_model: 3.into(),
-            },
-            security_parameters: security_params.into(),
-            scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
-        };
-        rasn::ber::encode(&v3_msg).unwrap()
-    }
-
     #[test]
     fn given_valid_v3_get_request_when_decode_then_fields_extracted() {
         // Verifies: REQ-0068, REQ-0069, REQ-0070
         let engine_id = b"\x80\x00\x1f\x88\x04test";
         let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
-        let encoded = encode_test_v3_get_request(42, engine_id, b"", 7, &oid);
+        let encoded = snmpv3_frames::encode_get_request(engine_id, b"", 42, 7, oid.as_slice());
 
         let msg = decode_v3_message(&encoded).unwrap();
 
@@ -1657,7 +1563,14 @@ mod tests {
         // Verifies: REQ-0073
         // Build a structurally valid V3Message but with version=1 (SNMPv1).
         // rasn decodes it successfully at the BER level, then our version check fires.
-        let usm_params = empty_usm_security_parameters();
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: rasn::types::OctetString::from(vec![]),
+            authoritative_engine_boots: 0.into(),
+            authoritative_engine_time: 0.into(),
+            user_name: rasn::types::OctetString::from(vec![]),
+            authentication_parameters: rasn::types::OctetString::from(vec![]),
+            privacy_parameters: rasn::types::OctetString::from(vec![]),
+        };
         let security_params = rasn::ber::encode(&usm_params).unwrap();
         let scoped_pdu = ScopedPdu {
             engine_id: rasn::types::OctetString::from(vec![]),
@@ -1694,7 +1607,14 @@ mod tests {
     #[test]
     fn given_encrypted_scoped_pdu_when_decode_v3_then_encrypted_pdu_error() {
         // Verifies: REQ-0073
-        let usm_params = empty_usm_security_parameters();
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: rasn::types::OctetString::from(vec![]),
+            authoritative_engine_boots: 0.into(),
+            authoritative_engine_time: 0.into(),
+            user_name: rasn::types::OctetString::from(vec![]),
+            authentication_parameters: rasn::types::OctetString::from(vec![]),
+            privacy_parameters: rasn::types::OctetString::from(vec![]),
+        };
         let security_params = rasn::ber::encode(&usm_params).unwrap();
         let v3_msg = V3Message {
             version: 3.into(),
@@ -1735,7 +1655,15 @@ mod tests {
         // per RFC 3416 §4.2.3) must be treated as zero.  Such values arise from
         // negative BER INTEGER wire values whose sign bit rasn reinterprets as a
         // magnitude bit, yielding a u32 value greater than i32::MAX.
-        let encoded = encode_getbulk_v3(0, i32::MAX as u32 + 1);
+        let encoded = snmpv3_frames::encode_get_bulk_request(
+            b"\x80\x00\x1f\x88\x04test",
+            b"",
+            5,
+            42,
+            0,
+            i32::MAX as u32 + 1,
+            &[1, 3, 6, 1, 2, 1, 1, 1, 0],
+        );
         let result = decode_v3_message(&encoded).expect("message must decode");
         match result.pdu {
             InboundPdu::GetBulkRequest(bulk) => {
@@ -1753,7 +1681,15 @@ mod tests {
         // Verifies: REQ-0028
         // i32::MAX (2147483647) is the maximum valid value per RFC 3416 §4.2.3
         // and must pass through unclamped.
-        let encoded = encode_getbulk_v3(0, i32::MAX as u32);
+        let encoded = snmpv3_frames::encode_get_bulk_request(
+            b"\x80\x00\x1f\x88\x04test",
+            b"",
+            5,
+            42,
+            0,
+            i32::MAX as u32,
+            &[1, 3, 6, 1, 2, 1, 1, 1, 0],
+        );
         let result = decode_v3_message(&encoded).expect("message must decode");
         match result.pdu {
             InboundPdu::GetBulkRequest(bulk) => {
@@ -1773,7 +1709,15 @@ mod tests {
         // non_repeaters values outside the SNMP protocol range (0..2147483647
         // per RFC 3416 §4.2.3) must be treated as zero — same clamping as
         // max_repetitions.
-        let encoded = encode_getbulk_v3(i32::MAX as u32 + 1, 0);
+        let encoded = snmpv3_frames::encode_get_bulk_request(
+            b"\x80\x00\x1f\x88\x04test",
+            b"",
+            5,
+            42,
+            i32::MAX as u32 + 1,
+            0,
+            &[1, 3, 6, 1, 2, 1, 1, 1, 0],
+        );
         let result = decode_v3_message(&encoded).expect("message must decode");
         match result.pdu {
             InboundPdu::GetBulkRequest(bulk) => {
@@ -1791,7 +1735,15 @@ mod tests {
         // Verifies: REQ-0028
         // non_repeaters at i32::MAX (2147483647) is at the valid boundary and
         // must pass through unclamped.
-        let encoded = encode_getbulk_v3(i32::MAX as u32, 0);
+        let encoded = snmpv3_frames::encode_get_bulk_request(
+            b"\x80\x00\x1f\x88\x04test",
+            b"",
+            5,
+            42,
+            i32::MAX as u32,
+            0,
+            &[1, 3, 6, 1, 2, 1, 1, 1, 0],
+        );
         let result = decode_v3_message(&encoded).expect("message must decode");
         match result.pdu {
             InboundPdu::GetBulkRequest(bulk) => {
@@ -1859,7 +1811,8 @@ mod tests {
         // Encode a v3 GetRequest, decode it, check all fields survive.
         let engine_id = b"\x80\x00\x1f\x88\x04roundtrip";
         let oid: Oid = "1.3.6.1.2.1.1.5.0".parse().unwrap();
-        let encoded = encode_test_v3_get_request(100, engine_id, b"ctx", 200, &oid);
+        let encoded =
+            snmpv3_frames::encode_get_request(engine_id, b"ctx", 100, 200, oid.as_slice());
 
         let msg = decode_v3_message(&encoded).unwrap();
 

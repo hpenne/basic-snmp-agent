@@ -64,6 +64,7 @@ dependencies = [
  "rasn-smi",
  "rasn-snmp",
  "rustls",
+ "snmpv3-frames",
 ]
 
 [[package]]
@@ -611,6 +612,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "snmpv3-frames"
+version = "0.1.0"
+dependencies = [
+ "rasn",
+ "rasn-snmp",
 ]
 
 [[package]]

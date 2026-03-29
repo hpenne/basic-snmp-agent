@@ -11,8 +11,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-rasn = "0.22"
-rasn-snmp = "0.22"
+snmpv3-frames = { path = "../tests/snmpv3-frames" }
 
 [dependencies.basic-snmp-agent]
 path = ".."

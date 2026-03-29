@@ -1076,53 +1076,13 @@ mod tests {
         engine_id: &[u8],
         context_name: &[u8],
     ) -> Vec<u8> {
-        use rasn_snmp::v2::{
-            GetRequest as RasnGetRequest, Pdu as RasnPdu, Pdus, VarBind,
-            VarBindValue as RasnVarBindValue,
-        };
-        use rasn_snmp::v3::{
-            HeaderData, Message as V3Message, ScopedPdu, ScopedPduData, USMSecurityParameters,
-        };
-
-        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(std::borrow::Cow::Owned(
-            oid.as_slice().to_vec(),
-        ));
-        let rasn_pdu = RasnGetRequest(RasnPdu {
+        snmpv3_frames::encode_get_request(
+            engine_id,
+            context_name,
+            msg_id,
             request_id,
-            error_status: 0,
-            error_index: 0,
-            variable_bindings: vec![VarBind {
-                name: rasn_oid,
-                value: RasnVarBindValue::Unspecified,
-            }],
-        });
-        let scoped_pdu = ScopedPdu {
-            engine_id: engine_id.to_vec().into(),
-            name: context_name.to_vec().into(),
-            data: Pdus::GetRequest(rasn_pdu),
-        };
-        let usm_params = USMSecurityParameters {
-            authoritative_engine_id: rasn::types::OctetString::from(vec![]),
-            authoritative_engine_boots: 0.into(),
-            authoritative_engine_time: 0.into(),
-            user_name: rasn::types::OctetString::from(vec![]),
-            authentication_parameters: rasn::types::OctetString::from(vec![]),
-            privacy_parameters: rasn::types::OctetString::from(vec![]),
-        };
-        let security_parameters_bytes =
-            rasn::ber::encode(&usm_params).expect("USMSecurityParameters must encode");
-        let v3_message = V3Message {
-            version: 3.into(),
-            global_data: HeaderData {
-                message_id: msg_id.into(),
-                max_size: 65535.into(),
-                flags: rasn::types::OctetString::from(vec![0x04]),
-                security_model: 3.into(),
-            },
-            security_parameters: security_parameters_bytes.into(),
-            scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
-        };
-        rasn::ber::encode(&v3_message).expect("V3Message must encode")
+            oid.as_slice(),
+        )
     }
 
     /// Read a complete RFC 3430 BER frame (tag + length + content) from the stream.

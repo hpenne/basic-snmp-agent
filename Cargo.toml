@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tests/test-agent", "tests/test-agent-mib"]
+members = [".", "tests/test-agent", "tests/test-agent-mib", "tests/snmpv3-frames"]
 exclude = ["fuzz"]
 resolver = "2"
 
@@ -16,3 +16,6 @@ rasn-snmp = "0.22"
 mio = { version = "1", features = ["net", "os-poll", "os-ext"] }
 rustls = "0.23"
 libc = "0.2"
+
+[dev-dependencies]
+snmpv3-frames = { path = "tests/snmpv3-frames" }
