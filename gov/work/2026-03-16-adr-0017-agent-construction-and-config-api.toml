@@ -3,8 +3,9 @@
 [govctl]
 id = "WI-2026-03-16-003"
 title = "ADR-0017: Agent construction and config API"
-status = "queue"
+status = "active"
 created = "2026-03-16"
+started = "2026-03-30"
 
 [content]
 description = "ADR-0017 is currently open. Before TLS can be implemented, we need a decided API for how the public `Agent` type accepts TLS configuration: server certificate, private key, and trusted CA certificates. This work item produces a reviewed and approved ADR-0017 covering the construction API, cert/key types, and error handling at construction time."
