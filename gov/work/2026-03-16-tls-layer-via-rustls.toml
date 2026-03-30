@@ -3,8 +3,9 @@
 [govctl]
 id = "WI-2026-03-16-004"
 title = "TLS layer via rustls"
-status = "queue"
+status = "active"
 created = "2026-03-16"
+started = "2026-03-30"
 
 [content]
 description = "Layer rustls on top of the plain-TCP dispatch path from WI-2026-03-16-002. Each accepted connection is wrapped in a `rustls::ServerConnection`. The event loop drives the TLS handshake, decrypts inbound records, passes plaintext to the RFC 6353 deframer, and encrypts outbound responses before writing them to the socket. Connections whose peer cert does not chain to a trusted CA are rejected. Requires explicit permission to add the rustls dependency. Prerequisite: WI-2026-03-16-002 and approved WI-2026-03-16-003."
