@@ -4,7 +4,8 @@
 id = "C-PLAINTCP"
 title = "Plain TCP Transport"
 kind = "normative"
-status = "active"
+status = "superseded"
+superseded_by = "RFC-0006:C-TRANSPORT"
 
 [content]
 text = """

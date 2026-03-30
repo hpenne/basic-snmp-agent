@@ -5,10 +5,10 @@ id = "RFC-0006"
 title = "TLS Transport and Certificate Authentication"
 version = "0.1.0"
 status = "normative"
-phase = "spec"
+phase = "impl"
 owners = ["@Helge Penne"]
 created = "2026-03-16"
-updated = "2026-03-16"
+updated = "2026-03-30"
 
 [[sections]]
 title = "Summary"

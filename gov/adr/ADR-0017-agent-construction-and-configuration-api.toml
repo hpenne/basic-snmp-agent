@@ -3,11 +3,13 @@
 [govctl]
 id = "ADR-0017"
 title = "agent: Construction and configuration API"
-status = "proposed"
+status = "accepted"
 date = "2026-03-04"
 refs = [
     "RFC-0001",
     "ADR-0003",
+    "RFC-0006",
+    "ADR-0015",
 ]
 
 [content]
@@ -15,5 +17,26 @@ context = """
 C-CRATE, C-TRANSPORT, C-AUTH, and C-ENGINE all specify construction-time configuration (engine ID, certificates, listen address).
 The Agent type is the primary public API surface and needs a well-designed construction API.
 """
-decision = "TBD"
-consequences = "TBD"
+decision = """
+`AgentBuilder` gains three optional methods for TLS configuration: `server_cert_chain(Vec<CertificateDer<'static>>)`, `server_private_key(PrivateKeyDer<'static>)`, and `ca_trust_anchors(Vec<CertificateDer<'static>>)`.
+All three are optional; `build()` succeeds without them.
+When all three are provided, `build()` constructs a `rustls::ServerConfig` with `WebPkiClientVerifier` (mandatory mutual TLS) and passes an `Arc<ServerConfig>` to the event loop.
+When only some are provided, `build()` returns `AgentError::TlsConfig` with a description of which fields are missing.
+When none are provided, the TCP listener still binds on the configured address but rejects all inbound TLS handshakes (no server certificate to present). This supports trap-only agents that do not need to serve inbound requests.
+The `rustls::ServerConfig` is constructed inside `build()`, not exposed in the public API, so the library retains full control over TLS settings (minimum protocol version, cipher suites, etc.)."""
+consequences = """
+The public API accepts standard `rustls::pki_types` types, which are re-exported or widely available, without leaking `rustls::ServerConfig` itself.
+Trap-only agents incur no ceremony: `AgentBuilder::new().build()` remains valid and unchanged.
+Partial TLS configuration (e.g. cert provided but no key) is caught at construction time with a clear error, not silently at connection time.
+The library can enforce TLS best practices (TLS 1.2 minimum, safe cipher suites) without callers needing to configure them.
+Changing TLS certificates requires restarting the agent; live rotation is out of scope."""
+
+[[content.alternatives]]
+text = "Require certs at construction: build() fails without certs."
+status = "rejected"
+rejection_reason = "Trap-only agents would need unnecessary certificate configuration."
+
+[[content.alternatives]]
+text = "Accept a pre-built rustls::ServerConfig directly."
+status = "rejected"
+rejection_reason = "Leaks rustls types into the public API and prevents the library from enforcing TLS settings."
