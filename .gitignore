@@ -6,3 +6,5 @@
 /docs/
 /fuzz/corpus
 /fuzz/target
+__pycache__/
+*.pyc
