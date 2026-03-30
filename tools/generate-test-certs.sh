@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+#
+# Generates a self-signed CA and server/client certificates for TLS testing.
+# All output goes to tests/fixtures/certs/ relative to the repository root.
+#
+# The script is idempotent: running it again overwrites any previously
+# generated files with fresh ones.
+#
+# Tested with LibreSSL (macOS) and OpenSSL (Linux).
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CERT_DIR="${REPO_ROOT}/tests/fixtures/certs"
+
+mkdir -p "${CERT_DIR}"
+
+echo "Generating TLS test certificates in ${CERT_DIR}"
+
+# ---------------------------------------------------------------------------
+# CA certificate and key
+# ---------------------------------------------------------------------------
+
+echo "  [1/3] Generating CA key and self-signed certificate..."
+
+openssl genrsa -out "${CERT_DIR}/ca.key" 2048
+chmod 600 "${CERT_DIR}/ca.key"
+
+openssl req \
+    -new \
+    -x509 \
+    -days 3650 \
+    -key "${CERT_DIR}/ca.key" \
+    -out "${CERT_DIR}/ca.crt" \
+    -subj "/CN=Test CA"
+
+# ---------------------------------------------------------------------------
+# Server certificate signed by the CA
+#
+# A Subject Alternative Name extension is required because modern TLS
+# implementations ignore the CN field for hostname verification (RFC 6125).
+# ---------------------------------------------------------------------------
+
+echo "  [2/3] Generating server key and CA-signed certificate..."
+
+openssl genrsa -out "${CERT_DIR}/server.key" 2048
+chmod 600 "${CERT_DIR}/server.key"
+
+openssl req \
+    -new \
+    -key "${CERT_DIR}/server.key" \
+    -out "${CERT_DIR}/server.csr" \
+    -subj "/CN=test-agent"
+
+# Write the SAN extension to a temporary config file so that LibreSSL's
+# openssl (which does not support -addext) can apply it via -extfile.
+SERVER_EXT_FILE="${CERT_DIR}/server.ext"
+cat > "${SERVER_EXT_FILE}" <<EOF
+subjectAltName = DNS:localhost, IP:127.0.0.1
+EOF
+
+openssl x509 \
+    -req \
+    -days 3650 \
+    -in "${CERT_DIR}/server.csr" \
+    -CA "${CERT_DIR}/ca.crt" \
+    -CAkey "${CERT_DIR}/ca.key" \
+    -CAcreateserial \
+    -extfile "${SERVER_EXT_FILE}" \
+    -out "${CERT_DIR}/server.crt"
+
+rm -f "${SERVER_EXT_FILE}" "${CERT_DIR}/server.csr"
+
+# ---------------------------------------------------------------------------
+# Client certificate signed by the CA
+#
+# A Subject Alternative Name extension is added for consistency with the
+# server certificate; some TLS stacks validate SANs on client certs too.
+# ---------------------------------------------------------------------------
+
+echo "  [3/3] Generating client key and CA-signed certificate..."
+
+openssl genrsa -out "${CERT_DIR}/client.key" 2048
+chmod 600 "${CERT_DIR}/client.key"
+
+openssl req \
+    -new \
+    -key "${CERT_DIR}/client.key" \
+    -out "${CERT_DIR}/client.csr" \
+    -subj "/CN=snmp-client"
+
+# Write the SAN extension to a temporary config file so that LibreSSL's
+# openssl (which does not support -addext) can apply it via -extfile.
+CLIENT_EXT_FILE="${CERT_DIR}/client.ext"
+cat > "${CLIENT_EXT_FILE}" <<EOF
+subjectAltName = DNS:snmp-client
+EOF
+
+# Use -CAserial (not -CAcreateserial) so that the serial file written by the
+# server signing step is reused, avoiding duplicate serial numbers.
+openssl x509 \
+    -req \
+    -days 3650 \
+    -in "${CERT_DIR}/client.csr" \
+    -CA "${CERT_DIR}/ca.crt" \
+    -CAkey "${CERT_DIR}/ca.key" \
+    -CAserial "${CERT_DIR}/ca.srl" \
+    -extfile "${CLIENT_EXT_FILE}" \
+    -out "${CERT_DIR}/client.crt"
+
+rm -f "${CLIENT_EXT_FILE}" "${CERT_DIR}/client.csr" "${CERT_DIR}/ca.srl"
+
+echo "Done. Generated files:"
+ls -1 "${CERT_DIR}"

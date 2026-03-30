@@ -1,4 +1,4 @@
-.PHONY: test trace clippy rust-test python-test behave-test fuzz-gen-seeds fuzz-1m fuzz-10m
+.PHONY: test trace clippy rust-test python-test behave-test fuzz-gen-seeds fuzz-1m fuzz-10m generate-certs
 
 # Run the full test suite: lint, Rust unit/doc tests, Python unit tests, and Behave system tests.
 test: clippy rust-test python-test behave-test
@@ -23,6 +23,10 @@ behave-test:
 # Check requirement tracing coverage for all implemented RFCs.
 trace:
 	python3 tools/req_coverage_check.py
+
+# Generate TLS test certificates for use in integration and system tests.
+generate-certs:
+	bash tools/generate-test-certs.sh
 
 # Generate seed corpus files for the snmpv3_request fuzz target.
 fuzz-gen-seeds:
