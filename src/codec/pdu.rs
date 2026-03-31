@@ -236,7 +236,7 @@ pub enum InboundPdu {
 /// PDU ready for dispatch.
 ///
 /// # Requirements
-/// Implements: REQ-0068, REQ-0069, REQ-0070
+/// Implements: REQ-0007, REQ-0011
 #[derive(Debug)]
 pub struct V3InboundMessage {
     /// Message ID from `HeaderData`; echoed in the `SNMPv3` response.
@@ -332,7 +332,7 @@ pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
 /// - An OID or value in a varbind cannot be decoded.
 ///
 /// # Requirements
-/// Implements: REQ-0068, REQ-0069, REQ-0071, REQ-0073
+/// Implements: REQ-0007, REQ-0011
 ///
 /// # Examples
 ///
@@ -452,7 +452,7 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
 /// Returns an [`EncodeError`] if `rasn` fails to BER-encode any part of the message.
 ///
 /// # Requirements
-/// Implements: REQ-0068, REQ-0070, REQ-0072
+/// Implements: REQ-0007
 ///
 /// # Examples
 ///
@@ -839,7 +839,7 @@ fn varbinds_from_rasn(list: Vec<VarBind>) -> Result<Vec<Varbind>, DecodeError> {
     list.into_iter().map(varbind_from_rasn).collect()
 }
 
-// Implements: REQ-0021, REQ-0068
+// Implements: REQ-0007, REQ-0021
 /// Maps a decoded `Pdus` variant to our `InboundPdu`.
 ///
 /// Shared between `decode_pdu` and `decode_v3_message` to avoid duplicating
@@ -1545,7 +1545,7 @@ mod tests {
 
     #[test]
     fn given_valid_v3_get_request_when_decode_then_fields_extracted() {
-        // Verifies: REQ-0068, REQ-0069, REQ-0070
+        // Verifies: REQ-0007, REQ-0011
         let engine_id = b"\x80\x00\x1f\x88\x04test";
         let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
         let encoded = snmpv3_frames::encode_get_request(engine_id, b"", 42, 7, oid.as_slice());
@@ -1560,7 +1560,7 @@ mod tests {
 
     #[test]
     fn given_wrong_version_message_when_decode_v3_then_wrong_version_error() {
-        // Verifies: REQ-0073
+        // Verifies: REQ-0011
         // Build a structurally valid V3Message but with version=1 (SNMPv1).
         // rasn decodes it successfully at the BER level, then our version check fires.
         let usm_params = USMSecurityParameters {
@@ -1606,7 +1606,7 @@ mod tests {
 
     #[test]
     fn given_encrypted_scoped_pdu_when_decode_v3_then_encrypted_pdu_error() {
-        // Verifies: REQ-0073
+        // Verifies: REQ-0011
         let usm_params = USMSecurityParameters {
             authoritative_engine_id: rasn::types::OctetString::from(vec![]),
             authoritative_engine_boots: 0.into(),
@@ -1642,7 +1642,7 @@ mod tests {
 
     #[test]
     fn given_invalid_bytes_when_decode_v3_then_ber_error() {
-        // Verifies: REQ-0073
+        // Verifies: REQ-0011
         let decode_result = decode_v3_message(&[0xFF, 0xFE, 0xFD]);
         assert!(decode_result.is_err());
         assert_eq!(decode_result.unwrap_err().kind(), &DecodeErrorKind::Ber);
@@ -1761,7 +1761,7 @@ mod tests {
 
     #[test]
     fn given_get_response_when_encode_v3_response_then_valid_v3_message() {
-        // Verifies: REQ-0068, REQ-0070, REQ-0072
+        // Verifies: REQ-0007
         let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
         let engine_id = b"\x80\x00\x1f\x88\x04test";
         let pdu = GetResponse {
@@ -1807,7 +1807,7 @@ mod tests {
 
     #[test]
     fn given_v3_request_when_encode_then_decode_round_trip_succeeds() {
-        // Verifies: REQ-0068, REQ-0069, REQ-0070
+        // Verifies: REQ-0007, REQ-0011
         // Encode a v3 GetRequest, decode it, check all fields survive.
         let engine_id = b"\x80\x00\x1f\x88\x04roundtrip";
         let oid: Oid = "1.3.6.1.2.1.1.5.0".parse().unwrap();

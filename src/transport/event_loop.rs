@@ -671,7 +671,7 @@ impl EventLoop {
 /// should remain open.
 ///
 /// Each frame is a raw BER SEQUENCE: tag 0x30, BER-encoded length, content.
-// Implements: REQ-0007, REQ-0011, REQ-0057, REQ-0058, REQ-0071
+// Implements: REQ-0007, REQ-0011, REQ-0057, REQ-0058
 fn process_ber_frames(
     conn: &mut ConnectionState,
     engine_id: &[u8],
@@ -831,7 +831,7 @@ fn drain_pipe(fd: RawFd) {
 /// - Short form: `buf[0]` bit 7 is 0; length = `buf[0]` (0–127); field is 1 byte.
 /// - Long form: `buf[0]` bit 7 is 1; low 7 bits = number of subsequent octets N;
 ///   content length is encoded in the next N octets (big-endian).
-// Implements: REQ-0071
+// Implements: REQ-0007
 fn parse_ber_length(buf: &[u8]) -> Result<Option<(usize, usize)>, ()> {
     if buf.is_empty() {
         return Ok(None);
@@ -1301,7 +1301,7 @@ mod tests {
 
     #[test]
     fn given_short_form_length_when_parsed_then_returns_correct_length_and_field_size() {
-        // Verifies: REQ-0071
+        // Verifies: REQ-0007
         // Short form: single byte, bit 7 clear.
         assert_eq!(parse_ber_length(&[0x00]), Ok(Some((0, 1))));
         assert_eq!(parse_ber_length(&[0x7f]), Ok(Some((127, 1))));
@@ -1310,7 +1310,7 @@ mod tests {
 
     #[test]
     fn given_long_form_one_octet_when_parsed_then_returns_correct_length_and_field_size() {
-        // Verifies: REQ-0071
+        // Verifies: REQ-0007
         // Long form: 0x81 means one subsequent octet carries the length.
         assert_eq!(parse_ber_length(&[0x81, 0x80]), Ok(Some((128, 2))));
         assert_eq!(parse_ber_length(&[0x81, 0xFF]), Ok(Some((255, 2))));
@@ -1318,7 +1318,7 @@ mod tests {
 
     #[test]
     fn given_long_form_two_octets_when_parsed_then_returns_correct_length_and_field_size() {
-        // Verifies: REQ-0071
+        // Verifies: REQ-0007
         // Long form: 0x82 means two subsequent octets carry the length.
         assert_eq!(parse_ber_length(&[0x82, 0x01, 0x00]), Ok(Some((256, 3))));
         assert_eq!(parse_ber_length(&[0x82, 0xFF, 0xFF]), Ok(Some((65535, 3))));
@@ -1326,7 +1326,7 @@ mod tests {
 
     #[test]
     fn given_incomplete_buffer_when_parsed_then_returns_none() {
-        // Verifies: REQ-0071
+        // Verifies: REQ-0007
         assert_eq!(parse_ber_length(&[]), Ok(None));
         // Long form but not enough length octets.
         assert_eq!(parse_ber_length(&[0x82, 0x01]), Ok(None));
@@ -1334,14 +1334,14 @@ mod tests {
 
     #[test]
     fn given_indefinite_length_when_parsed_then_returns_error() {
-        // Verifies: REQ-0071
+        // Verifies: REQ-0007
         // 0x80 = indefinite-length form; irrecoverable protocol error.
         assert_eq!(parse_ber_length(&[0x80]), Err(()));
     }
 
     #[test]
     fn given_oversized_length_field_when_parsed_then_returns_error() {
-        // Verifies: REQ-0071
+        // Verifies: REQ-0007
         // 0x85 = 5 subsequent octets; more than 4 is not supported, irrecoverable.
         assert_eq!(parse_ber_length(&[0x85, 0, 0, 0, 0, 1]), Err(()));
     }
@@ -1500,7 +1500,7 @@ mod tests {
 
     #[test]
     fn given_partial_frame_when_split_across_reads_then_response_is_received() {
-        // Verifies: REQ-0007, REQ-0071
+        // Verifies: REQ-0007
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
             EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
@@ -1543,7 +1543,7 @@ mod tests {
 
     #[test]
     fn given_invalid_snmp_payload_in_sequence_when_received_then_connection_stays_open() {
-        // Verifies: REQ-0011, REQ-0073
+        // Verifies: REQ-0011
         // Given: a running event loop.
         let (event_loop, bound_addr, sender) =
             EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
@@ -1586,7 +1586,7 @@ mod tests {
 
     #[test]
     fn given_empty_sequence_frame_when_received_then_connection_stays_open() {
-        // Verifies: REQ-0011, REQ-0073
+        // Verifies: REQ-0011
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
             EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
@@ -1712,7 +1712,7 @@ mod tests {
 
     #[test]
     fn given_indefinite_length_ber_frame_when_received_then_connection_is_closed() {
-        // Verifies: REQ-0071
+        // Verifies: REQ-0007
         // A client sending 0x30 0x80 (SEQUENCE + indefinite-length form) must
         // cause the connection to be closed, not stalled indefinitely.
 

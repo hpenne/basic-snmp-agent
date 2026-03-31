@@ -323,8 +323,8 @@ impl AgentBuilder {
     /// the UDP socket for outbound traps, and spawns the event loop thread.
     ///
     /// When all three TLS fields are supplied, the agent negotiates mutual TLS
-    /// on every inbound connection. When none are supplied, the agent accepts
-    /// plain TCP connections (RFC-0005:C-PLAINTCP mode). Supplying only some
+    /// on every inbound connection. When none are supplied, incoming connections
+    /// are immediately closed (no plain-TCP fallback). Supplying only some
     /// of the three TLS fields is an error.
     ///
     /// # Requirements
@@ -391,7 +391,7 @@ impl Default for AgentBuilder {
 //
 // Returns:
 // - Ok(Some(config)) — all three inputs are Some; TLS is fully configured.
-// - Ok(None) — all three inputs are None; plain TCP mode.
+// - Ok(None) — all three inputs are None; no TLS (incoming connections closed).
 // - Err(AgentError::TlsConfig) — partial inputs or invalid certificate data.
 //
 // Requirements
@@ -624,9 +624,9 @@ mod tests {
     }
 
     #[test]
-    fn given_no_tls_fields_when_build_then_agent_starts_in_plain_tcp_mode() {
+    fn given_no_tls_fields_when_build_then_agent_starts_with_no_tls() {
         // Verifies: REQ-0017
-        // No TLS fields supplied — plain TCP mode should succeed.
+        // No TLS fields supplied — build succeeds; incoming connections are closed.
         let result = AgentBuilder::new()
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .build();

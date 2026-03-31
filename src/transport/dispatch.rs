@@ -16,7 +16,7 @@ use crate::transport::request;
 /// engine ID, or unsupported context name).
 ///
 /// # Requirements
-/// Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073
+/// Implements: REQ-0011, REQ-0056, REQ-0057, REQ-0058, REQ-0066
 ///
 /// # Examples
 ///
@@ -36,7 +36,7 @@ pub fn process_snmpv3_request(
     mib: &crate::mib::Store,
 ) -> Option<Vec<u8>> {
     // Decode as an SNMPv3 message. Non-v3 messages are silently discarded
-    // per REQ-0073.
+    // per REQ-0011.
     let v3_msg = crate::codec::decode_v3_message(frame).ok()?;
 
     // Verify the engine ID matches ours. Requests for other engines are
