@@ -17,9 +17,18 @@
 //!
 //! ```no_run
 //! use basic_snmp_agent::{AgentBuilder, TrapPdu};
+//! use rustls::pki_types::CertificateDer;
+//!
+//! // Build with mutual TLS (all three fields required together).
+//! let cert_chain: Vec<CertificateDer<'static>> = vec![]; // load your DER chain here
+//! let private_key = rustls::pki_types::PrivateKeyDer::Pkcs8(vec![].into()); // load key here
+//! let ca_anchors: Vec<CertificateDer<'static>> = vec![]; // load CA certs here
 //!
 //! let agent = AgentBuilder::new()
 //!     .listen_addr("0.0.0.0:10161".parse().unwrap())
+//!     .server_cert_chain(cert_chain)
+//!     .server_private_key(private_key)
+//!     .ca_trust_anchors(ca_anchors)
 //!     .build()
 //!     .unwrap();
 //!
@@ -201,6 +210,9 @@ pub struct AgentBuilder {
     /// `SNMPv3` engine ID for this agent instance. Inbound requests with a
     /// different engine ID are silently discarded (REQ-0057).
     engine_id: Vec<u8>,
+    server_cert_chain: Option<Vec<rustls::pki_types::CertificateDer<'static>>>,
+    server_private_key: Option<rustls::pki_types::PrivateKeyDer<'static>>,
+    ca_trust_anchors: Option<Vec<rustls::pki_types::CertificateDer<'static>>>,
 }
 
 impl AgentBuilder {
@@ -221,6 +233,9 @@ impl AgentBuilder {
             // Default engine ID: enterprise OID format (0x80 = enterprise,
             // 0x00 0x1f 0x88 = enterprise number 8072, 0x04 = text format).
             engine_id: b"\x80\x00\x1f\x88\x04basic-snmp-agent".to_vec(),
+            server_cert_chain: None,
+            server_private_key: None,
+            ca_trust_anchors: None,
         }
     }
 
@@ -246,10 +261,71 @@ impl AgentBuilder {
         self
     }
 
+    /// Sets the server certificate chain for TLS.
+    ///
+    /// The chain must be in DER format, ordered leaf-first. All three TLS
+    /// fields ([`server_cert_chain`][Self::server_cert_chain],
+    /// [`server_private_key`][Self::server_private_key], and
+    /// [`ca_trust_anchors`][Self::ca_trust_anchors]) must be supplied together;
+    /// providing only some of them causes [`build`][Self::build] to return
+    /// [`AgentError::TlsConfig`].
+    ///
+    /// # Requirements
+    /// Implements: REQ-0017, REQ-0018
+    ///
+    /// Implements [[RFC-0006:C-AUTH]]
+    #[must_use]
+    pub fn server_cert_chain(
+        mut self,
+        chain: Vec<rustls::pki_types::CertificateDer<'static>>,
+    ) -> Self {
+        self.server_cert_chain = Some(chain);
+        self
+    }
+
+    /// Sets the server private key for TLS.
+    ///
+    /// The key must be in DER format. All three TLS fields must be supplied
+    /// together; see [`server_cert_chain`][Self::server_cert_chain] for details.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0017, REQ-0018
+    ///
+    /// Implements [[RFC-0006:C-AUTH]]
+    #[must_use]
+    pub fn server_private_key(mut self, key: rustls::pki_types::PrivateKeyDer<'static>) -> Self {
+        self.server_private_key = Some(key);
+        self
+    }
+
+    /// Sets the trusted CA certificates for verifying connecting peers.
+    ///
+    /// Each certificate must be in DER format. All three TLS fields must be
+    /// supplied together; see [`server_cert_chain`][Self::server_cert_chain]
+    /// for details.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0017, REQ-0018
+    ///
+    /// Implements [[RFC-0006:C-AUTH]]
+    #[must_use]
+    pub fn ca_trust_anchors(
+        mut self,
+        anchors: Vec<rustls::pki_types::CertificateDer<'static>>,
+    ) -> Self {
+        self.ca_trust_anchors = Some(anchors);
+        self
+    }
+
     /// Construct and start the agent.
     ///
     /// Binds the TCP listener on [`listen_addr`][`Self::listen_addr`], creates
     /// the UDP socket for outbound traps, and spawns the event loop thread.
+    ///
+    /// When all three TLS fields are supplied, the agent negotiates mutual TLS
+    /// on every inbound connection. When none are supplied, the agent accepts
+    /// plain TCP connections (RFC-0005:C-PLAINTCP mode). Supplying only some
+    /// of the three TLS fields is an error.
     ///
     /// # Requirements
     /// Implements: REQ-0037, REQ-0048, REQ-0050, REQ-0051, REQ-0052, REQ-0053, REQ-0054, REQ-0055
@@ -260,23 +336,32 @@ impl AgentBuilder {
     /// range of 5–32 octets ([`AgentError::InvalidEngineId`]), the TCP listener
     /// cannot be bound ([`AgentError::Bind`]), the event loop infrastructure cannot
     /// be initialised ([`AgentError::Socket`]), the UDP trap socket cannot be created
-    /// ([`AgentError::UdpSocket`]), or the event loop thread cannot be spawned
-    /// ([`AgentError::Spawn`]).
+    /// ([`AgentError::UdpSocket`]), the event loop thread cannot be spawned
+    /// ([`AgentError::Spawn`]), or TLS configuration is incomplete or invalid
+    /// ([`AgentError::TlsConfig`]).
     pub fn build(self) -> Result<Agent, AgentError> {
         // RFC 3411 §5: SnmpEngineID must be between 5 and 32 octets inclusive.
         if self.engine_id.len() < 5 || self.engine_id.len() > 32 {
             return Err(AgentError::InvalidEngineId);
         }
 
+        let tls_server_config = build_tls_server_config(
+            self.server_cert_chain,
+            self.server_private_key,
+            self.ca_trust_anchors,
+        )?;
+
         let listen_addr = self.listen_addr;
 
-        let (event_loop, _bound_addr, command_sender) = EventLoop::new(listen_addr, self.engine_id)
-            .map_err(|e| match e {
-                EventLoopError::Bind { addr, source } => AgentError::Bind { addr, source },
-                EventLoopError::Pipe(source) | EventLoopError::Registration(source) => {
-                    AgentError::Socket(source)
-                }
-            })?;
+        let (event_loop, _bound_addr, command_sender) =
+            EventLoop::new(listen_addr, self.engine_id, tls_server_config).map_err(
+                |e| match e {
+                    EventLoopError::Bind { addr, source } => AgentError::Bind { addr, source },
+                    EventLoopError::Pipe(source) | EventLoopError::Registration(source) => {
+                        AgentError::Socket(source)
+                    }
+                },
+            )?;
 
         let trap_sender = TrapSender::new(Instant::now()).map_err(AgentError::UdpSocket)?;
 
@@ -296,6 +381,62 @@ impl AgentBuilder {
 impl Default for AgentBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ── TLS configuration ────────────────────────────────────────────────────────
+
+// Build a rustls ServerConfig requiring mutual TLS from the supplied
+// certificate chain, private key, and CA trust anchors.
+//
+// Returns:
+// - Ok(Some(config)) — all three inputs are Some; TLS is fully configured.
+// - Ok(None) — all three inputs are None; plain TCP mode.
+// - Err(AgentError::TlsConfig) — partial inputs or invalid certificate data.
+//
+// Requirements
+// Implements: REQ-0017, REQ-0018
+// Implements: REQ-0014, REQ-0015, REQ-0019
+// Implements [[RFC-0006:C-TRANSPORT]], [[RFC-0006:C-AUTH]]
+fn build_tls_server_config(
+    server_cert_chain: Option<Vec<rustls::pki_types::CertificateDer<'static>>>,
+    server_private_key: Option<rustls::pki_types::PrivateKeyDer<'static>>,
+    ca_trust_anchors: Option<Vec<rustls::pki_types::CertificateDer<'static>>>,
+) -> Result<Option<Arc<rustls::ServerConfig>>, AgentError> {
+    match (server_cert_chain, server_private_key, ca_trust_anchors) {
+        (Some(chain), Some(key), Some(anchors)) => {
+            if chain.is_empty() {
+                return Err(AgentError::TlsConfig(
+                    "server_cert_chain must not be empty".to_string(),
+                ));
+            }
+            if anchors.is_empty() {
+                return Err(AgentError::TlsConfig(
+                    "ca_trust_anchors must not be empty".to_string(),
+                ));
+            }
+            let mut root_store = rustls::RootCertStore::empty();
+            for anchor_cert in anchors {
+                root_store
+                    .add(anchor_cert)
+                    .map_err(|e| AgentError::TlsConfig(e.to_string()))?;
+            }
+            let client_verifier =
+                rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store))
+                    .build()
+                    .map_err(|e| AgentError::TlsConfig(e.to_string()))?;
+            let server_config = rustls::ServerConfig::builder()
+                .with_client_cert_verifier(client_verifier)
+                .with_single_cert(chain, key)
+                .map_err(|e| AgentError::TlsConfig(e.to_string()))?;
+            Ok(Some(Arc::new(server_config)))
+        }
+        (None, None, None) => Ok(None),
+        _ => Err(AgentError::TlsConfig(
+            "all three TLS fields (server_cert_chain, server_private_key, ca_trust_anchors) \
+             must be supplied together, or none at all"
+                .to_string(),
+        )),
     }
 }
 
@@ -427,5 +568,133 @@ mod tests {
         let result = agent.set(oid, Value::Integer32(7));
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn given_only_cert_chain_when_build_then_tls_config_error() {
+        // Verifies: REQ-0017
+        let result = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .server_cert_chain(vec![])
+            .build();
+        assert!(
+            matches!(result, Err(AgentError::TlsConfig(_))),
+            "expected TlsConfig error when only cert chain is set"
+        );
+    }
+
+    #[test]
+    fn given_only_private_key_when_build_then_tls_config_error() {
+        // Verifies: REQ-0017
+        let result = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .server_private_key(rustls::pki_types::PrivateKeyDer::Pkcs8(vec![].into()))
+            .build();
+        assert!(
+            matches!(result, Err(AgentError::TlsConfig(_))),
+            "expected TlsConfig error when only private key is set"
+        );
+    }
+
+    #[test]
+    fn given_only_ca_anchors_when_build_then_tls_config_error() {
+        // Verifies: REQ-0017
+        let result = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .ca_trust_anchors(vec![])
+            .build();
+        assert!(
+            matches!(result, Err(AgentError::TlsConfig(_))),
+            "expected TlsConfig error when only CA anchors are set"
+        );
+    }
+
+    #[test]
+    fn given_cert_chain_and_key_but_no_anchors_when_build_then_tls_config_error() {
+        // Verifies: REQ-0017
+        let result = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .server_cert_chain(vec![])
+            .server_private_key(rustls::pki_types::PrivateKeyDer::Pkcs8(vec![].into()))
+            .build();
+        assert!(
+            matches!(result, Err(AgentError::TlsConfig(_))),
+            "expected TlsConfig error when CA anchors are missing"
+        );
+    }
+
+    #[test]
+    fn given_no_tls_fields_when_build_then_agent_starts_in_plain_tcp_mode() {
+        // Verifies: REQ-0017
+        // No TLS fields supplied — plain TCP mode should succeed.
+        let result = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .build();
+        assert!(
+            result.is_ok(),
+            "expected agent to start without TLS configuration"
+        );
+    }
+
+    #[test]
+    fn given_empty_cert_chain_when_build_tls_server_config_then_tls_config_error() {
+        // Verifies: REQ-0017, REQ-0018
+        let dummy_key = rustls::pki_types::PrivateKeyDer::Pkcs8(vec![0u8; 32].into());
+        let dummy_anchor = rustls::pki_types::CertificateDer::from(vec![0u8; 32]);
+        let result = build_tls_server_config(
+            Some(vec![]),
+            Some(dummy_key),
+            Some(vec![dummy_anchor]),
+        );
+        assert!(
+            matches!(result, Err(AgentError::TlsConfig(ref msg)) if msg.contains("server_cert_chain")),
+            "expected TlsConfig error for empty cert chain"
+        );
+    }
+
+    #[test]
+    fn given_empty_ca_anchors_when_build_tls_server_config_then_tls_config_error() {
+        // Verifies: REQ-0017, REQ-0018
+        let dummy_cert = rustls::pki_types::CertificateDer::from(vec![0u8; 32]);
+        let dummy_key = rustls::pki_types::PrivateKeyDer::Pkcs8(vec![0u8; 32].into());
+        let result = build_tls_server_config(
+            Some(vec![dummy_cert]),
+            Some(dummy_key),
+            Some(vec![]),
+        );
+        assert!(
+            matches!(result, Err(AgentError::TlsConfig(ref msg)) if msg.contains("ca_trust_anchors")),
+            "expected TlsConfig error for empty CA anchors"
+        );
+    }
+
+    #[test]
+    fn given_valid_tls_certs_when_build_tls_server_config_then_returns_server_config() {
+        // Verifies: REQ-0017, REQ-0018
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let ca_pem =
+            std::fs::read(format!("{manifest_dir}/tests/fixtures/certs/ca.crt")).unwrap();
+        let server_cert_pem =
+            std::fs::read(format!("{manifest_dir}/tests/fixtures/certs/server.crt")).unwrap();
+        let server_key_pem =
+            std::fs::read(format!("{manifest_dir}/tests/fixtures/certs/server.key")).unwrap();
+
+        let ca_chain: Vec<rustls::pki_types::CertificateDer<'static>> =
+            rustls_pemfile::certs(&mut ca_pem.as_slice())
+                .map(|r| r.unwrap())
+                .collect();
+        let cert_chain: Vec<rustls::pki_types::CertificateDer<'static>> =
+            rustls_pemfile::certs(&mut server_cert_pem.as_slice())
+                .map(|r| r.unwrap())
+                .collect();
+        let private_key = rustls_pemfile::private_key(&mut server_key_pem.as_slice())
+            .unwrap()
+            .expect("server.key must contain a private key");
+
+        let result = build_tls_server_config(Some(cert_chain), Some(private_key), Some(ca_chain));
+        assert!(
+            matches!(result, Ok(Some(_))),
+            "expected Ok(Some(_)) for valid TLS certificates"
+        );
     }
 }

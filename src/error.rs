@@ -19,6 +19,13 @@ pub enum AgentError {
     Spawn(io::Error),
     /// The engine ID length is outside the RFC 3411 §5 range of 5–32 octets.
     InvalidEngineId,
+    /// Returned when TLS configuration is partially supplied or invalid.
+    ///
+    /// The source error is not preserved; inspect the `Display` output for details.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0017
+    TlsConfig(String),
 }
 
 impl fmt::Display for AgentError {
@@ -34,6 +41,7 @@ impl fmt::Display for AgentError {
                 f,
                 "engine ID length is invalid: must be between 5 and 32 octets (RFC 3411 \u{a7}5)"
             ),
+            Self::TlsConfig(msg) => write!(f, "TLS configuration error: {msg}"),
         }
     }
 }
@@ -43,7 +51,7 @@ impl std::error::Error for AgentError {
         match self {
             Self::Bind { source, .. } => Some(source),
             Self::Socket(e) | Self::UdpSocket(e) | Self::Spawn(e) => Some(e),
-            Self::InvalidEngineId => None,
+            Self::InvalidEngineId | Self::TlsConfig(_) => None,
         }
     }
 }
@@ -140,6 +148,15 @@ mod tests {
         assert!(msg.contains('5') && msg.contains("32"), "{msg}");
     }
 
+    #[test]
+    fn agent_error_tls_config_display_contains_message() {
+        // Verifies: REQ-0017
+        let tls_error = AgentError::TlsConfig("missing private key".to_string());
+        let msg = tls_error.to_string();
+        assert!(msg.contains("TLS"), "{msg}");
+        assert!(msg.contains("missing private key"), "{msg}");
+    }
+
     // ── AgentError source ────────────────────────────────────────────────
 
     #[test]
@@ -193,6 +210,13 @@ mod tests {
     fn agent_error_invalid_engine_id_source_returns_none() {
         let invalid_error = AgentError::InvalidEngineId;
         assert!(invalid_error.source().is_none());
+    }
+
+    #[test]
+    fn agent_error_tls_config_source_returns_none() {
+        // Verifies: REQ-0017
+        let tls_error = AgentError::TlsConfig("some message".to_string());
+        assert!(tls_error.source().is_none());
     }
 
     // ── SetError Display ─────────────────────────────────────────────────

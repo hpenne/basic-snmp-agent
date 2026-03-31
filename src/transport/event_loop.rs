@@ -17,7 +17,10 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{
+    Arc,
+    mpsc::{self, Receiver, Sender},
+};
 
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
@@ -135,7 +138,7 @@ pub enum Command {
 ///
 /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
 /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
-/// let (event_loop, _bound_addr, sender) = EventLoop::new(addr, engine_id).unwrap();
+/// let (event_loop, _bound_addr, sender) = EventLoop::new(addr, engine_id, None).unwrap();
 /// sender.send(Command::Shutdown).unwrap();
 /// ```
 pub struct CommandSender {
@@ -222,7 +225,7 @@ struct ConnectionState {
 ///
 /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
 /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
-/// let (event_loop, bound_addr, sender) = EventLoop::new(addr, engine_id).unwrap();
+/// let (event_loop, bound_addr, sender) = EventLoop::new(addr, engine_id, None).unwrap();
 ///
 /// let handle = std::thread::spawn(move || event_loop.run());
 /// sender.send(basic_snmp_agent::transport::event_loop::Command::Shutdown).unwrap();
@@ -243,6 +246,19 @@ pub struct EventLoop {
     /// This agent's `SNMPv3` engine ID; inbound messages with a different engine
     /// ID are discarded (REQ-0057).
     engine_id: Vec<u8>,
+    /// TLS server configuration used to wrap accepted TCP connections.
+    ///
+    /// `None` means plain TCP (no TLS) — used in tests and plain-TCP mode
+    /// (RFC-0005:C-PLAINTCP). `Some` enables mutual TLS per RFC-0006:C-AUTH.
+    // Implements: REQ-0014, REQ-0015, REQ-0019
+    // Implements [[RFC-0006:C-TRANSPORT]], [[RFC-0006:C-AUTH]]
+    // TLS handshake wiring is deferred; the field is stored now and will be
+    // read once accept_connections upgrades streams to TLS.
+    #[expect(
+        dead_code,
+        reason = "TLS handshake wiring is deferred to step 2.3; this field will be read by accept_connections once TLS is fully integrated"
+    )]
+    tls_server_config: Option<Arc<rustls::ServerConfig>>,
 }
 
 impl EventLoop {
@@ -270,12 +286,13 @@ impl EventLoop {
     ///
     /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
     /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
-    /// let (event_loop, bound_addr, sender) = EventLoop::new(addr, engine_id).unwrap();
+    /// let (event_loop, bound_addr, sender) = EventLoop::new(addr, engine_id, None).unwrap();
     /// println!("listening on {bound_addr}");
     /// ```
     pub fn new(
         addr: SocketAddr,
         engine_id: Vec<u8>,
+        tls_server_config: Option<Arc<rustls::ServerConfig>>,
     ) -> Result<(Self, SocketAddr, CommandSender), EventLoopError> {
         let poll = Poll::new().map_err(EventLoopError::Registration)?;
         let registry = poll.registry();
@@ -314,6 +331,7 @@ impl EventLoop {
             connections: HashMap::new(),
             store: crate::mib::Store::new(),
             engine_id,
+            tls_server_config,
         };
         let sender = CommandSender { tx, pipe_write_fd };
 
@@ -741,7 +759,7 @@ mod tests {
         // Verifies: REQ-0050, REQ-0051
         // Given: an event loop bound on a random loopback port.
         let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         // When: a TCP client connects.
@@ -761,7 +779,7 @@ mod tests {
         // Verifies: REQ-0048, REQ-0052, REQ-0053, REQ-0054
         // Given: a running event loop.
         let (event_loop, _bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         // When: Shutdown is sent.
@@ -777,7 +795,7 @@ mod tests {
         // Verifies: REQ-0052
         // Given: a running event loop.
         let (event_loop, _bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         // When: a SetValue command is followed by Shutdown.
@@ -799,7 +817,7 @@ mod tests {
     fn given_running_event_loop_when_set_value_sent_then_loop_remains_alive_for_shutdown() {
         // Given: a running event loop.
         let (event_loop, _bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         // When: a SetValue command is sent and the loop is given time to process it.
@@ -829,7 +847,7 @@ mod tests {
         // Verifies: REQ-0066
         // Given: a running event loop.
         let (event_loop, _bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -872,7 +890,7 @@ mod tests {
     fn given_no_set_value_when_queried_then_mib_returns_none() {
         // Given: a running event loop with no values inserted.
         let (event_loop, _bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -922,6 +940,7 @@ mod tests {
             connections: HashMap::new(),
             store: crate::mib::Store::new(),
             engine_id: test_engine_id(),
+            tls_server_config: None,
         };
 
         // Connect to the std listener so the TcpStream is valid. mio's
@@ -1175,7 +1194,7 @@ mod tests {
         // Verifies: REQ-0021, REQ-0051, REQ-0066, REQ-0068, REQ-0069, REQ-0070, REQ-0071
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -1213,7 +1232,7 @@ mod tests {
         // Verifies: REQ-0068, REQ-0071
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.2.0".parse().unwrap();
@@ -1255,7 +1274,7 @@ mod tests {
         // Verifies: REQ-0073
         // Given: a running event loop.
         let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.3.0".parse().unwrap();
@@ -1297,7 +1316,7 @@ mod tests {
         // Verifies: REQ-0073
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.4.0".parse().unwrap();
@@ -1337,7 +1356,7 @@ mod tests {
         // Verifies: REQ-0057
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.5.0".parse().unwrap();
@@ -1380,7 +1399,7 @@ mod tests {
 
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.6.0".parse().unwrap();
@@ -1423,7 +1442,7 @@ mod tests {
 
         // Given: a running event loop.
         let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
