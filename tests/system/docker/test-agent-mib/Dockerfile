@@ -8,6 +8,7 @@ COPY src/ src/
 COPY tests/test-agent/ tests/test-agent/
 COPY tests/test-agent-mib/ tests/test-agent-mib/
 COPY tests/snmpv3-frames/ tests/snmpv3-frames/
+COPY tests/fixtures/certs/ca.crt tests/fixtures/certs/server.crt tests/fixtures/certs/server.key /certs/
 
 # Cache the cargo registry and compiled artifacts across builds so that only
 # changed crates are recompiled. The binary is copied out of the cache-mounted
@@ -20,6 +21,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 FROM debian:bookworm-slim
 
 COPY --from=builder /test-agent-mib /usr/local/bin/test-agent-mib
+COPY --from=builder /certs/ /certs/
+
+ENV CERT_DIR=/certs
 
 EXPOSE 10161/tcp
 ENTRYPOINT ["test-agent-mib"]

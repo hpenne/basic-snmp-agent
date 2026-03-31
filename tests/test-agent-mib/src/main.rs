@@ -2,17 +2,79 @@
 //!
 //! Starts a `basic-snmp-agent` instance pre-seeded with a small set of known
 //! MIB values so that Gherkin/Behave tests can exercise GET, GETNEXT, and
-//! GETBULK over plain TCP without relying on external SNMP infrastructure.
+//! GETBULK over TLS with mutual authentication, without relying on external
+//! SNMP infrastructure.
 //!
-//! The agent listens on port 10161 (plain TCP, no TLS) and parks the main
-//! thread forever once it has printed its ready message.
+//! The agent listens on port 10161 with TLS (mutual authentication) and parks
+//! the main thread forever once it has printed its ready message.
 
 use basic_snmp_agent::{AgentBuilder, Value};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+
+fn load_tls_config(
+    cert_dir: &std::path::Path,
+) -> (
+    Vec<CertificateDer<'static>>,
+    PrivateKeyDer<'static>,
+    Vec<CertificateDer<'static>>,
+) {
+    let server_cert_pem = std::fs::read(cert_dir.join("server.crt")).unwrap_or_else(|e| {
+        eprintln!("error: failed to read server.crt: {e}");
+        std::process::exit(1);
+    });
+    let server_cert_chain: Vec<CertificateDer<'static>> =
+        rustls_pemfile::certs(&mut server_cert_pem.as_slice())
+            .map(|result| {
+                result.unwrap_or_else(|e| {
+                    eprintln!("error: failed to parse server.crt: {e}");
+                    std::process::exit(1);
+                })
+            })
+            .collect();
+
+    let server_key_pem = std::fs::read(cert_dir.join("server.key")).unwrap_or_else(|e| {
+        eprintln!("error: failed to read server.key: {e}");
+        std::process::exit(1);
+    });
+    let private_key =
+        rustls_pemfile::private_key(&mut server_key_pem.as_slice())
+            .unwrap_or_else(|e| {
+                eprintln!("error: failed to parse server.key: {e}");
+                std::process::exit(1);
+            })
+            .unwrap_or_else(|| {
+                eprintln!("error: server.key contains no private key");
+                std::process::exit(1);
+            });
+
+    let ca_pem = std::fs::read(cert_dir.join("ca.crt")).unwrap_or_else(|e| {
+        eprintln!("error: failed to read ca.crt: {e}");
+        std::process::exit(1);
+    });
+    let ca_trust_anchors: Vec<CertificateDer<'static>> =
+        rustls_pemfile::certs(&mut ca_pem.as_slice())
+            .map(|result| {
+                result.unwrap_or_else(|e| {
+                    eprintln!("error: failed to parse ca.crt: {e}");
+                    std::process::exit(1);
+                })
+            })
+            .collect();
+
+    (server_cert_chain, private_key, ca_trust_anchors)
+}
 
 fn main() {
+    let cert_dir_str = std::env::var("CERT_DIR").unwrap_or_else(|_| "/certs".to_string());
+    let cert_dir = std::path::Path::new(&cert_dir_str);
+    let (server_cert_chain, private_key, ca_trust_anchors) = load_tls_config(cert_dir);
+
     let agent = AgentBuilder::new()
         .listen_addr("0.0.0.0:10161".parse().expect("listen address is valid"))
         .engine_id(b"\x80\x00\x1f\x88\x04test-agent-mib".to_vec())
+        .server_cert_chain(server_cert_chain)
+        .server_private_key(private_key)
+        .ca_trust_anchors(ca_trust_anchors)
         .build()
         .unwrap_or_else(|e| {
             eprintln!("error: failed to build agent: {e}");
