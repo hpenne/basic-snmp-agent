@@ -641,11 +641,8 @@ mod tests {
         // Verifies: REQ-0017, REQ-0018
         let dummy_key = rustls::pki_types::PrivateKeyDer::Pkcs8(vec![0u8; 32].into());
         let dummy_anchor = rustls::pki_types::CertificateDer::from(vec![0u8; 32]);
-        let result = build_tls_server_config(
-            Some(vec![]),
-            Some(dummy_key),
-            Some(vec![dummy_anchor]),
-        );
+        let result =
+            build_tls_server_config(Some(vec![]), Some(dummy_key), Some(vec![dummy_anchor]));
         assert!(
             matches!(result, Err(AgentError::TlsConfig(ref msg)) if msg.contains("server_cert_chain")),
             "expected TlsConfig error for empty cert chain"
@@ -657,11 +654,7 @@ mod tests {
         // Verifies: REQ-0017, REQ-0018
         let dummy_cert = rustls::pki_types::CertificateDer::from(vec![0u8; 32]);
         let dummy_key = rustls::pki_types::PrivateKeyDer::Pkcs8(vec![0u8; 32].into());
-        let result = build_tls_server_config(
-            Some(vec![dummy_cert]),
-            Some(dummy_key),
-            Some(vec![]),
-        );
+        let result = build_tls_server_config(Some(vec![dummy_cert]), Some(dummy_key), Some(vec![]));
         assert!(
             matches!(result, Err(AgentError::TlsConfig(ref msg)) if msg.contains("ca_trust_anchors")),
             "expected TlsConfig error for empty CA anchors"
@@ -672,8 +665,7 @@ mod tests {
     fn given_valid_tls_certs_when_build_tls_server_config_then_returns_server_config() {
         // Verifies: REQ-0017, REQ-0018
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let ca_pem =
-            std::fs::read(format!("{manifest_dir}/tests/fixtures/certs/ca.crt")).unwrap();
+        let ca_pem = std::fs::read(format!("{manifest_dir}/tests/fixtures/certs/ca.crt")).unwrap();
         let server_cert_pem =
             std::fs::read(format!("{manifest_dir}/tests/fixtures/certs/server.crt")).unwrap();
         let server_key_pem =

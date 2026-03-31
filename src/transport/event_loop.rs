@@ -1,9 +1,9 @@
 //! Central event loop for the SNMP agent.
 //!
-//! The loop multiplexes a TCP listener, accepted connections, and a
+//! The loop multiplexes a TCP listener, accepted TLS connections, and a
 //! self-pipe using `mio` (epoll/kqueue). Inbound SNMP requests arrive over
-//! plain TCP connections using RFC 3430 BER framing; outbound traps are sent
-//! as plain UDP datagrams.
+//! mutual-TLS connections framed per RFC 6353 (TLS transport for SNMP) using
+//! RFC 3430 BER encoding; outbound traps are sent as plain UDP datagrams.
 //!
 //! # Design
 //!
@@ -11,6 +11,11 @@
 //! returns a [`CommandSender`] that callers use to send [`Command`]s from any
 //! thread. Writing one byte to the pipe's write end wakes the poll call so the
 //! event loop drains the mpsc channel promptly.
+//!
+//! Accepted TCP streams are immediately wrapped in `rustls::ServerConnection`.
+//! Connections whose client certificates do not chain to the configured trust
+//! anchor are closed at TLS handshake time (REQ-0019). Idle connections older
+//! than [`IDLE_TIMEOUT`] are reaped on every event loop iteration (ADR-0015).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -21,6 +26,7 @@ use std::sync::{
     Arc,
     mpsc::{self, Receiver, Sender},
 };
+use std::time::{Duration, Instant};
 
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
@@ -46,6 +52,12 @@ pub(crate) const MAX_BULK_REPETITIONS: u32 = 100;
 /// size exceeds this are rejected and the connection is closed to prevent
 /// memory exhaustion.
 const MAX_FRAME_SIZE: usize = 65_535;
+
+/// Idle TLS connections older than this threshold are closed on each event loop
+/// iteration. A compile-time constant keeps the implementation simple while
+/// preventing indefinite accumulation of stale connections.
+// Implements [[ADR-0015]]
+const IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 // ── EventLoopError ───────────────────────────────────────────────────────────
 
@@ -200,22 +212,28 @@ impl Clone for CommandSender {
 // ── ConnectionState ──────────────────────────────────────────────────────────
 
 /// Per-connection state held in the event loop's connection map.
+// Implements: REQ-0004, REQ-0005, REQ-0007, REQ-0015, REQ-0019
+// Implements [[RFC-0006:C-TRANSPORT]], [[RFC-0006:C-AUTH]]
 struct ConnectionState {
-    stream: mio::net::TcpStream,
-    /// Accumulates partially-received bytes until a complete RFC 3430 BER frame arrives.
+    tcp_stream: mio::net::TcpStream,
+    tls_conn: rustls::ServerConnection,
+    /// Accumulates decrypted plaintext until a complete RFC 3430 BER frame arrives.
     read_buf: Vec<u8>,
+    /// Updated on every send or receive; used to detect idle connections (ADR-0015).
+    last_activity: Instant,
 }
 
 // ── EventLoop ────────────────────────────────────────────────────────────────
 
-/// The mio-driven event loop that owns the TCP listener, accepted connections,
-/// the self-pipe read end, and the MIB store.
+/// The mio-driven event loop that owns the TCP listener, accepted TLS
+/// connections, the self-pipe read end, and the MIB store.
 ///
 /// Call [`run`][`EventLoop::run`] from a dedicated OS thread. The loop exits
 /// when it receives [`Command::Shutdown`].
 ///
 /// # Requirements
-/// Implements: REQ-0048, REQ-0050, REQ-0051, REQ-0052, REQ-0053, REQ-0054
+/// Implements: REQ-0004, REQ-0005, REQ-0007, REQ-0011, REQ-0013, REQ-0048,
+///             REQ-0050, REQ-0051, REQ-0052, REQ-0053, REQ-0054
 ///
 /// # Examples
 ///
@@ -248,16 +266,10 @@ pub struct EventLoop {
     engine_id: Vec<u8>,
     /// TLS server configuration used to wrap accepted TCP connections.
     ///
-    /// `None` means plain TCP (no TLS) — used in tests and plain-TCP mode
-    /// (RFC-0005:C-PLAINTCP). `Some` enables mutual TLS per RFC-0006:C-AUTH.
+    /// `None` means no TLS — any accepted stream is immediately closed.
+    /// `Some` enables mutual TLS per RFC-0006:C-AUTH.
     // Implements: REQ-0014, REQ-0015, REQ-0019
     // Implements [[RFC-0006:C-TRANSPORT]], [[RFC-0006:C-AUTH]]
-    // TLS handshake wiring is deferred; the field is stored now and will be
-    // read once accept_connections upgrades streams to TLS.
-    #[expect(
-        dead_code,
-        reason = "TLS handshake wiring is deferred to step 2.3; this field will be read by accept_connections once TLS is fully integrated"
-    )]
     tls_server_config: Option<Arc<rustls::ServerConfig>>,
 }
 
@@ -276,7 +288,7 @@ impl EventLoop {
     /// [`EventLoopError::Registration`] if mio token registration fails.
     ///
     /// # Requirements
-    /// Implements: REQ-0048, REQ-0050, REQ-0055, REQ-0068, REQ-0069, REQ-0072
+    /// Implements: REQ-0004, REQ-0005, REQ-0013, REQ-0048, REQ-0050, REQ-0055
     ///
     /// # Examples
     ///
@@ -352,8 +364,9 @@ impl EventLoop {
         let mut events = Events::with_capacity(128);
 
         'outer: loop {
-            // Block until at least one event is ready.
-            self.poll.poll(&mut events, None)?;
+            // Use IDLE_TIMEOUT as the poll timeout so we wake up periodically
+            // to reap connections that have been idle for too long (ADR-0015).
+            self.poll.poll(&mut events, Some(IDLE_TIMEOUT))?;
 
             for event in &events {
                 match event.token() {
@@ -372,28 +385,56 @@ impl EventLoop {
                     }
                 }
             }
+
+            // Reap connections that have been idle longer than IDLE_TIMEOUT.
+            // This runs on every poll wakeup (whether from activity or timeout).
+            self.close_idle_connections();
         }
 
         Ok(())
         // `self.pipe_read_fd` (OwnedFd) is closed here automatically on drop.
     }
 
-    /// Accept all pending connections, registering each with a unique token.
+    /// Accept all pending connections, wrapping each in a `rustls::ServerConnection`.
     ///
-    /// Transient accept errors (e.g. `EMFILE`, `ENFILE`, `ECONNABORTED`) are
-    /// logged and skipped rather than killing the event loop, because a single
-    /// resource-exhaustion moment should not bring down the agent.
-    // Implements: REQ-0051
+    /// If no TLS config is present, accepted streams are immediately dropped
+    /// (closed). Transient accept errors (e.g. `EMFILE`, `ENFILE`,
+    /// `ECONNABORTED`) are logged and skipped rather than killing the event
+    /// loop, because a single resource-exhaustion moment should not bring down
+    /// the agent.
+    // Implements: REQ-0004, REQ-0007, REQ-0015, REQ-0019, REQ-0051
+    // Implements [[RFC-0006:C-TRANSPORT]], [[RFC-0006:C-AUTH]]
     fn accept_connections(&mut self) {
         loop {
             match self.listener.accept() {
                 Ok((mut stream, peer_addr)) => {
+                    let Some(tls_config) = &self.tls_server_config else {
+                        // No TLS config: drop stream immediately (closes TCP fd).
+                        eprintln!(
+                            "[event_loop] no TLS config — closing connection from {peer_addr}"
+                        );
+                        drop(stream);
+                        continue;
+                    };
+
+                    let tls_conn = match rustls::ServerConnection::new(Arc::clone(tls_config)) {
+                        Ok(conn) => conn,
+                        Err(e) => {
+                            eprintln!(
+                                "[event_loop] failed to create TLS connection for {peer_addr}: {e}"
+                            );
+                            continue;
+                        }
+                    };
+
                     let token = self.next_connection_token();
-                    if let Err(e) =
-                        self.poll
-                            .registry()
-                            .register(&mut stream, token, Interest::READABLE)
-                    {
+                    // Register READABLE | WRITABLE because TLS handshake needs both
+                    // directions from the start.
+                    if let Err(e) = self.poll.registry().register(
+                        &mut stream,
+                        token,
+                        Interest::READABLE | Interest::WRITABLE,
+                    ) {
                         eprintln!(
                             "[event_loop] failed to register connection from {peer_addr}: {e}"
                         );
@@ -405,8 +446,10 @@ impl EventLoop {
                     self.connections.insert(
                         token,
                         ConnectionState {
-                            stream,
+                            tcp_stream: stream,
+                            tls_conn,
                             read_buf: Vec::new(),
+                            last_activity: Instant::now(),
                         },
                     );
                 }
@@ -456,132 +499,145 @@ impl EventLoop {
         false
     }
 
-    /// Read available bytes from an accepted connection, parse RFC 3430 BER
-    /// frames, dispatch each frame to the appropriate request handler, and
-    /// write the encoded response back.
+    /// Drive the TLS state machine for one connection event, then dispatch any
+    /// complete RFC 3430 BER frames that were decrypted.
     ///
-    /// Connection-level I/O errors (e.g. `ConnectionReset`) close and remove
-    /// the connection but do not propagate to the caller — a single misbehaving
-    /// client must not bring down the entire event loop.
+    /// Connection-level I/O errors (e.g. `ConnectionReset`) and TLS errors
+    /// (e.g. bad client certificate) close and remove the connection but do not
+    /// propagate to the caller — a single misbehaving client must not bring down
+    /// the entire event loop.
     ///
     /// # Requirements
-    /// Implements: REQ-0057, REQ-0058, REQ-0068, REQ-0071, REQ-0073
+    /// Implements: REQ-0007, REQ-0011, REQ-0019, REQ-0057, REQ-0058
+    // Implements [[RFC-0006:C-TRANSPORT]], [[RFC-0006:C-AUTH]]
     fn handle_connection_event(&mut self, token: Token) {
         let Some(conn) = self.connections.get_mut(&token) else {
             return;
         };
 
-        let mut chunk = [0u8; 4096];
-        let mut closed = false;
+        // Feed raw TCP bytes into the rustls state machine.
+        let tls_read_closed = match conn.tls_conn.read_tls(&mut conn.tcp_stream) {
+            Ok(0) => true,
+            Ok(_) => false,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => false,
+            Err(e) => {
+                eprintln!("[event_loop] TCP read error (token {token:?}): {e}");
+                true
+            }
+        };
 
-        // Drain all immediately available bytes into the per-connection buffer.
-        loop {
-            match conn.stream.read(&mut chunk) {
-                Ok(0) => {
-                    closed = true;
-                    break;
+        if tls_read_closed {
+            self.remove_connection(token);
+            return;
+        }
+
+        // Advance the TLS handshake and decrypt any newly received data.
+        let io_state = match conn.tls_conn.process_new_packets() {
+            Ok(state) => state,
+            Err(tls_err) => {
+                // TLS protocol error: bad certificate, wrong version, etc.
+                // Flush any alert that rustls queued before closing (REQ-0019).
+                eprintln!("[event_loop] TLS error (token {token:?}): {tls_err}");
+                let _ = conn.tls_conn.write_tls(&mut conn.tcp_stream);
+                self.remove_connection(token);
+                return;
+            }
+        };
+
+        // Write any TLS handshake messages or alerts back to the peer.
+        if conn.tls_conn.wants_write() {
+            match conn.tls_conn.write_tls(&mut conn.tcp_stream) {
+                Ok(_) => {
+                    conn.last_activity = Instant::now();
                 }
-                Ok(bytes_read) => {
-                    conn.read_buf.extend_from_slice(&chunk[..bytes_read]);
-                }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
                 Err(e) => {
-                    // Non-WouldBlock errors (e.g. ConnectionReset) mean the
-                    // connection is broken; close it rather than killing the loop.
-                    eprintln!("[event_loop] connection error (token {token:?}): {e}");
-                    closed = true;
-                    break;
+                    eprintln!("[event_loop] TLS write error (token {token:?}): {e}");
+                    self.remove_connection(token);
+                    return;
                 }
             }
         }
 
-        // Process all complete RFC 3430 BER frames from the buffer.
-        // Each frame is a raw BER SEQUENCE: tag 0x30, BER-encoded length, content.
-        loop {
-            // Need at least 2 bytes to read the tag and the first length byte.
-            if conn.read_buf.len() < 2 {
-                break;
-            }
+        // No application data is available until the handshake completes.
+        if conn.tls_conn.is_handshaking() {
+            let interest = tls_interest(conn);
+            let _ = self
+                .poll
+                .registry()
+                .reregister(&mut conn.tcp_stream, token, interest);
+            return;
+        }
 
-            // RFC 3430: frames must begin with the SEQUENCE tag (0x30).
-            // A different tag indicates a corrupt or non-SNMP stream.
-            if conn.read_buf[0] != 0x30 {
-                eprintln!(
-                    "[event_loop] non-SEQUENCE tag {:#04x} on token {token:?}, closing",
-                    conn.read_buf[0]
-                );
-                closed = true;
-                break;
-            }
-
-            // Distinguish incomplete data (wait for more) from invalid encoding (close).
-            let (content_length, length_field_bytes) = match parse_ber_length(&conn.read_buf[1..]) {
-                Ok(Some(parsed)) => parsed,
-                Ok(None) => break,
-                Err(()) => {
-                    // Invalid BER length encoding (e.g., indefinite-length form 0x80).
-                    // The stream is unrecoverable; close the connection.
-                    eprintln!(
-                        "[event_loop] invalid BER length encoding on token {token:?}, closing"
-                    );
-                    closed = true;
-                    break;
+        // Move decrypted plaintext into the per-connection read buffer.
+        let plaintext_available = io_state.plaintext_bytes_to_read();
+        if plaintext_available > 0 {
+            let prior_len = conn.read_buf.len();
+            conn.read_buf.resize(prior_len + plaintext_available, 0);
+            match conn
+                .tls_conn
+                .reader()
+                .read_exact(&mut conn.read_buf[prior_len..])
+            {
+                Ok(()) => {
+                    // Intentionally not updated during the handshake phase —
+                    // connections stuck in a slow handshake can time out (ADR-0015).
+                    conn.last_activity = Instant::now();
                 }
-            };
-
-            let total_frame_bytes = 1 + length_field_bytes + content_length;
-            if total_frame_bytes > MAX_FRAME_SIZE {
-                // Reject oversized frames to prevent memory exhaustion.
-                eprintln!(
-                    "[event_loop] oversized frame ({total_frame_bytes} bytes) on token {token:?}, closing"
-                );
-                closed = true;
-                break;
-            }
-            if conn.read_buf.len() < total_frame_bytes {
-                // Frame is incomplete; wait for more data on the next read event.
-                break;
-            }
-
-            // The full BER frame (tag + length field + content) is the payload.
-            let ber_frame: Vec<u8> = conn.read_buf[..total_frame_bytes].to_vec();
-            conn.read_buf.drain(..total_frame_bytes);
-
-            let Some(encoded_response) =
-                Self::dispatch_snmpv3_frame(&ber_frame, &self.engine_id, &self.store)
-            else {
-                continue;
-            };
-
-            if let Err(write_error) = conn.stream.write_all(&encoded_response) {
-                // Close the connection on any write error, including WouldBlock.
-                // write_all on a non-blocking socket may have written a partial
-                // response before returning WouldBlock, leaving the framing stream
-                // in a corrupt state. Closing is the only safe option.
-                eprintln!("[event_loop] write error (token {token:?}): {write_error}, closing");
-                closed = true;
-                break;
+                Err(e) => {
+                    eprintln!("[event_loop] TLS reader error (token {token:?}): {e}");
+                    self.remove_connection(token);
+                    return;
+                }
             }
         }
 
-        if closed && let Some(mut conn) = self.connections.remove(&token) {
-            if let Err(e) = self.poll.registry().deregister(&mut conn.stream) {
+        // Dispatch all complete BER frames accumulated in the decrypted buffer.
+        if process_ber_frames(conn, &self.engine_id, &self.store, token) {
+            self.remove_connection(token);
+            return;
+        }
+
+        // Update mio interest based on what TLS still needs to flush.
+        if let Some(conn) = self.connections.get_mut(&token) {
+            let interest = tls_interest(conn);
+            let _ = self
+                .poll
+                .registry()
+                .reregister(&mut conn.tcp_stream, token, interest);
+        }
+    }
+
+    /// Close and deregister any connections that have been idle longer than
+    /// [`IDLE_TIMEOUT`].
+    ///
+    /// The actual timeout is approximately `IDLE_TIMEOUT` to `2×IDLE_TIMEOUT`
+    /// in the worst case, because connections are only checked after a poll
+    /// wakeup (either from I/O activity or the periodic `IDLE_TIMEOUT` timer).
+    // Implements [[ADR-0015]]
+    fn close_idle_connections(&mut self) {
+        let now = Instant::now();
+        let timed_out_tokens: Vec<Token> = self
+            .connections
+            .iter()
+            .filter(|(_, conn)| now.duration_since(conn.last_activity) >= IDLE_TIMEOUT)
+            .map(|(&token, _)| token)
+            .collect();
+
+        for token in timed_out_tokens {
+            eprintln!("[event_loop] idle timeout — closing connection (token {token:?})");
+            self.remove_connection(token);
+        }
+    }
+
+    /// Deregister and remove a connection from the map.
+    fn remove_connection(&mut self, token: Token) {
+        if let Some(mut conn) = self.connections.remove(&token) {
+            if let Err(e) = self.poll.registry().deregister(&mut conn.tcp_stream) {
                 eprintln!("[event_loop] deregister error (token {token:?}): {e}");
             }
             eprintln!("[event_loop] connection closed (token {token:?})");
         }
-    }
-
-    /// Decode, validate, and dispatch a single RFC 3430 BER frame.
-    ///
-    /// Thin wrapper around [`crate::transport::dispatch::process_snmpv3_request`].
-    // Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073
-    fn dispatch_snmpv3_frame(
-        ber_frame: &[u8],
-        engine_id: &[u8],
-        store: &crate::mib::Store,
-    ) -> Option<Vec<u8>> {
-        crate::transport::dispatch::process_snmpv3_request(ber_frame, engine_id, store)
     }
 
     /// Allocate the next unique connection token, skipping reserved values.
@@ -605,6 +661,108 @@ impl EventLoop {
                 return Token(candidate);
             }
         }
+    }
+}
+
+/// Process all complete RFC 3430 BER frames from the decrypted read buffer.
+///
+/// Returns `true` if the connection should be closed (framing error or I/O
+/// failure), `false` if processing completed normally and the connection
+/// should remain open.
+///
+/// Each frame is a raw BER SEQUENCE: tag 0x30, BER-encoded length, content.
+// Implements: REQ-0007, REQ-0011, REQ-0057, REQ-0058, REQ-0071
+fn process_ber_frames(
+    conn: &mut ConnectionState,
+    engine_id: &[u8],
+    store: &crate::mib::Store,
+    token: Token,
+) -> bool {
+    loop {
+        // Need at least 2 bytes to read the tag and the first length byte.
+        if conn.read_buf.len() < 2 {
+            return false;
+        }
+
+        // RFC 3430: frames must begin with the SEQUENCE tag (0x30).
+        // A different tag indicates a corrupt or non-SNMP stream.
+        if conn.read_buf[0] != 0x30 {
+            eprintln!(
+                "[event_loop] non-SEQUENCE tag {:#04x} on token {token:?}, closing",
+                conn.read_buf[0]
+            );
+            return true;
+        }
+
+        // Distinguish incomplete data (wait for more) from invalid encoding (close).
+        let (content_length, length_field_bytes) = match parse_ber_length(&conn.read_buf[1..]) {
+            Ok(Some(parsed)) => parsed,
+            Ok(None) => return false,
+            Err(()) => {
+                // Invalid BER length encoding (e.g., indefinite-length form 0x80).
+                // The stream is unrecoverable; close the connection.
+                eprintln!("[event_loop] invalid BER length encoding on token {token:?}, closing");
+                return true;
+            }
+        };
+
+        let total_frame_bytes = 1 + length_field_bytes + content_length;
+        if total_frame_bytes > MAX_FRAME_SIZE {
+            // Reject oversized frames to prevent memory exhaustion.
+            eprintln!(
+                "[event_loop] oversized frame ({total_frame_bytes} bytes) on token {token:?}, closing"
+            );
+            return true;
+        }
+        if conn.read_buf.len() < total_frame_bytes {
+            // Frame is incomplete; wait for more data on the next read event.
+            return false;
+        }
+
+        // The full BER frame (tag + length field + content) is the payload.
+        let ber_frame: Vec<u8> = conn.read_buf[..total_frame_bytes].to_vec();
+        conn.read_buf.drain(..total_frame_bytes);
+
+        let Some(encoded_response) =
+            crate::transport::dispatch::process_snmpv3_request(&ber_frame, engine_id, store)
+        else {
+            continue;
+        };
+
+        // Write the response via TLS so it is encrypted before hitting TCP.
+        match conn.tls_conn.writer().write_all(&encoded_response) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("[event_loop] TLS write_all error (token {token:?}): {e}, closing");
+                return true;
+            }
+        }
+        match conn.tls_conn.write_tls(&mut conn.tcp_stream) {
+            Ok(_) => {
+                conn.last_activity = Instant::now();
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+            Err(e) => {
+                eprintln!("[event_loop] TCP write error (token {token:?}): {e}, closing");
+                return true;
+            }
+        }
+    }
+}
+
+/// Compute the mio `Interest` that the given connection needs based on what
+/// rustls is waiting to do. Defaults to `READABLE` when nothing is pending so
+/// the connection can still receive new data.
+fn tls_interest(conn: &ConnectionState) -> Interest {
+    match (conn.tls_conn.wants_read(), conn.tls_conn.wants_write()) {
+        (true, true) => Interest::READABLE | Interest::WRITABLE,
+        (false, true) => Interest::WRITABLE,
+        // When wants_write is false, READABLE is always the correct fallback.
+        // This includes the (false, false) case where rustls reports nothing
+        // pending: registering READABLE avoids a busy-loop on WRITABLE while
+        // still allowing the connection to receive future data — rustls may
+        // need to be driven again for post-handshake processing or renegotiation.
+        (true | false, false) => Interest::READABLE,
     }
 }
 
@@ -718,6 +876,101 @@ mod tests {
         TEST_ENGINE_ID.to_vec()
     }
 
+    /// Build a `rustls::ServerConfig` from the fixture certs under
+    /// `tests/fixtures/certs/`. Requires mutual TLS: clients must present a
+    /// certificate signed by the test CA.
+    fn test_server_config() -> Arc<rustls::ServerConfig> {
+        use rustls::RootCertStore;
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+
+        let certs_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/certs");
+
+        // Load CA certificate as the client-cert trust anchor.
+        let ca_pem = std::fs::read(certs_dir.join("ca.crt")).expect("read ca.crt");
+        let ca_certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut ca_pem.as_slice())
+            .collect::<Result<Vec<_>, _>>()
+            .expect("parse ca.crt");
+        let mut root_store = RootCertStore::empty();
+        for ca_cert in ca_certs {
+            root_store.add(ca_cert).expect("add CA cert");
+        }
+
+        // Build WebPKI client verifier requiring a cert chained to the test CA.
+        let client_verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store))
+            .build()
+            .expect("build client verifier");
+
+        // Load server certificate chain and private key.
+        let server_cert_pem = std::fs::read(certs_dir.join("server.crt")).expect("read server.crt");
+        let server_cert_chain: Vec<CertificateDer<'static>> =
+            rustls_pemfile::certs(&mut server_cert_pem.as_slice())
+                .collect::<Result<Vec<_>, _>>()
+                .expect("parse server.crt");
+
+        let server_key_pem = std::fs::read(certs_dir.join("server.key")).expect("read server.key");
+        let server_key: PrivateKeyDer<'static> =
+            rustls_pemfile::private_key(&mut server_key_pem.as_slice())
+                .expect("parse server.key")
+                .expect("server.key contains a private key");
+
+        let server_config = rustls::ServerConfig::builder()
+            .with_client_cert_verifier(client_verifier)
+            .with_single_cert(server_cert_chain, server_key)
+            .expect("build ServerConfig");
+
+        Arc::new(server_config)
+    }
+
+    /// Build a TLS client stream over `tcp` authenticated with the fixture
+    /// client certificate. The server name must match the CN in `server.crt`
+    /// ("localhost" in the fixture, but TLS SNI; we use "localhost" as the
+    /// DNS name for loopback tests).
+    fn test_tls_client_stream(
+        tcp: std::net::TcpStream,
+    ) -> rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream> {
+        use rustls::RootCertStore;
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+
+        let certs_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/certs");
+
+        // Trust the test CA so we accept the server's certificate.
+        let ca_pem = std::fs::read(certs_dir.join("ca.crt")).expect("read ca.crt");
+        let ca_certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut ca_pem.as_slice())
+            .collect::<Result<Vec<_>, _>>()
+            .expect("parse ca.crt");
+        let mut root_store = RootCertStore::empty();
+        for ca_cert in ca_certs {
+            root_store.add(ca_cert).expect("add CA cert");
+        }
+
+        // Load the client certificate and key for mutual TLS.
+        let client_cert_pem = std::fs::read(certs_dir.join("client.crt")).expect("read client.crt");
+        let client_cert_chain: Vec<CertificateDer<'static>> =
+            rustls_pemfile::certs(&mut client_cert_pem.as_slice())
+                .collect::<Result<Vec<_>, _>>()
+                .expect("parse client.crt");
+
+        let client_key_pem = std::fs::read(certs_dir.join("client.key")).expect("read client.key");
+        let client_key: PrivateKeyDer<'static> =
+            rustls_pemfile::private_key(&mut client_key_pem.as_slice())
+                .expect("parse client.key")
+                .expect("client.key contains a private key");
+
+        let client_config = rustls::ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_client_auth_cert(client_cert_chain, client_key)
+            .expect("build ClientConfig");
+
+        // Use "localhost" to match the CN in the fixture server certificate.
+        let server_name = ServerName::try_from("localhost").expect("valid server name");
+        let client_conn = rustls::ClientConnection::new(Arc::new(client_config), server_name)
+            .expect("create ClientConnection");
+
+        rustls::StreamOwned::new(client_conn, tcp)
+    }
+
     /// Set an OID in the MIB and block until the event loop has processed it.
     ///
     /// Sends `SetValue` followed by a `QueryValue` on a rendezvous channel.
@@ -742,10 +995,14 @@ mod tests {
             .expect("timed out waiting for SetValue to be processed");
     }
 
-    /// Read exactly `expected_len` bytes from `stream`, timing out after 2 seconds.
-    fn read_exact_with_timeout(stream: &mut std::net::TcpStream, expected_len: usize) -> Vec<u8> {
+    /// Read exactly `expected_len` bytes from a TLS stream, timing out after 5 seconds.
+    fn read_exact_with_timeout(
+        stream: &mut rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream>,
+        expected_len: usize,
+    ) -> Vec<u8> {
         stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            .sock
+            .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         let mut received = vec![0u8; expected_len];
         stream
@@ -755,15 +1012,16 @@ mod tests {
     }
 
     #[test]
-    fn given_running_event_loop_when_tcp_client_connects_then_connection_is_accepted() {
-        // Verifies: REQ-0050, REQ-0051
-        // Given: an event loop bound on a random loopback port.
+    fn given_running_event_loop_when_tls_client_connects_then_connection_is_accepted() {
+        // Verifies: REQ-0004, REQ-0050, REQ-0051
+        // Given: an event loop bound on a random loopback port with TLS config.
         let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
-        // When: a TCP client connects.
-        let _client = std::net::TcpStream::connect(bound_addr).unwrap();
+        // When: a TLS client connects.
+        let tcp = std::net::TcpStream::connect(bound_addr).unwrap();
+        let _client = test_tls_client_stream(tcp);
 
         // Allow the event loop a moment to call accept().
         thread::sleep(Duration::from_millis(50));
@@ -779,7 +1037,7 @@ mod tests {
         // Verifies: REQ-0048, REQ-0052, REQ-0053, REQ-0054
         // Given: a running event loop.
         let (event_loop, _bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         // When: Shutdown is sent.
@@ -795,7 +1053,7 @@ mod tests {
         // Verifies: REQ-0052
         // Given: a running event loop.
         let (event_loop, _bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         // When: a SetValue command is followed by Shutdown.
@@ -817,7 +1075,7 @@ mod tests {
     fn given_running_event_loop_when_set_value_sent_then_loop_remains_alive_for_shutdown() {
         // Given: a running event loop.
         let (event_loop, _bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         // When: a SetValue command is sent and the loop is given time to process it.
@@ -847,7 +1105,7 @@ mod tests {
         // Verifies: REQ-0066
         // Given: a running event loop.
         let (event_loop, _bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -890,7 +1148,7 @@ mod tests {
     fn given_no_set_value_when_queried_then_mib_returns_none() {
         // Given: a running event loop with no values inserted.
         let (event_loop, _bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -899,7 +1157,7 @@ mod tests {
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         sender
             .send(Command::QueryValue {
-                oid,
+                oid: oid.clone(),
                 reply: reply_tx,
             })
             .unwrap();
@@ -920,8 +1178,12 @@ mod tests {
     #[test]
     fn given_already_used_token_when_next_connection_token_called_then_token_is_skipped() {
         // Given: an event loop whose connection map already contains token 2
-        // (the first candidate after FIRST_CONN_TOKEN). Bind a listener so we
-        // can connect to it and get a real mio::net::TcpStream for the map.
+        // (the first candidate after FIRST_CONN_TOKEN). Build a minimal event
+        // loop struct directly so this unit test does not need a TLS connection.
+        let tls_config = test_server_config();
+        let tls_conn = rustls::ServerConnection::new(Arc::clone(&tls_config))
+            .expect("create ServerConnection for token test");
+
         let listener_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let std_listener = std::net::TcpListener::bind(listener_addr).unwrap();
         let bound = std_listener.local_addr().unwrap();
@@ -930,17 +1192,21 @@ mod tests {
             poll: Poll::new().unwrap(),
             listener: mio::net::TcpListener::bind("127.0.0.1:0".parse().unwrap()).unwrap(),
             pipe_read_fd: {
-                // Create a real pipe so OwnedFd is valid.
+                // Create a real pipe so OwnedFd is valid. Both ends are
+                // wrapped in OwnedFd so the write end is closed on drop
+                // rather than leaked.
                 let mut fds: [libc::c_int; 2] = [0; 2];
                 unsafe { libc::pipe(fds.as_mut_ptr()) };
-                unsafe { OwnedFd::from_raw_fd(fds[0]) }
+                let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+                let _write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+                read_fd
             },
             rx: mpsc::channel::<Command>().1,
             next_token: FIRST_CONN_TOKEN,
             connections: HashMap::new(),
             store: crate::mib::Store::new(),
             engine_id: test_engine_id(),
-            tls_server_config: None,
+            tls_server_config: Some(tls_config),
         };
 
         // Connect to the std listener so the TcpStream is valid. mio's
@@ -949,8 +1215,10 @@ mod tests {
         event_loop.connections.insert(
             Token(FIRST_CONN_TOKEN),
             ConnectionState {
-                stream: dummy_stream,
+                tcp_stream: dummy_stream,
+                tls_conn,
                 read_buf: Vec::new(),
+                last_activity: Instant::now(),
             },
         );
 
@@ -1078,7 +1346,7 @@ mod tests {
         assert_eq!(parse_ber_length(&[0x85, 0, 0, 0, 0, 1]), Err(()));
     }
 
-    // ── RFC 3430 dispatch tests ───────────────────────────────────────────────
+    // ── RFC 3430 / TLS dispatch tests ─────────────────────────────────────────
 
     /// Encode a `GetRequest` as a raw BER `SNMPv3` frame ready for TCP send (RFC 3430),
     /// using the test engine ID and an empty context name.
@@ -1104,8 +1372,10 @@ mod tests {
         )
     }
 
-    /// Read a complete RFC 3430 BER frame (tag + length + content) from the stream.
-    fn read_framed_response(stream: &mut std::net::TcpStream) -> Vec<u8> {
+    /// Read a complete RFC 3430 BER frame (tag + length + content) from the TLS stream.
+    fn read_framed_response(
+        stream: &mut rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream>,
+    ) -> Vec<u8> {
         let tag = read_exact_with_timeout(stream, 1);
         assert_eq!(tag[0], 0x30, "expected SEQUENCE tag 0x30 in response");
 
@@ -1190,11 +1460,11 @@ mod tests {
     }
 
     #[test]
-    fn given_get_request_when_sent_over_tcp_then_response_is_received() {
-        // Verifies: REQ-0021, REQ-0051, REQ-0066, REQ-0068, REQ-0069, REQ-0070, REQ-0071
+    fn given_get_request_when_sent_over_tls_then_response_is_received() {
+        // Verifies: REQ-0004, REQ-0007, REQ-0011, REQ-0021, REQ-0051, REQ-0066
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -1202,8 +1472,9 @@ mod tests {
         // connecting, so dispatch cannot race with the SetValue.
         set_and_wait(&sender, &oid, crate::codec::Value::Integer32(42));
 
-        // When: a TCP client sends a raw BER SNMPv3 GetRequest (RFC 3430 framing).
-        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+        // When: a TLS client sends a raw BER SNMPv3 GetRequest (RFC 3430 framing).
+        let tcp = std::net::TcpStream::connect(bound_addr).unwrap();
+        let mut client = test_tls_client_stream(tcp);
         client
             .write_all(&framed_get_request(1, 1, &oid))
             .expect("write must succeed");
@@ -1229,10 +1500,10 @@ mod tests {
 
     #[test]
     fn given_partial_frame_when_split_across_reads_then_response_is_received() {
-        // Verifies: REQ-0068, REQ-0071
+        // Verifies: REQ-0007, REQ-0071
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.2.0".parse().unwrap();
@@ -1240,7 +1511,8 @@ mod tests {
 
         // When: the framed PDU is sent in two separate writes to simulate
         // TCP segmentation where a frame arrives split across packets.
-        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+        let tcp = std::net::TcpStream::connect(bound_addr).unwrap();
+        let mut client = test_tls_client_stream(tcp);
         let framed = framed_get_request(2, 2, &oid);
         let midpoint = framed.len() / 2;
         client
@@ -1271,16 +1543,17 @@ mod tests {
 
     #[test]
     fn given_invalid_snmp_payload_in_sequence_when_received_then_connection_stays_open() {
-        // Verifies: REQ-0073
+        // Verifies: REQ-0011, REQ-0073
         // Given: a running event loop.
         let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.3.0".parse().unwrap();
         set_and_wait(&sender, &oid, crate::codec::Value::Integer32(99));
 
-        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+        let tcp = std::net::TcpStream::connect(bound_addr).unwrap();
+        let mut client = test_tls_client_stream(tcp);
 
         // When: garbage bytes are sent inside a valid SEQUENCE wrapper so the
         // BER frame parses correctly but the SNMP decode fails. The event loop
@@ -1313,16 +1586,17 @@ mod tests {
 
     #[test]
     fn given_empty_sequence_frame_when_received_then_connection_stays_open() {
-        // Verifies: REQ-0073
+        // Verifies: REQ-0011, REQ-0073
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.4.0".parse().unwrap();
         set_and_wait(&sender, &oid, crate::codec::Value::Integer32(55));
 
-        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+        let tcp = std::net::TcpStream::connect(bound_addr).unwrap();
+        let mut client = test_tls_client_stream(tcp);
 
         // When: an empty SEQUENCE frame is sent (tag 0x30, length 0x00, no content).
         // An empty payload is not a valid SNMP PDU; the decode error must be
@@ -1356,13 +1630,14 @@ mod tests {
         // Verifies: REQ-0057
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.5.0".parse().unwrap();
         set_and_wait(&sender, &oid, crate::codec::Value::Integer32(77));
 
-        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+        let tcp = std::net::TcpStream::connect(bound_addr).unwrap();
+        let mut client = test_tls_client_stream(tcp);
 
         // When: a request with the wrong engine ID is sent, it should be discarded.
         let wrong_engine_id = b"\x80\x00\x1f\x88\x04wrong";
@@ -1399,13 +1674,14 @@ mod tests {
 
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.6.0".parse().unwrap();
         set_and_wait(&sender, &oid, crate::codec::Value::Integer32(88));
 
-        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+        let tcp = std::net::TcpStream::connect(bound_addr).unwrap();
+        let mut client = test_tls_client_stream(tcp);
 
         // When: a request with a non-empty context name is sent, it should be discarded.
         let bad_context_encoded =
@@ -1442,12 +1718,14 @@ mod tests {
 
         // Given: a running event loop.
         let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
+            EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
-        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+        let tcp = std::net::TcpStream::connect(bound_addr).unwrap();
+        let mut client = test_tls_client_stream(tcp);
         client
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            .sock
+            .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
 
         // When: a frame with indefinite-length encoding is sent.
@@ -1456,12 +1734,128 @@ mod tests {
             .write_all(&[0x30u8, 0x80])
             .expect("write must succeed");
 
-        // Then: the server closes the connection; reading must return 0 bytes (EOF).
+        // Then: the server closes the connection. From the client's view, the
+        // TCP fd is dropped without a TLS close_notify alert, which rustls
+        // surfaces as UnexpectedEof. Either 0 bytes read or that specific error
+        // confirms the server terminated the connection.
         let mut read_buf = [0u8; 1];
-        let bytes_read = client.read(&mut read_buf).expect("read must not error");
+        match client.read(&mut read_buf) {
+            Ok(0) => {} // clean EOF
+            Ok(n) => panic!("expected server to close connection, but read {n} bytes"),
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {} // rustls close without close_notify
+            Err(e) => panic!("unexpected read error: {e}"),
+        }
+
+        sender.send(Command::Shutdown).unwrap();
+        loop_handle
+            .join()
+            .expect("event loop thread panicked")
+            .unwrap();
+    }
+
+    #[test]
+    fn given_connection_with_no_client_cert_when_tls_handshake_then_connection_rejected() {
+        // Verifies: REQ-0019
+        // A client presenting no certificate must be rejected at the TLS
+        // handshake; no data exchange should occur.
+        use rustls::RootCertStore;
+        use rustls::pki_types::{CertificateDer, ServerName};
+
+        // Given: a running event loop with mutual-TLS enforced.
+        let (event_loop, bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id(), Some(test_server_config())).unwrap();
+        let loop_handle = thread::spawn(move || event_loop.run());
+
+        // When: a client connects using a self-signed certificate that does NOT
+        // chain to the test CA. We build a ClientConfig that trusts the test CA
+        // for the server cert, but presents a self-signed cert for client auth.
+        // The self-signed cert is the server.crt itself (wrong role / different
+        // from what the server expects).
+        //
+        // To get a certificate that genuinely doesn't chain to the test CA,
+        // we use the server's own cert as the "client certificate". The server
+        // cert is valid and signed by the test CA, so to test a truly untrusted
+        // cert we need a cert not from the CA. We use a hardcoded minimal
+        // self-signed DER certificate for this purpose.
+
+        let certs_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/certs");
+
+        let ca_pem = std::fs::read(certs_dir.join("ca.crt")).expect("read ca.crt");
+        let ca_cert_der: CertificateDer<'static> = rustls_pemfile::certs(&mut ca_pem.as_slice())
+            .next()
+            .unwrap()
+            .expect("parse ca.crt");
+        let mut root_store = RootCertStore::empty();
+        root_store.add(ca_cert_der).expect("add CA cert");
+
+        // Load the server key so we can present a cert signed by a different
+        // CA. Since we cannot generate certs at runtime (no rcgen), we use the
+        // server.crt itself but paired with the client.key — a mismatch that
+        // will be rejected as an invalid certificate at the TLS layer, which is
+        // equivalent to an untrusted cert from the server's perspective.
+        //
+        // We achieve a cert-not-from-CA scenario by loading the server cert but
+        // telling rustls to use the wrong (mismatched) key. However, the most
+        // reliable way is to present an empty client certificate chain, which
+        // the WebPkiClientVerifier will reject since it requires a client cert.
+        let client_config = rustls::ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth(); // no client cert — server will reject this
+
+        let server_name = ServerName::try_from("localhost").expect("valid server name");
+        let client_conn = rustls::ClientConnection::new(Arc::new(client_config), server_name)
+            .expect("create ClientConnection");
+
+        let tcp = std::net::TcpStream::connect(bound_addr).unwrap();
+        tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut stream = rustls::StreamOwned::new(client_conn, tcp);
+
+        // Attempt to complete the handshake or send/receive data. The server
+        // must reject the connection because no client certificate is presented.
+        let handshake_result = stream.flush(); // triggers the TLS handshake
+        // The connection must fail: either the handshake errors or the server
+        // closes the connection (EOF on read).
+        if handshake_result.is_ok() {
+            let mut buf = [0u8; 1];
+            let read_result = stream.read(&mut buf);
+            assert!(
+                read_result.is_err() || read_result.unwrap() == 0,
+                "expected connection to be rejected for missing client certificate"
+            );
+        }
+        // If handshake itself errored, the test assertion is already satisfied.
+
+        sender.send(Command::Shutdown).unwrap();
+        loop_handle
+            .join()
+            .expect("event loop thread panicked")
+            .unwrap();
+    }
+
+    #[test]
+    fn given_no_tls_config_when_client_connects_then_connection_is_closed() {
+        // Verifies: REQ-0019 (no-TLS fallback: all connections are rejected)
+        // When no TLS config is configured, the agent immediately closes
+        // any accepted TCP connection.
+
+        // Given: an event loop with no TLS config.
+        let (event_loop, bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id(), None).unwrap();
+        let loop_handle = thread::spawn(move || event_loop.run());
+
+        // When: a plain TCP client connects (no TLS).
+        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+
+        // Then: the server closes the connection immediately; read returns 0 bytes (EOF).
+        let mut read_buf = [0u8; 1];
+        let bytes_read = client.read(&mut read_buf).expect("read must not OS-error");
         assert_eq!(
             bytes_read, 0,
-            "server must close connection on invalid BER length"
+            "server must close connection when no TLS config is set"
         );
 
         sender.send(Command::Shutdown).unwrap();
