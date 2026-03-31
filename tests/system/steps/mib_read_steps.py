@@ -2,7 +2,8 @@
 
 The test-agent-mib container runs an agent pre-seeded with known MIB values.
 Net-snmp CLI tools (snmpget, snmpgetnext, snmpbulkget) query the agent from
-a snmp-client container on the same Docker bridge network.
+a snmp-client container on the same Docker bridge network using TLS with
+mutual certificate authentication.
 """
 
 import subprocess
@@ -36,7 +37,7 @@ def _snmp_client_run(context, snmp_cmd: list[str]) -> subprocess.CompletedProces
 
 
 def _agent_addr(context) -> str:
-    return f"tcp:{context.agent_container}:10161"
+    return f"tlstcp:{context.agent_container}:10161"
 
 
 @given('a test-agent-mib instance is running with engine ID "{engine_id}"')

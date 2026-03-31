@@ -42,8 +42,8 @@ services:
   # net-snmp CLI queries against test-agent-mib containers.
   snmp-client:
     build:
-      context: docker/snmp-client
-      dockerfile: Dockerfile
+      context: ../../
+      dockerfile: tests/system/docker/snmp-client/Dockerfile
     image: snmp-client-test
     networks:
       - snmp-test
