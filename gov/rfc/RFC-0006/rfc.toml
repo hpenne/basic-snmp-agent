@@ -24,3 +24,4 @@ clauses = [
 version = "0.1.0"
 date = "2026-03-16"
 notes = "Initial draft"
+added = ["patch"]

@@ -9,9 +9,7 @@ started = "2026-03-31"
 refs = ["RFC-0006"]
 
 [content]
-description = """
-Describe the work to be done.
-What is the goal? What are the acceptance criteria?"""
+description = "Accept TSM (securityModel=4) in SNMPv3 dispatch so net-snmp tlstcp: clients can connect. Skip USM security parameter parsing for TSM messages; TLS cert verification (REQ-0019) is the authentication gate. Update RFC-0006:C-AUTH to formally defer tmSecurityName mapping."
 
 [[content.acceptance_criteria]]
 text = "TSM security model (securityModel=4) accepted in SNMPv3 dispatch"
