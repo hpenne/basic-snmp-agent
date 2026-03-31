@@ -1,0 +1,49 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-03-31-001"
+title = "Add TSM security model support to SNMPv3 dispatch"
+status = "active"
+created = "2026-03-31"
+started = "2026-03-31"
+refs = ["RFC-0006"]
+
+[content]
+description = """
+Describe the work to be done.
+What is the goal? What are the acceptance criteria?"""
+
+[[content.acceptance_criteria]]
+text = "TSM security model (securityModel=4) accepted in SNMPv3 dispatch"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "TSM msgSecurityParameters parsed without error (USM parsing skipped)"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "RFC-0006 C-AUTH updated — REQ-0015 tmSecurityName mapping explicitly deferred"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "cargo clippy --workspace -- -W clippy::pedantic -D warnings passes"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "cargo test --workspace passes"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Behave system tests pass locally"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"

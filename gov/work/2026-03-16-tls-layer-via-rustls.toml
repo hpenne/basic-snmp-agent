@@ -12,40 +12,40 @@ description = "Layer rustls on top of the plain-TCP dispatch path from WI-2026-0
 
 [[content.acceptance_criteria]]
 text = "rustls and rustls-pki-types added to transport/Cargo.toml (with user approval)"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "ConnectionState includes a rustls::ServerConnection"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "event loop drives TLS handshake before attempting to read SNMP frames"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "inbound bytes are decrypted before RFC 6353 deframing; outbound responses are encrypted"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "connections whose peer cert does not chain to a trusted CA are rejected per RFC-0001:C-AUTH"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "unit test — TLS handshake succeeds with a valid self-signed test cert"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "unit test — connection is rejected when peer cert is from an unknown CA"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "cargo clippy --workspace -- -D warnings -W clippy::pedantic passes"
-status = "pending"
+status = "done"
 category = "chore"
