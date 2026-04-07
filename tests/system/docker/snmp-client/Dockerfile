@@ -13,6 +13,11 @@ COPY tests/fixtures/certs/ca.crt /etc/snmp/certs/ca.crt
 COPY tests/fixtures/certs/ca.crt /usr/local/share/ca-certificates/test-ca.crt
 RUN update-ca-certificates
 
-# localCert/localKey configure the client identity for mutual TLS.
+# net-snmp's localCert directive expects cert + key in the same PEM
+# bundle — it has no separate localKey config token.
+RUN cat /etc/snmp/certs/client.crt /etc/snmp/certs/client.key \
+      > /etc/snmp/certs/client-bundle.pem
+
+# localCert: client identity (cert + key bundle) for mutual TLS.
 # Server certificate validation uses the system CA trust store above.
-RUN printf 'localCert /etc/snmp/certs/client.crt\nlocalKey /etc/snmp/certs/client.key\n' > /etc/snmp/snmp.conf
+RUN printf 'localCert /etc/snmp/certs/client-bundle.pem\n' > /etc/snmp/snmp.conf
