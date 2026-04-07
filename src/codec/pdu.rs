@@ -236,7 +236,7 @@ pub enum InboundPdu {
 /// PDU ready for dispatch.
 ///
 /// # Requirements
-/// Implements: REQ-0007, REQ-0011
+/// Implements: REQ-0007, REQ-0011, REQ-0074
 #[derive(Debug)]
 pub struct V3InboundMessage {
     /// Message ID from `HeaderData`; echoed in the `SNMPv3` response.
@@ -247,7 +247,10 @@ pub struct V3InboundMessage {
     pub context_name: Vec<u8>,
     /// Security name (user name) from USM security parameters; echoed in the response
     /// per RFC 3414 §8.2.4 so the command generator can match the response to its request.
+    /// Empty for TSM (RFC 5591) where transport-layer identity is used instead.
     pub user_name: Vec<u8>,
+    /// Security model identifier from `HeaderData`: 3 = USM (RFC 3414), 4 = TSM (RFC 5591/5953).
+    pub security_model: u32,
     /// The inner PDU ready for dispatch to request handlers.
     pub pdu: InboundPdu,
 }
@@ -315,9 +318,10 @@ pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
 
 /// BER-decode an inbound `SNMPv3` message into a [`V3InboundMessage`].
 ///
-/// Accepts only cleartext (noAuthNoPriv or authNoPriv) `SNMPv3` messages; encrypted
-/// PDUs (`ScopedPduData::EncryptedPdu`) are rejected because this agent implements
-/// USM noAuthNoPriv only.
+/// Accepts cleartext (noAuthNoPriv or authNoPriv) `SNMPv3` messages with USM
+/// (security model 3, RFC 3414) or TSM (security model 4, RFC 5591/5953).
+/// Encrypted PDUs (`ScopedPduData::EncryptedPdu`) are rejected because this
+/// agent does not implement privacy.
 ///
 /// The inner `Pdus` variant must be an inbound request type; response and trap
 /// PDUs are rejected.
@@ -328,11 +332,12 @@ pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
 /// - The bytes are not valid BER.
 /// - The message version is not 3 ([`DecodeErrorKind::WrongVersion`]).
 /// - The scoped PDU is encrypted ([`DecodeErrorKind::EncryptedPdu`]).
+/// - The security model is not USM or TSM ([`DecodeErrorKind::UnsupportedSecurityModel`]).
 /// - The inner PDU type is not a recognised inbound type.
 /// - An OID or value in a varbind cannot be decoded.
 ///
 /// # Requirements
-/// Implements: REQ-0007, REQ-0011
+/// Implements: REQ-0007, REQ-0011, REQ-0074
 ///
 /// # Examples
 ///
@@ -368,6 +373,12 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> 
             DecodeError::new(DecodeErrorKind::Ber, "msgID field does not fit in i32")
         })?;
 
+    let security_model: u32 = v3_message
+        .global_data
+        .security_model
+        .try_into()
+        .map_err(|_| DecodeError::new(DecodeErrorKind::Ber, "security_model too large"))?;
+
     let scoped_pdu = match v3_message.scoped_data {
         ScopedPduData::CleartextPdu(pdu) => pdu,
         // Encrypted PDUs require privacy support that this agent does not implement.
@@ -379,14 +390,31 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> 
         }
     };
 
-    // Extract the user name from USMSecurityParameters so it can be echoed in
-    // the response (RFC 3414 §8.2.4 requires msgUserName to be the same in both).
-    // Failure to decode the security parameters is treated as a BER error.
-    let usm_params: USMSecurityParameters =
-        rasn::ber::decode(v3_message.security_parameters.as_ref()).map_err(|e| {
-            DecodeError::new(DecodeErrorKind::Ber, format!("USM decode failed: {e}"))
-        })?;
-    let user_name = usm_params.user_name.to_vec();
+    // Implements: REQ-0074
+    // Implements [[RFC-0006:C-AUTH]]
+    let user_name = match security_model {
+        3 => {
+            // USM (RFC 3414): extract user name from USMSecurityParameters so it can
+            // be echoed in the response (RFC 3414 §8.2.4 requires msgUserName to be
+            // the same in both). Failure to decode the security parameters is a BER error.
+            let usm_params: USMSecurityParameters =
+                rasn::ber::decode(v3_message.security_parameters.as_ref()).map_err(|e| {
+                    DecodeError::new(DecodeErrorKind::Ber, format!("USM decode failed: {e}"))
+                })?;
+            usm_params.user_name.to_vec()
+        }
+        4 => {
+            // TSM (RFC 5591 §5.2.5): transport-layer authentication is already
+            // complete (REQ-0019). msgSecurityParameters is treated as opaque.
+            vec![]
+        }
+        other => {
+            return Err(DecodeError::new(
+                DecodeErrorKind::UnsupportedSecurityModel,
+                format!("unsupported security model: {other}"),
+            ));
+        }
+    };
 
     let engine_id = scoped_pdu.engine_id.to_vec();
     let context_name = scoped_pdu.name.to_vec();
@@ -397,6 +425,7 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> 
         engine_id,
         context_name,
         user_name,
+        security_model,
         pdu,
     })
 }
@@ -442,17 +471,18 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
 /// BER-encode a [`GetResponse`] inside a full `SNMPv3` message envelope.
 ///
 /// Constructs a `ScopedPdu` from `engine_id` and `context_name`, wraps it in
-/// `ScopedPduData::CleartextPdu`, and builds an `SNMPv3` `Message` with
-/// `HeaderData` indicating USM noAuthNoPriv. The `USMSecurityParameters` include
-/// the authoritative engine ID and the original `user_name` echoed back, as
-/// required by RFC 3414 §8.2.4 so the command generator can match the response.
+/// `ScopedPduData::CleartextPdu`, and builds an `SNMPv3` `Message`. When
+/// `security_model` is 3 (USM, RFC 3414), the `USMSecurityParameters` include
+/// the authoritative engine ID and the original `user_name` echoed back per
+/// RFC 3414 §8.2.4. When `security_model` is 4 (TSM, RFC 5591/5953),
+/// `msgSecurityParameters` is a zero-length OCTET STRING.
 ///
 /// # Errors
 ///
 /// Returns an [`EncodeError`] if `rasn` fails to BER-encode any part of the message.
 ///
 /// # Requirements
-/// Implements: REQ-0007
+/// Implements: REQ-0007, REQ-0074
 ///
 /// # Examples
 ///
@@ -465,7 +495,7 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
 ///     error_index: 0,
 ///     varbinds: vec![],
 /// };
-/// let bytes = encode_v3_response(1, b"engine", b"user", b"", &pdu).unwrap();
+/// let bytes = encode_v3_response(1, b"engine", b"user", b"", 3, &pdu).unwrap();
 /// assert!(!bytes.is_empty());
 /// ```
 pub fn encode_v3_response(
@@ -473,6 +503,7 @@ pub fn encode_v3_response(
     engine_id: &[u8],
     user_name: &[u8],
     context_name: &[u8],
+    security_model: u32,
     pdu: &GetResponse,
 ) -> Result<Vec<u8>, EncodeError> {
     let rasn_response = Response(RasnPdu {
@@ -488,22 +519,36 @@ pub fn encode_v3_response(
         data: Pdus::Response(rasn_response),
     };
 
-    // RFC 3414 §8.2.4: the response's USMSecurityParameters must include the
-    // authoritative engine ID and the original msgUserName so the command
-    // generator can match the response to its pending request.
-    // auth/priv parameters remain zero-length for noAuthNoPriv.
-    let usm_params = USMSecurityParameters {
-        authoritative_engine_id: engine_id.to_vec().into(),
-        authoritative_engine_boots: 0.into(),
-        authoritative_engine_time: 0.into(),
-        user_name: user_name.to_vec().into(),
-        authentication_parameters: rasn::types::OctetString::from(vec![]),
-        privacy_parameters: rasn::types::OctetString::from(vec![]),
+    // Implements: REQ-0074
+    // Implements [[RFC-0006:C-AUTH]]
+    let (response_security_model, security_parameters_bytes) = if security_model == 4 {
+        // TSM (RFC 5591 §5.2.5): msgSecurityParameters is a zero-length OCTET STRING.
+        let empty_params =
+            rasn::ber::encode(&rasn::types::OctetString::from(vec![])).map_err(|e| {
+                EncodeError::new(format!("BER encoding of TSM security params failed: {e}"))
+            })?;
+        (4u32, empty_params)
+    } else {
+        // USM (RFC 3414 §8.2.4): echo authoritative engine ID and user name
+        // so the command generator can match the response to its pending request.
+        // auth/priv parameters remain zero-length for noAuthNoPriv.
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: engine_id.to_vec().into(),
+            authoritative_engine_boots: 0.into(),
+            authoritative_engine_time: 0.into(),
+            user_name: user_name.to_vec().into(),
+            authentication_parameters: rasn::types::OctetString::from(vec![]),
+            privacy_parameters: rasn::types::OctetString::from(vec![]),
+        };
+        (
+            3u32,
+            rasn::ber::encode(&usm_params).map_err(|e| {
+                EncodeError::new(format!(
+                    "BER encoding of USMSecurityParameters failed: {e}"
+                ))
+            })?,
+        )
     };
-
-    let security_parameters_bytes = rasn::ber::encode(&usm_params).map_err(|e| {
-        EncodeError::new(format!("BER encoding of USMSecurityParameters failed: {e}"))
-    })?;
 
     // flags byte 0x00: noAuthNoPriv, reportable bit clear (response).
     let v3_message = V3Message {
@@ -512,8 +557,7 @@ pub fn encode_v3_response(
             message_id: msg_id.into(),
             max_size: 65535.into(),
             flags: rasn::types::OctetString::from(vec![0x00]),
-            // Security model 3 = USM (RFC 3414).
-            security_model: 3.into(),
+            security_model: response_security_model.into(),
         },
         security_parameters: security_parameters_bytes.into(),
         scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
@@ -615,6 +659,8 @@ pub enum DecodeErrorKind {
     WrongVersion,
     /// The scoped PDU is encrypted; privacy is not supported.
     EncryptedPdu,
+    /// The security model in the message header is not supported.
+    UnsupportedSecurityModel,
 }
 
 impl fmt::Display for DecodeErrorKind {
@@ -625,6 +671,7 @@ impl fmt::Display for DecodeErrorKind {
             Self::InvalidOid => write!(f, "invalid OID"),
             Self::WrongVersion => write!(f, "wrong SNMP version"),
             Self::EncryptedPdu => write!(f, "encrypted PDU not supported"),
+            Self::UnsupportedSecurityModel => write!(f, "unsupported security model"),
         }
     }
 }
@@ -1774,7 +1821,7 @@ mod tests {
             }],
         };
 
-        let encoded = encode_v3_response(5, engine_id, b"testuser", b"", &pdu).unwrap();
+        let encoded = encode_v3_response(5, engine_id, b"testuser", b"", 3, &pdu).unwrap();
 
         // Decode back as a V3Message to verify structural validity.
         let decoded: V3Message = rasn::ber::decode(&encoded).expect("must decode as V3Message");
@@ -1827,5 +1874,105 @@ mod tests {
             }
             other => panic!("expected GetRequest, got {other:?}"),
         }
+    }
+
+    // ── TSM security model (REQ-0074) ─────────────────────────────────────────
+
+    #[test]
+    fn given_tsm_security_model_when_decode_v3_then_security_model_is_4_and_user_name_is_empty() {
+        // Verifies: REQ-0074
+        let scoped_pdu = ScopedPdu {
+            engine_id: rasn::types::OctetString::from(b"\x80\x00\x1f\x88\x04test".to_vec()),
+            name: rasn::types::OctetString::from(vec![]),
+            data: Pdus::GetRequest(RasnGetRequest(RasnPdu {
+                request_id: 1,
+                error_status: 0,
+                error_index: 0,
+                variable_bindings: vec![],
+            })),
+        };
+        // TSM security model = 4; msgSecurityParameters is a zero-length OCTET STRING.
+        let empty_security_params =
+            rasn::ber::encode(&rasn::types::OctetString::from(vec![])).unwrap();
+        let v3_msg = V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 7.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x00]),
+                security_model: 4.into(),
+            },
+            security_parameters: empty_security_params.into(),
+            scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
+        };
+        let encoded = rasn::ber::encode(&v3_msg).unwrap();
+
+        let result = decode_v3_message(&encoded);
+
+        assert!(result.is_ok(), "TSM message must decode successfully");
+        let msg = result.unwrap();
+        assert_eq!(msg.security_model, 4, "security_model must be 4 for TSM");
+        assert!(msg.user_name.is_empty(), "user_name must be empty for TSM");
+    }
+
+    #[test]
+    fn given_unsupported_security_model_when_decode_v3_then_returns_error() {
+        // Verifies: REQ-0074
+        let scoped_pdu = ScopedPdu {
+            engine_id: rasn::types::OctetString::from(vec![]),
+            name: rasn::types::OctetString::from(vec![]),
+            data: Pdus::GetRequest(RasnGetRequest(RasnPdu {
+                request_id: 1,
+                error_status: 0,
+                error_index: 0,
+                variable_bindings: vec![],
+            })),
+        };
+        let v3_msg = V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 1.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x00]),
+                security_model: 5.into(),
+            },
+            security_parameters: rasn::types::OctetString::from(vec![]),
+            scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
+        };
+        let encoded = rasn::ber::encode(&v3_msg).unwrap();
+
+        let decode_result = decode_v3_message(&encoded);
+
+        assert!(decode_result.is_err());
+        assert_eq!(
+            decode_result.unwrap_err().kind(),
+            &DecodeErrorKind::UnsupportedSecurityModel
+        );
+    }
+
+    #[test]
+    fn given_tsm_security_model_when_encode_v3_response_then_security_model_4_in_output() {
+        // Verifies: REQ-0074
+        let pdu = GetResponse {
+            request_id: 1,
+            error_status: ErrorStatus::NoError,
+            error_index: 0,
+            varbinds: vec![],
+        };
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+
+        let encoded = encode_v3_response(42, engine_id, b"", b"", 4, &pdu).unwrap();
+
+        let decoded: V3Message =
+            rasn::ber::decode(&encoded).expect("encoded TSM response must decode as V3Message");
+        let security_model_wire: u32 = decoded
+            .global_data
+            .security_model
+            .try_into()
+            .expect("security_model must fit u32");
+        assert_eq!(
+            security_model_wire, 4,
+            "encoded response must carry security_model=4 for TSM"
+        );
     }
 }

@@ -16,7 +16,7 @@ use crate::transport::request;
 /// engine ID, or unsupported context name).
 ///
 /// # Requirements
-/// Implements: REQ-0011, REQ-0056, REQ-0057, REQ-0058, REQ-0066
+/// Implements: REQ-0011, REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0074
 ///
 /// # Examples
 ///
@@ -65,6 +65,7 @@ pub fn process_snmpv3_request(
         engine_id,
         &v3_msg.user_name,
         &v3_msg.context_name,
+        v3_msg.security_model,
         &response,
     )
     .ok()
