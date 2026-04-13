@@ -31,7 +31,7 @@ jobs:
           sanitizer: address
 
       - name: Clear artifacts before batch fuzzing
-        run: rm -rf "$GITHUB_WORKSPACE/out/artifacts"
+        run: sudo rm -rf "$GITHUB_WORKSPACE/out/artifacts"
 
       - name: Batch fuzz
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
