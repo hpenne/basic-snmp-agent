@@ -24,16 +24,38 @@ echo "Generating TLS test certificates in ${CERT_DIR}"
 
 echo "  [1/3] Generating CA key and self-signed certificate..."
 
-openssl genrsa -out "${CERT_DIR}/ca.key" 2048
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-384 -out "${CERT_DIR}/ca.key"
 chmod 600 "${CERT_DIR}/ca.key"
+
+# Write CA extensions to a temporary config file so that LibreSSL's openssl
+# can apply them via -extfile.  LibreSSL does not support -addext, and its
+# "req -new -x509" variant also ignores -extfile, so we use the two-step
+# CSR+sign approach (same as the server/client certs below).
+# keyUsage = keyCertSign, cRLSign is required for net-snmp to accept this cert
+# as a trust anchor; without it net-snmp silently rejects the CA cert when
+# loading it into the SSL trust store.
+CA_EXT_FILE="${CERT_DIR}/ca.ext"
+cat > "${CA_EXT_FILE}" <<EOF
+basicConstraints = critical, CA:true
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+EOF
 
 openssl req \
     -new \
-    -x509 \
-    -days 3650 \
     -key "${CERT_DIR}/ca.key" \
-    -out "${CERT_DIR}/ca.crt" \
+    -out "${CERT_DIR}/ca.csr" \
     -subj "/CN=Test CA"
+
+openssl x509 \
+    -req \
+    -days 3650 \
+    -in "${CERT_DIR}/ca.csr" \
+    -signkey "${CERT_DIR}/ca.key" \
+    -extfile "${CA_EXT_FILE}" \
+    -out "${CERT_DIR}/ca.crt"
+
+rm -f "${CA_EXT_FILE}" "${CERT_DIR}/ca.csr"
 
 # ---------------------------------------------------------------------------
 # Server certificate signed by the CA
@@ -44,7 +66,7 @@ openssl req \
 
 echo "  [2/3] Generating server key and CA-signed certificate..."
 
-openssl genrsa -out "${CERT_DIR}/server.key" 2048
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-384 -out "${CERT_DIR}/server.key"
 chmod 600 "${CERT_DIR}/server.key"
 
 openssl req \
@@ -57,7 +79,8 @@ openssl req \
 # openssl (which does not support -addext) can apply it via -extfile.
 SERVER_EXT_FILE="${CERT_DIR}/server.ext"
 cat > "${SERVER_EXT_FILE}" <<EOF
-subjectAltName = DNS:localhost, IP:127.0.0.1
+subjectAltName = DNS:localhost, DNS:test-agent-mib, IP:127.0.0.1
+extendedKeyUsage = serverAuth
 EOF
 
 openssl x509 \
@@ -81,7 +104,7 @@ rm -f "${SERVER_EXT_FILE}" "${CERT_DIR}/server.csr"
 
 echo "  [3/3] Generating client key and CA-signed certificate..."
 
-openssl genrsa -out "${CERT_DIR}/client.key" 2048
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-384 -out "${CERT_DIR}/client.key"
 chmod 600 "${CERT_DIR}/client.key"
 
 openssl req \
@@ -95,6 +118,7 @@ openssl req \
 CLIENT_EXT_FILE="${CERT_DIR}/client.ext"
 cat > "${CLIENT_EXT_FILE}" <<EOF
 subjectAltName = DNS:snmp-client
+extendedKeyUsage = clientAuth
 EOF
 
 # Use -CAserial (not -CAcreateserial) so that the serial file written by the

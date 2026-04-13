@@ -22,6 +22,7 @@ ENGINE_ID = "0x80001f8804746573742d6167656e742d6d6962"
 SNMPV3_FLAGS = ["-v3", "-l", "noAuthNoPriv", "-u", "noauth", "-On"]
 
 
+
 def _snmp_client_run(context, snmp_cmd: list[str]) -> subprocess.CompletedProcess:
     """Run *snmp_cmd* inside a snmp-client container on the test network."""
     result = subprocess.run(
@@ -36,8 +37,11 @@ def _snmp_client_run(context, snmp_cmd: list[str]) -> subprocess.CompletedProces
     return result
 
 
+_AGENT_TLS_HOSTNAME = "test-agent-mib"
+
+
 def _agent_addr(context) -> str:
-    return f"tlstcp:{context.agent_container}:10161"
+    return f"tlstcp:{_AGENT_TLS_HOSTNAME}:10161"
 
 
 @given('a test-agent-mib instance is running with engine ID "{engine_id}"')
@@ -48,6 +52,7 @@ def step_start_test_agent_mib(context, engine_id):
             "docker", "run", "--rm", "-d",
             "--name", container_name,
             "--network", context.docker_network,
+            "--network-alias", _AGENT_TLS_HOSTNAME,
             context.test_agent_mib_image,
         ],
         check=True,

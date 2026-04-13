@@ -13,27 +13,27 @@ description = "Accept TSM (securityModel=4) in SNMPv3 dispatch so net-snmp tlstc
 
 [[content.acceptance_criteria]]
 text = "TSM security model (securityModel=4) accepted in SNMPv3 dispatch"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "TSM msgSecurityParameters parsed without error (USM parsing skipped)"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "RFC-0006 C-AUTH updated — REQ-0015 tmSecurityName mapping explicitly deferred"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "cargo clippy --workspace -- -W clippy::pedantic -D warnings passes"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "cargo test --workspace passes"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
