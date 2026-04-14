@@ -15,7 +15,6 @@ package installed.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
@@ -98,12 +97,13 @@ def load_implemented_rfcs(
     rfc_root = gov_dir / "rfc"
     implemented: list[ImplementedRfc] = []
     for rfc_dir in sorted(rfc_root.iterdir()):
-        rfc_json_path = rfc_dir / "rfc.json"
-        if not rfc_json_path.is_file():
+        rfc_toml_path = rfc_dir / "rfc.toml"
+        if not rfc_toml_path.is_file():
             continue
-        rfc_record = json.loads(rfc_json_path.read_text(encoding="utf-8"))
-        rfc_id = rfc_record.get("rfc_id", rfc_dir.name)
-        phase_qualifies = rfc_record.get("phase") in ("test", "stable")
+        with rfc_toml_path.open("rb") as toml_file:
+            rfc_record = tomllib.load(toml_file)
+        rfc_id = rfc_record["govctl"]["id"]
+        phase_qualifies = rfc_record["govctl"].get("phase") in ("test", "stable")
         force_included = force_rfc_ids is not None and rfc_id in force_rfc_ids
         if phase_qualifies or force_included:
             implemented.append(ImplementedRfc(rfc_dir=rfc_dir, record=rfc_record))
@@ -124,8 +124,9 @@ def collect_requirements_from_rfc(rfc: ImplementedRfc) -> set[str]:
     for section in rfc.record.get("sections", []):
         for clause_relative_path in section.get("clauses", []):
             clause_path = rfc.rfc_dir / clause_relative_path
-            clause_json = json.loads(clause_path.read_text(encoding="utf-8"))
-            req_ids |= extract_req_ids_from_clause_text(clause_json.get("text", ""))
+            with clause_path.open("rb") as toml_file:
+                clause_toml = tomllib.load(toml_file)
+            req_ids |= extract_req_ids_from_clause_text(clause_toml.get("content", {}).get("text", ""))
     return req_ids
 
 
@@ -149,7 +150,7 @@ def find_duplicate_req_ids(
     """
     # Collect one set of req IDs per RFC so intra-RFC repetition is collapsed.
     per_rfc_req_ids: list[tuple[str, set[str]]] = [
-        (rfc.record.get("rfc_id", str(rfc.rfc_dir.name)), collect_requirements_from_rfc(rfc))
+        (rfc.record["govctl"]["id"], collect_requirements_from_rfc(rfc))
         for rfc in implemented_rfcs
     ]
 
