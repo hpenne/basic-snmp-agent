@@ -1,0 +1,66 @@
+#:schema ../schema/adr.schema.json
+
+[govctl]
+id = "ADR-0022"
+title = "security: Abandon SNMP/TSM (TLS); stay on USM and extend to authNoPriv and authPriv"
+status = "accepted"
+date = "2026-04-14"
+refs = [
+    "RFC-0006",
+    "RFC-0001",
+    "RFC-0005",
+    "ADR-0013",
+    "ADR-0015",
+    "WI-2026-04-14-001",
+]
+
+[content]
+context = """
+RFC-0006 specified SNMP over TLS (the Transport Security Model, TSM, per RFC 5953 / RFC 6353) as the inbound transport and authentication mechanism for basic-snmp-agent, with plain TCP (RFC-0005) as a temporary bridge until the TLS layer was implemented.
+Earlier governance — specifically RFC-0001:C-AUTH REQ-0016 — also explicitly forbade USM.
+
+Before starting the TLS implementation work items (WI-2026-03-16-004, WI-2026-03-16-005), a survey of real-world SNMP/TLS adoption revealed three problems that together make TSM unviable as a target for this agent:
+
+1. Industry uptake of SNMP/TSM is extremely low. Very few managers and agents actually implement RFC 6353, so an agent that speaks only TSM would be incompatible with almost everything in the ecosystem.
+2. The reference open-source implementation, net-snmp, only supports TLS 1.0 for its SNMP/TLS transport. TLS 1.0 has itself been deprecated by the TLS working group (RFC 8996) and is disabled in modern TLS libraries such as rustls by default. An agent that required TLS 1.0 to interoperate with net-snmp would be building on an already-obsolete foundation.
+3. Because of (1) and (2), there is no meaningful interoperability payoff for the effort of implementing, testing, and maintaining a TLS transport and X.509 peer authentication path.
+
+The agent currently implements SNMP USM with the noAuthNoPriv security level. This was treated as a transitional state under the prior governance; with TSM abandoned, USM becomes the sanctioned security model going forward.
+USM's auth and priv levels (authNoPriv with HMAC-based message authentication, and authPriv with authentication plus encryption) are standardised by RFC 3414 and are what the SNMP ecosystem actually deploys."""
+decision = """
+We abandon SNMP/TLS (RFC 6353) and the Transport Security Model (RFC 5953) as targets for basic-snmp-agent.
+RFC-0006 is deprecated.
+
+Plain TCP (RFC-0005:C-PLAINTCP, RFC 3430) is retained as the permanent inbound transport.
+It is no longer framed as a temporary bridge.
+Plain UDP remains the outbound transport for traps.
+
+SNMP USM (RFC 3414) is the sanctioned security model.
+The prior prohibition on USM in RFC-0001:C-AUTH (REQ-0016) is retired; that clause is flipped from superseded to deprecated and its requirement tags are burned.
+
+The USM implementation will be extended in future work from the current noAuthNoPriv level to cover authNoPriv and authPriv as well.
+The same USM security levels will also apply to outbound traps: traps will be authenticated (and, at authPriv, encrypted) using the same USM machinery as inbound requests, so there is a single authentication story across the agent's message flow rather than divergent models for inbound and outbound.
+
+A placeholder work item is created to hold the slot for this future USM auth/priv work; the specification is deferred to a follow-up RFC and is explicitly out of scope for this retirement."""
+consequences = """
+Positive:
+- No need to implement, test, or maintain a TLS layer, certificate loading, peer chain validation, handshake driving, or TLS framing integration with the event loop.
+- No new external dependencies are required for TLS (rustls and rustls-pki-types are not added).
+- The agent can interoperate with the large existing ecosystem of USM-speaking managers and agents (including net-snmp in its default mode) out of the box.
+- A single security model (USM) applies uniformly to inbound requests and outbound traps, avoiding the earlier split where inbound was certificate-authenticated and outbound was unauthenticated plain UDP.
+- Governance becomes internally consistent: REQ-0016's prohibition on USM, the "plain TCP is temporary" framing in RFC-0005:C-PLAINTCP, and the C-RUNTIME exception notes deferring TLS wrapping to RFC-0006 all go away.
+
+Negative:
+- Certificate-based peer authentication is no longer on the roadmap; operators who want cryptographic peer identity must use a network-layer mechanism (VPN, IPsec, SSH tunnel) outside the agent.
+- USM key management (engine discovery, localised keys per RFC 3414) will need to be implemented when authNoPriv and authPriv land. This is non-trivial but is also well-understood and widely deployed.
+- Plain TCP with noAuthNoPriv provides no confidentiality or authentication on the wire until authNoPriv and authPriv ship. Deployments that need either must rely on network-layer controls in the interim.
+- REQ tags REQ-0004 through REQ-0020 and REQ-0033 become burned (retired, never reused) because the clauses that owned them are retired. New USM auth requirements will receive fresh tag numbers.
+
+Governance follow-ups (tracked in WI-2026-04-14-001):
+- RFC-0006 deprecated.
+- RFC-0001 C-SUMMARY rewritten, C-TRANSPORT repointed at RFC-0005:C-PLAINTCP, C-AUTH flipped to deprecated.
+- RFC-0002 C-RUNTIME exception notes removed.
+- RFC-0005 C-PLAINTCP rationale rewritten and C-INBOUND REQ-0033 dropped.
+- req-coverage-gaps entry for REQ-0033 removed.
+- Queued TLS work items (WI-2026-03-16-004 and WI-2026-03-16-005) cancelled.
+- A new queued placeholder work item captures the future USM auth/priv and trap-auth work; the follow-up RFC is written when that work is picked up."""

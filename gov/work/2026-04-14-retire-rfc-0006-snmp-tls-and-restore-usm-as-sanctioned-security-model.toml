@@ -6,6 +6,10 @@ title = "Retire RFC-0006 (SNMP/TLS) and restore USM as sanctioned security model
 status = "active"
 created = "2026-04-14"
 started = "2026-04-14"
+refs = [
+    "ADR-0022",
+    "RFC-0006",
+]
 
 [content]
 description = """
