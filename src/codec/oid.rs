@@ -686,4 +686,20 @@ mod tests {
         let oid = "1.39.1".parse::<Oid>().unwrap();
         assert_eq!(oid.as_slice(), &[1, 39, 1]);
     }
+
+    #[test]
+    fn given_first_arc_0_second_arc_40_when_parsed_then_fails() {
+        // Verifies: REQ-0055 (OID structural rules from RFC 3411/X.660)
+        // 40 exceeds the maximum valid second arc of 39 when first is 0.
+        let err = "0.40.1".parse::<Oid>().unwrap_err();
+        assert_eq!(err.category(), OidErrorCategory::InvalidSecondArc);
+    }
+
+    #[test]
+    fn given_first_arc_1_second_arc_40_when_parsed_then_fails() {
+        // Verifies: REQ-0055 (OID structural rules from RFC 3411/X.660)
+        // 40 exceeds the maximum valid second arc of 39 when first is 1.
+        let err = "1.40.1".parse::<Oid>().unwrap_err();
+        assert_eq!(err.category(), OidErrorCategory::InvalidSecondArc);
+    }
 }

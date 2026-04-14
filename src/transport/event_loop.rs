@@ -1490,15 +1490,15 @@ mod tests {
 
         // When: a frame of exactly 65535 bytes is sent. The content is garbage
         // (not valid SNMP), so the event loop discards it and keeps the connection.
-        const CONTENT_LENGTH: usize = 65529;
-        let mut boundary_frame = Vec::with_capacity(6 + CONTENT_LENGTH);
+        // 1 tag + 5 length bytes + 65529 content = 65535 == MAX_FRAME_SIZE.
+        let mut boundary_frame = Vec::with_capacity(65535);
         boundary_frame.push(0x30u8); // SEQUENCE tag
         boundary_frame.push(0x84u8); // long form: 4 subsequent octets
         boundary_frame.push(0x00u8); // content_length high byte
         boundary_frame.push(0x00u8);
         boundary_frame.push(0xFFu8);
-        boundary_frame.push(0xF9u8); // content_length low byte: 0x0000FFF9 = 65529
-        boundary_frame.extend(vec![0xAAu8; CONTENT_LENGTH]);
+        boundary_frame.push(0xF9u8); // content_length: 0x0000FFF9 = 65529
+        boundary_frame.extend(vec![0xAAu8; 65529]);
         assert_eq!(
             boundary_frame.len(),
             65535,
