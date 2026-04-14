@@ -545,6 +545,34 @@ mod tests {
         assert_eq!(resp.varbinds.len(), 1);
     }
 
+    #[test]
+    fn given_bulk_request_when_non_repeaters_zero_and_max_repetitions_zero_then_no_varbinds() {
+        // Verifies: REQ-0026, REQ-0027
+        // Regression guard for RFC 3416 §4.2.3 semantics: max_repetitions=0 must
+        // produce an empty repeating section. The `&& → ||` and `> → >=` mutants
+        // at this condition produce identical output for this input; see
+        // .cargo/mutants.toml for the suppression rationale.
+        let store = store_with(&[("1.3.6.1.2.1.1.1.0", Value::Integer32(1))]);
+        let req = GetBulkRequest {
+            request_id: 3,
+            non_repeaters: 0,
+            max_repetitions: 0,
+            varbinds: vec![Varbind {
+                oid: oid("1.3.6.1.2.1.1.1.0"),
+                value: VarbindValue::Unspecified,
+            }],
+        };
+
+        let resp = handle_get_bulk(&req, &store, 100);
+
+        // No non-repeaters and no repetitions: the response must be empty.
+        assert_eq!(
+            resp.varbinds.len(),
+            0,
+            "expected empty response when max_repetitions=0 and non_repeaters=0"
+        );
+    }
+
     // ── handle_set ────────────────────────────────────────────────────────────
 
     #[test]

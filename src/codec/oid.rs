@@ -668,4 +668,22 @@ mod tests {
             "expected no chained source error for a structural violation"
         );
     }
+
+    #[test]
+    fn given_first_arc_0_second_arc_39_when_parsed_then_succeeds() {
+        // Verifies: REQ-0055 (OID structural rules from RFC 3411/X.660)
+        // 39 is the maximum valid second arc when first is 0. The mutant
+        // `> with >=` in validate_oid_components would incorrectly reject it.
+        let oid = "0.39.1".parse::<Oid>().unwrap();
+        assert_eq!(oid.as_slice(), &[0, 39, 1]);
+    }
+
+    #[test]
+    fn given_first_arc_1_second_arc_39_when_parsed_then_succeeds() {
+        // Verifies: REQ-0055 (OID structural rules from RFC 3411/X.660)
+        // 39 is the maximum valid second arc when first is 1. The mutant
+        // `> with >=` in validate_oid_components would incorrectly reject it.
+        let oid = "1.39.1".parse::<Oid>().unwrap();
+        assert_eq!(oid.as_slice(), &[1, 39, 1]);
+    }
 }

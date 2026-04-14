@@ -1059,6 +1059,18 @@ mod tests {
         assert_eq!(parse_ber_length(&[0x85, 0, 0, 0, 0, 1]), Err(()));
     }
 
+    #[test]
+    fn given_four_octet_length_field_when_parsed_then_returns_ok() {
+        // Verifies: REQ-0071
+        // 0x84 = 4 subsequent octets; 4 is the maximum supported long-form length.
+        // The mutant `> with >=` would incorrectly reject this valid 4-octet field.
+        // content_length = 0x00_01_00_00 = 65536; field_size = 1 (long-form marker byte) + 4 = 5.
+        assert_eq!(
+            parse_ber_length(&[0x84, 0x00, 0x01, 0x00, 0x00]),
+            Ok(Some((65536, 5)))
+        );
+    }
+
     // ── RFC 3430 dispatch tests ───────────────────────────────────────────────
 
     /// Encode a `GetRequest` as a raw BER `SNMPv3` frame ready for TCP send (RFC 3430),
@@ -1443,6 +1455,71 @@ mod tests {
         assert_eq!(
             bytes_read, 0,
             "server must close connection on invalid BER length"
+        );
+
+        sender.send(Command::Shutdown).unwrap();
+        loop_handle
+            .join()
+            .expect("event loop thread panicked")
+            .unwrap();
+    }
+
+    #[test]
+    fn given_frame_at_exactly_max_size_when_received_then_connection_stays_open() {
+        // Verifies: REQ-0071, REQ-0073
+        // MAX_FRAME_SIZE is 65535. A frame of exactly 65535 bytes must be accepted
+        // (not cause connection closure). The mutant `> with >=` would incorrectly
+        // close the connection for this boundary frame.
+        //
+        // Frame layout (total = 65535 bytes):
+        //   - 1 byte:  SEQUENCE tag 0x30
+        //   - 5 bytes: BER long-form length (0x84 = 4 subsequent octets, then
+        //              0x00 0x00 0xFF 0xF9 = 65529 in big-endian)
+        //   - 65529 bytes: garbage content (not a valid SNMP PDU, so the event
+        //              loop will silently discard it but keep the connection open)
+        //
+        // Verification: 1 + 5 + 65529 = 65535 == MAX_FRAME_SIZE.
+        let (event_loop, bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id()).unwrap();
+        let loop_handle = thread::spawn(move || event_loop.run());
+
+        let oid: crate::codec::Oid = "1.3.6.1.2.1.1.7.0".parse().unwrap();
+        set_and_wait(&sender, &oid, crate::codec::Value::Integer32(42));
+
+        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+
+        // When: a frame of exactly 65535 bytes is sent. The content is garbage
+        // (not valid SNMP), so the event loop discards it and keeps the connection.
+        const CONTENT_LENGTH: usize = 65529;
+        let mut boundary_frame = Vec::with_capacity(6 + CONTENT_LENGTH);
+        boundary_frame.push(0x30u8); // SEQUENCE tag
+        boundary_frame.push(0x84u8); // long form: 4 subsequent octets
+        boundary_frame.push(0x00u8); // content_length high byte
+        boundary_frame.push(0x00u8);
+        boundary_frame.push(0xFFu8);
+        boundary_frame.push(0xF9u8); // content_length low byte: 0x0000FFF9 = 65529
+        boundary_frame.extend(vec![0xAAu8; CONTENT_LENGTH]);
+        assert_eq!(
+            boundary_frame.len(),
+            65535,
+            "boundary frame must be exactly 65535 bytes"
+        );
+
+        client
+            .write_all(&boundary_frame)
+            .expect("boundary frame write must succeed");
+
+        // Then: a valid SNMPv3 GetRequest on the same connection still gets a response,
+        // proving that the boundary frame did NOT close the connection.
+        client
+            .write_all(&framed_get_request(99, 99, &oid))
+            .expect("valid request write must succeed");
+        let response_frame = read_framed_response(&mut client);
+        let response = decode_v3_response_payload(&response_frame);
+        assert_eq!(response.request_id, 99);
+        assert_eq!(
+            response.varbinds[0].value,
+            crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(42))
         );
 
         sender.send(Command::Shutdown).unwrap();

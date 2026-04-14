@@ -303,6 +303,7 @@ impl Default for AgentBuilder {
 mod tests {
     use super::*;
     use std::net::UdpSocket;
+    use std::time::Duration;
 
     fn test_agent() -> Agent {
         // Port 0 lets the OS assign a free port, avoiding conflicts between tests.
@@ -393,6 +394,38 @@ mod tests {
     }
 
     #[test]
+    fn given_engine_id_exactly_5_bytes_when_build_then_succeeds() {
+        // Verifies: REQ-0055
+        // 5 bytes is the minimum valid length per RFC 3411 §5. The mutant
+        // `< with <=` would incorrectly reject this boundary value.
+        let min_valid = vec![0x80u8, 0x00, 0x1f, 0x88, 0x01]; // exactly 5 bytes
+        let result = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .engine_id(min_valid)
+            .build();
+        assert!(
+            result.is_ok(),
+            "expected Ok for 5-byte engine ID (minimum valid length)"
+        );
+    }
+
+    #[test]
+    fn given_engine_id_exactly_32_bytes_when_build_then_succeeds() {
+        // Verifies: REQ-0055
+        // 32 bytes is the maximum valid length per RFC 3411 §5. The mutant
+        // `> with >=` would incorrectly reject this boundary value.
+        let max_valid = vec![0xAAu8; 32]; // exactly 32 bytes
+        let result = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .engine_id(max_valid)
+            .build();
+        assert!(
+            result.is_ok(),
+            "expected Ok for 32-byte engine ID (maximum valid length)"
+        );
+    }
+
+    #[test]
     fn given_agent_when_set_called_then_returns_ok() {
         // Verifies: REQ-0062
         let agent = test_agent();
@@ -427,5 +460,41 @@ mod tests {
         let result = agent.set(oid, Value::Integer32(7));
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn given_agent_when_set_called_then_value_is_stored_in_event_loop() {
+        // Verifies: REQ-0062, REQ-0063
+        // The mutant replaces Agent::set with Ok(()) without forwarding the command.
+        // This test catches that by querying the event loop directly via the
+        // internal command_sender after calling agent.set(), proving the command
+        // was actually forwarded and not silently dropped.
+        let agent = test_agent();
+        let oid: Oid = "1.3.6.1.2.1.1.9.0".parse().unwrap();
+
+        agent.set(oid.clone(), Value::Integer32(123)).unwrap();
+
+        // Use QueryValue on the same channel to verify the value landed in the store.
+        // Because the event loop processes commands in order, the QueryValue reply
+        // arriving confirms the preceding SetValue has been applied.
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        agent
+            .0
+            .command_sender
+            .send(Command::QueryValue {
+                oid: oid.clone(),
+                reply: reply_tx,
+            })
+            .unwrap();
+
+        let stored_value = reply_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("timed out waiting for QueryValue reply");
+
+        assert_eq!(
+            stored_value,
+            Some(Value::Integer32(123)),
+            "expected the value set via Agent::set to be present in the MIB store"
+        );
     }
 }

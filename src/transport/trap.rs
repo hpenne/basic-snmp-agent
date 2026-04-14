@@ -360,4 +360,82 @@ mod tests {
             "expected datagram on reachable destination despite earlier failure"
         );
     }
+
+    #[test]
+    fn given_trap_pdu_encoded_to_exactly_mtu_when_send_trap_then_ok() {
+        // Verifies: REQ-0042, REQ-0044, REQ-0045
+        // The MTU check is `encoded_pdu.len() > TRAP_MTU_BYTES`. The mutant
+        // `> with >=` would incorrectly reject a PDU that encodes to exactly
+        // TRAP_MTU_BYTES (1500) bytes.
+        //
+        // Strategy: encode a candidate PDU with a large OctetString payload,
+        // measure the encoded size, then extend the payload by the exact delta so
+        // the final encoding is exactly 1500 bytes. Because the initial payload
+        // (1200 bytes) puts the OctetString length field in 3-byte form, adding
+        // bytes to the payload adds the same number of bytes to the encoding.
+        //
+        // `sender.start_time` is used for all pre-flight encoding to guarantee
+        // the sysUpTime encoding is identical to what send_trap will use internally.
+        let sender = TrapSender::new(Instant::now()).unwrap();
+        let (receiver, dest) = loopback_receiver();
+
+        let candidate_payload_size = 1200usize;
+        let varbind_oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+
+        let candidate_pdu = TrapPdu {
+            request_id: 42,
+            trap_oid: trap_oid(),
+            varbinds: vec![Varbind {
+                oid: varbind_oid.clone(),
+                value: VarbindValue::Value(Value::OctetString(vec![
+                    0xBBu8;
+                    candidate_payload_size
+                ])),
+            }],
+        };
+        let candidate_wire = build_wire_trap(&candidate_pdu, sender.start_time);
+        let candidate_encoded = crate::codec::encode_trap(&candidate_wire)
+            .expect("candidate PDU must encode without error");
+        let candidate_size = candidate_encoded.len();
+        assert!(
+            candidate_size < TRAP_MTU_BYTES,
+            "candidate PDU ({candidate_size} bytes) must be below MTU to compute delta"
+        );
+
+        let delta = TRAP_MTU_BYTES - candidate_size;
+        let final_payload_size = candidate_payload_size + delta;
+
+        let exact_mtu_pdu = TrapPdu {
+            request_id: 42,
+            trap_oid: trap_oid(),
+            varbinds: vec![Varbind {
+                oid: varbind_oid,
+                value: VarbindValue::Value(Value::OctetString(vec![0xBBu8; final_payload_size])),
+            }],
+        };
+        let exact_mtu_wire = build_wire_trap(&exact_mtu_pdu, sender.start_time);
+        let exact_mtu_encoded = crate::codec::encode_trap(&exact_mtu_wire)
+            .expect("exact-MTU PDU must encode without error");
+        assert_eq!(
+            exact_mtu_encoded.len(),
+            TRAP_MTU_BYTES,
+            "final encoded PDU must be exactly {TRAP_MTU_BYTES} bytes"
+        );
+
+        // When: the trap is sent.
+        let results = sender.send_trap(&exact_mtu_pdu, &[dest]);
+
+        // Then: the result must be Ok, not an MTU error. The PDU is exactly at
+        // the boundary (1500 bytes == TRAP_MTU_BYTES), so `len() > 1500` is false
+        // and no MTU error is raised.
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].outcome.is_ok(),
+            "expected Ok for PDU at exactly TRAP_MTU_BYTES, got {:?}",
+            results[0].outcome
+        );
+        // Drain the socket so it does not interfere with other tests.
+        let mut recv_buf = vec![0u8; TRAP_MTU_BYTES + 1];
+        receiver.recv_from(&mut recv_buf).unwrap();
+    }
 }

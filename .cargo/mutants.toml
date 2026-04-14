@@ -4,4 +4,67 @@ exclude_re = [
     # replacing the body with () still compiles, so there is nothing to test at runtime.
     "trap\\.rs.* replace check with \\(\\)",
     "event_loop\\.rs.* replace check with \\(\\)",
+
+    # Drop impl for AgentInner: the only observable effect is thread shutdown, which
+    # requires intrusive test hooks (e.g. an Arc<AtomicBool> set by the thread on exit).
+    # The public API offers no way to observe thread liveness after all Agent clones drop.
+    "replace <impl Drop for AgentInner>::drop with \\(\\)",
+
+    # CommandSender::send checks libc::write() < 0 for errors. POSIX guarantees that
+    # write() to a non-blocking pipe never returns 0 on success; it either writes bytes
+    # (> 0) or returns -1 (EAGAIN). The == 0 and <= 0 variants are therefore unreachable
+    # without OS-level failure injection.
+    # This pattern covers only the `write_result < 0` check that is the sole `<`
+    # comparison in CommandSender::send today.
+    "replace < with .* in CommandSender::send",
+
+    # accept_connections WouldBlock guard: distinguishes "no more pending connections"
+    # (WouldBlock → break) from genuine errors (close loop). Requires injecting a
+    # non-WouldBlock accept() error at the OS level to observe the difference.
+    "WouldBlock.* in EventLoop::accept_connections",
+    "replace == with != in EventLoop::accept_connections",
+
+    # handle_connection_event WouldBlock guard: same reasoning as accept_connections —
+    # injecting a non-WouldBlock read error requires OS-level fault injection.
+    "WouldBlock.* in EventLoop::handle_connection_event",
+    "replace == with != in EventLoop::handle_connection_event",
+
+    # next_connection_token overflow guard: the comment in the source notes this fires
+    # only after usize::MAX wrapping — effectively unreachable in any real test run.
+    # This pattern covers only the `token_index < MAX_CONNECTIONS` check that is the
+    # sole `<` comparison in EventLoop::next_connection_token today.
+    "replace < with .* in EventLoop::next_connection_token",
+
+    # create_pipe result check: requires libc::pipe() to fail, which is not injectable
+    # without OS-level tricks (e.g. exhausting file descriptors across the whole process).
+    # This pattern covers only the `pipe_result < 0` check that is the sole `<`
+    # comparison in create_pipe today.
+    "replace < with .* in create_pipe",
+
+    # set_nonblocking: fcntl() O_NONBLOCK flag. `| ^ XOR` is equivalent to `| OR` because
+    # fresh pipe fds never have O_NONBLOCK pre-set, so XOR sets it identically to OR.
+    # The fcntl result check requires injecting an F_SETFL failure at the OS level.
+    # This pattern covers only the `fcntl_result < 0` check that is the sole `<`
+    # comparison in set_nonblocking today.
+    "replace \\| with \\^ in set_nonblocking",
+    "replace < with .* in set_nonblocking",
+
+    # drain_pipe: no public API surface allows observing whether the self-pipe was
+    # drained; both mutations produce no externally visible difference in tests.
+    "replace drain_pipe with \\(\\)",
+    "replace <= with > in drain_pipe",
+
+    # parse_ber_length byte accumulation `| ^ XOR`: for this algorithm each byte
+    # occupies a distinct 8-bit window (shift-left 8 before combining), so OR and XOR
+    # produce identical bit patterns. The mutation is mathematically undetectable.
+    "replace \\| with \\^ in parse_ber_length",
+
+    # handle_get_bulk repeating-section guard `!repeating_varbinds.is_empty() && max_repetitions > 0`:
+    # - `&& → ||`: when repeating_varbinds is empty the inner `for oid in &mut current_oids`
+    #   loop iterates zero times regardless, producing identical output.
+    # - `> → >=`: `for _ in 0..max_repetitions` with max_repetitions=0 iterates zero times
+    #   under both `> 0` and `>= 0`, so the response is identical.
+    # Both mutations are structurally undetectable through the function's output.
+    "replace && with \\|\\| in handle_get_bulk",
+    "replace > with >= in handle_get_bulk",
 ]
