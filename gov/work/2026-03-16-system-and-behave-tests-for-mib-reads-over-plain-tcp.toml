@@ -3,8 +3,10 @@
 [govctl]
 id = "WI-2026-03-16-006"
 title = "System and Behave tests for MIB reads over plain TCP"
-status = "queue"
+status = "done"
 created = "2026-03-16"
+started = "2026-04-14"
+completed = "2026-04-14"
 refs = ["WI-2026-03-16-002"]
 
 [content]
@@ -29,35 +31,35 @@ Prerequisite: WI-2026-03-16-002 (RFC 6353 framing and PDU dispatch over plain TC
 
 [[content.acceptance_criteria]]
 text = "New feature file tests/system/features/mib_reads.feature with scenarios for GET (hit, miss), GETNEXT (hit, end-of-MIB), GETBULK with non-repeaters, and GETBULK with max-repetitions=0"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "Every scenario tagged with the relevant @REQ-XXXX IDs from RFC-0001:C-INBOUND"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "The agent accepts inbound SNMPv3 messages (USM noAuthNoPriv, noPriv) over plain TCP and returns SNMPv3 responses. The codec encodes/decodes the full msgVersion + msgGlobalData + msgSecurityParameters + msgData/ScopedPDU structure."
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
 text = "connect_to_agent_addr(context) Python helper returns the transport address (e.g. tcp:test-agent-mib:10161). Changing one string and credential flags switches plain TCP to TLS."
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "Net-snmp CLI tools (snmpget -v3 -l noAuthNoPriv, snmpgetnext, snmpbulkget) are the sole client mechanism. No Rust client binary is written."
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "All scenarios pass under make test"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "make trace continues to pass (or new requirement annotations added where needed)"
-status = "pending"
+status = "done"
 category = "chore"
