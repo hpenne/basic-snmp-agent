@@ -9,7 +9,7 @@ permissions: read-all
 
 jobs:
   fuzz:
-    name: Prune corpus then fuzz (30 min)
+    name: Batch fuzz (30 min)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,18 +20,6 @@ jobs:
           language: rust
           github-token: ${{ secrets.GITHUB_TOKEN }}
           sanitizer: address
-
-      - name: Prune corpus
-        uses: google/clusterfuzzlite/actions/run_fuzzers@v1
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          fuzz-seconds: 300
-          mode: 'prune'
-          language: rust
-          sanitizer: address
-
-      - name: Clear artifacts before batch fuzzing
-        run: sudo rm -rf "$GITHUB_WORKSPACE/out/artifacts"
 
       - name: Batch fuzz
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
