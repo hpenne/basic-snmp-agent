@@ -1,0 +1,31 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-USM-KEYS"
+title = "Localised Key Material and Derivation"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+[REQ-0081] The agent MUST accept authentication key material at `Agent` construction time as pre-derived, engine-ID-localised keys. The agent MUST NOT accept plaintext passwords at its configuration boundary.
+
+[REQ-0082] The library MUST expose a pure-function helper that derives a localised key from a password, an engine ID, and an authentication protocol identifier, per the key-localisation procedure defined in RFC 3414 §2.6 and extended for the HMAC-SHA-2 family per RFC 7860. The helper MUST be usable independently of any `Agent` instance so that embedders can perform the derivation offline or outside the live agent process.
+
+[REQ-0083] The localised authentication key supplied for a user MUST have exactly the length produced by the configured authentication protocol's key-localisation procedure: 32 bytes for HMAC-SHA-256 and 64 bytes for HMAC-SHA-512. The agent MUST reject configuration supplying a key of any other length.
+
+[REQ-0084] The agent MUST derive the privacy key from the localised authentication key by taking the leading *N* bytes of the localised authentication key, where *N* is 16 bytes for AES-128-CFB and 32 bytes for AES-256-CFB. Embedders MUST NOT supply a separate privacy key.
+
+[REQ-0085] The agent MUST zeroise all in-memory copies of localised authentication and privacy keys when the owning type is dropped. The zeroisation MUST be performed in a way that is not subject to dead-store elimination by the compiler.
+
+**Rationale:**
+
+Requiring pre-derived localised keys at the configuration boundary keeps the agent's hot path free of password-handling responsibilities: the library never has to own plaintext-password zeroisation, constant-time password comparison, or the choice of any particular password-derivation function beyond the RFC-specified one. Embedders that want password-based configuration call the exposed derivation helper in their own code and hand the resulting bytes to the agent. This is also defence-in-depth: fewer places inside the library hold material that could leak through a logging or panic path.
+
+The library nonetheless ships the derivation helper because the alternative — every embedder reimplementing RFC 3414 §2.6 password-to-key and key-localisation logic — would be both a usability hazard and a correctness hazard, and would make integration with existing manager-side configuration (which stores passwords) awkward.
+
+Deriving the privacy key from the leading bytes of the localised authentication key matches the de facto interop rule used by net-snmp and every other widely deployed SNMP manager when combining SHA-2-family authentication with AES privacy. Specifying independent auth and priv keys would be more explicit but would break interop with every standard manager, because managers compute and transmit only the authentication-derived key material.
+
+Stating the length-mapping matrix normatively prevents silent interop drift and turns configuration-time length mismatches into hard errors rather than cryptic runtime authentication failures.
+
+Zeroising key material on drop is a defence-in-depth measure against memory disclosure via heap dumps, core files, swap, or post-mortem tools. The "not subject to dead-store elimination" wording is normative because a naive `buf.fill(0)` in a `Drop` impl is trivially elidable by the optimiser and would give false comfort without providing the property. The specific mechanism for achieving this is recorded in a separate ADR rather than named in this clause."""

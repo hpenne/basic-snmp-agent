@@ -14,7 +14,10 @@ title = "Summary"
 
 [[sections]]
 title = "Specification"
-clauses = ["clauses/C-USM-MODEL.toml"]
+clauses = [
+    "clauses/C-USM-MODEL.toml",
+    "clauses/C-USM-KEYS.toml",
+]
 
 [[changelog]]
 version = "0.1.0"
