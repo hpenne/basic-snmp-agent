@@ -36,8 +36,10 @@ cargo check
 
 ## Workflow Rules
 
+- When using govctl, always verify actual state of work items and cross-references before reporting status — govctl output can lag behind reality. Check for implemented-but-unclosed items.
 - **Always discuss requirements with the user before adding RFC clauses.** Do not create or populate clauses until the user has agreed to the content.
 - **Never create or modify ADRs without explicit user approval.** Always discuss the decision, alternatives, and rationale with the user before running `govctl adr new` or editing ADR content.
+- ADRs must not reference RFCs and cross-reference direction must be respected. Validate layering before writing any governance document.
 - **Never advance govctl phase or status without explicit user consent.** Do not run `govctl rfc advance`, `govctl rfc finalize`, or any equivalent mode/phase transition command unless the user explicitly asks.
 - **Always fix MUST FIX and SHOULD FIX review comments.** SUGGESTIONS are optional and require user input. Never leave a MUST FIX or SHOULD FIX unresolved after a review cycle.
 
