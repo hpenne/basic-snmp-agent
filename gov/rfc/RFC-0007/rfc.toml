@@ -1,0 +1,22 @@
+#:schema ../../schema/rfc.schema.json
+
+[govctl]
+id = "RFC-0007"
+title = "SNMP USM Authentication and Privacy"
+version = "0.1.0"
+status = "draft"
+phase = "spec"
+owners = ["@hpenne"]
+created = "2026-04-15"
+
+[[sections]]
+title = "Summary"
+
+[[sections]]
+title = "Specification"
+clauses = ["clauses/C-USM-MODEL.toml"]
+
+[[changelog]]
+version = "0.1.0"
+date = "2026-04-15"
+notes = "Initial draft"

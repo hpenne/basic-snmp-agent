@@ -1,0 +1,31 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-USM-MODEL"
+title = "USM Model and Single-User Scope"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+[REQ-0074] The agent MUST implement the User-based Security Model (USM) as specified in RFC 3414, with the HMAC-SHA-2 authentication protocol extensions specified in RFC 7860.
+
+[REQ-0075] The agent MUST support all three USM security levels: `noAuthNoPriv`, `authNoPriv`, and `authPriv`.
+
+[REQ-0076] The agent MUST be configured with exactly one USM user at construction time. Support for more than one concurrently configured user is explicit future work and is out of scope for this RFC.
+
+[REQ-0077] The configured user's security level MUST be fixed at `Agent` construction time and MUST NOT be modifiable by any SNMP protocol operation.
+
+[REQ-0078] The agent MUST reject any inbound USM message whose `msgUserName` field does not match the configured user's name, and MUST respond with a Report PDU carrying the `usmStatsUnknownUserNames` counter as specified in RFC 3414 §3.2.
+
+[REQ-0079] The agent MUST reject any inbound USM message whose `msgFlags` security level does not exactly equal the configured user's security level, and MUST respond with a Report PDU carrying the `usmStatsUnsupportedSecLevels` counter as specified in RFC 3414 §3.2.
+
+[REQ-0080] The agent MUST process engine-ID discovery exchanges per RFC 3414 §4 regardless of the configured user's security level. Discovery probes carrying an empty `msgAuthoritativeEngineID` MUST be handled before user-name and security-level enforcement apply.
+
+**Rationale:**
+
+RFC 3414's default processing treats the user's configured security level as a minimum requirement: a manager that names a user but asserts `noAuthNoPriv` in `msgFlags` is processed without authentication, which allows anyone who has observed a user name (trivial — it is in plaintext in every USM header) to bypass authentication. Requiring an exact match between the incoming and configured level closes this downgrade path without introducing a full VACM layer. Deployments that need multiple access profiles will need multi-user support, which is called out as future work.
+
+A single configured user is the minimum viable USM deployment and keeps the public construction API small. When multi-user support lands, the public API is expected to change in a breaking way so that user-name selection, per-user context, and trap-user selection can all be revisited together.
+
+Engine-ID discovery must remain available at all configured levels because it is a protocol-level prerequisite to authenticated exchanges: a manager cannot localise keys or construct authenticated messages until it knows the authoritative engine ID, so the discovery exchange cannot itself require authentication."""
