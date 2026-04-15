@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-04-14-001"
 title = "Retire RFC-0006 (SNMP/TLS) and restore USM as sanctioned security model"
-status = "active"
+status = "done"
 created = "2026-04-14"
 started = "2026-04-14"
+completed = "2026-04-15"
 refs = [
     "ADR-0022",
     "RFC-0006",
@@ -27,60 +28,60 @@ Scope:
 
 [[content.acceptance_criteria]]
 text = "RFC-0006 deprecated via govctl rfc deprecate"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "ADR recording TSM abandonment and USM direction accepted"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
 text = "RFC-0001 C-SUMMARY rewritten to reflect USM and plain TCP"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
 text = "RFC-0001 C-AUTH flipped from superseded to deprecated"
-status = "pending"
+status = "done"
 category = "removed"
 
 [[content.acceptance_criteria]]
 text = "RFC-0001 C-TRANSPORT superseded_by repointed to RFC-0005:C-PLAINTCP"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
 text = "RFC-0002 C-RUNTIME exception notes for RFC-0006 removed"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
 text = "RFC-0005 C-PLAINTCP rationale rewritten (plain TCP is permanent)"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
 text = "RFC-0005 C-INBOUND REQ-0033 retired (tag burned)"
-status = "pending"
+status = "done"
 category = "removed"
 
 [[content.acceptance_criteria]]
 text = "req-coverage-gaps.toml entry for REQ-0033 removed"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "TLS work items (WI-2026-03-16-004, -005) cancelled"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "placeholder work item created for future USM authNoPriv/authPriv support"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "govctl check passes"
-status = "pending"
+status = "done"
 category = "chore"
