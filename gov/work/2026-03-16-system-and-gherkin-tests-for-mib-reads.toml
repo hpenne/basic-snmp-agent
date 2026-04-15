@@ -3,8 +3,9 @@
 [govctl]
 id = "WI-2026-03-16-005"
 title = "Upgrade MIB read system tests to TLS"
-status = "queue"
+status = "cancelled"
 created = "2026-03-16"
+completed = "2026-04-14"
 refs = [
     "WI-2026-03-16-006",
     "WI-2026-03-16-004",

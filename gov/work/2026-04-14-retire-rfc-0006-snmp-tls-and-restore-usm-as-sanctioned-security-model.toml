@@ -13,8 +13,17 @@ refs = [
 
 [content]
 description = """
-Describe the work to be done.
-What is the goal? What are the acceptance criteria?"""
+Retire RFC-0006 (SNMP/TLS and certificate authentication) and restore SNMP USM as the sanctioned security model for the agent, per ADR-0022.
+
+Scope:
+- Deprecate RFC-0006.
+- RFC-0001: rewrite C-SUMMARY to reflect USM and plain TCP; repoint C-TRANSPORT.superseded_by from the now-deprecated RFC-0006:C-TRANSPORT to RFC-0005:C-PLAINTCP; flip C-AUTH from superseded to deprecated (REQ-0015..REQ-0020 retired, tags burned).
+- RFC-0002: rewrite C-RUNTIME REQ-0050 and REQ-0051 to drop TLS references and exception notes.
+- RFC-0005: rewrite C-PLAINTCP rationale so plain TCP is permanent rather than transitional; drop REQ-0033 from C-INBOUND (tag burned).
+- Remove the REQ-0033 entry from gov/req-coverage-gaps.toml.
+- Cancel the queued TLS work items WI-2026-03-16-004 and WI-2026-03-16-005.
+- Create placeholder work item WI-2026-04-14-002 for the future USM authNoPriv/authPriv extension covering inbound requests and outbound traps.
+- govctl check passes."""
 
 [[content.acceptance_criteria]]
 text = "RFC-0006 deprecated via govctl rfc deprecate"
