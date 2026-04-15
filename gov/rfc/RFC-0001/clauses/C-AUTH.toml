@@ -4,8 +4,7 @@
 id = "C-AUTH"
 title = "Certificate Authentication"
 kind = "normative"
-status = "superseded"
-superseded_by = "RFC-0006:C-AUTH"
+status = "deprecated"
 since = "0.1.0"
 
 [content]

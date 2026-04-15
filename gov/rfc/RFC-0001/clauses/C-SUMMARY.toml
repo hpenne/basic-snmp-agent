@@ -10,12 +10,14 @@ since = "0.1.0"
 [content]
 text = """
 This RFC specifies the design and behaviour of `basic-snmp-agent`, a Rust library crate implementing an SNMPv3 agent.
-Inbound requests are served over TLS; outbound traps are sent over plain UDP.
+Inbound requests are served over plain TCP (RFC 3430); outbound traps are sent over plain UDP.
+The sanctioned security model is SNMP USM (RFC 3414); certificate-based transport security via RFC 6353 (TSM) is explicitly out of scope.
 
-**Scope:** Covers the library crate structure, TLS transport for inbound requests, plain UDP transport for outbound traps, X.509 certificate authentication for inbound connections, inbound request handling (GET, GETNEXT, GETBULK), the internal MIB store with application-driven updates, and outbound trap sending.
-SNMPv1, SNMPv2c, USM, SET handling beyond error responses, MIB compilation, and SNMP Inform notifications are out of scope.
+**Scope:** Covers the library crate structure, plain TCP transport for inbound requests, plain UDP transport for outbound traps, USM authentication for inbound and outbound messages, inbound request handling (GET, GETNEXT, GETBULK), the internal MIB store with application-driven updates, and outbound trap sending.
+SNMPv1, SNMPv2c, SNMP/TLS (RFC 6353, TSM), X.509 certificate authentication, SET handling beyond error responses, MIB compilation, and SNMP Inform notifications are out of scope.
+The current USM implementation is at the noAuthNoPriv security level; extending it to authNoPriv and authPriv for both inbound requests and outbound traps is planned future work tracked outside this RFC.
 
 **Rationale:** A library crate allows embedding applications to instrument themselves without running a separate agent process.
-TLS provides strong, certificate-based security for inbound requests without the weaknesses of community strings.
-Plain UDP for traps keeps outbound delivery simple and avoids the complexity of maintaining TLS connections to potentially many trap destinations.
+USM is the security model that the SNMP ecosystem actually deploys, so using it is the most effective path to interoperability with existing managers and agents.
+Plain TCP is used for inbound request framing per RFC 3430, and plain UDP for outbound traps keeps delivery simple and avoids connection state to trap destinations.
 A push-based internal MIB store gives the application full control over when values change while keeping the library's request path simple and lock-free from the application's perspective."""

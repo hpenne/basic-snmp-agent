@@ -5,7 +5,7 @@ id = "C-TRANSPORT"
 title = "TLS and UDP Transport"
 kind = "normative"
 status = "superseded"
-superseded_by = "RFC-0006:C-TRANSPORT"
+superseded_by = "RFC-0005:C-PLAINTCP"
 since = "0.1.0"
 
 [content]
