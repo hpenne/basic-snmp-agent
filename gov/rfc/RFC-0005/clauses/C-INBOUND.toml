@@ -5,6 +5,7 @@ id = "C-INBOUND"
 title = "Inbound Request Handling"
 kind = "normative"
 status = "active"
+since = "0.2.0"
 
 [content]
 text = """
@@ -28,10 +29,8 @@ text = """
 
 [REQ-0032] The agent MUST respond to any SetRequest with a Response PDU containing error-status `notWritable` (value 17) and the error-index set to the index of the first varbind.
 
-[REQ-0033] The agent MUST silently discard any PDU received over a TLS connection whose peer certificate was not successfully verified.
-
 **Rationale:**
 These behaviours follow RFC 3416.
 Returning `notWritable` for SET requests informs the manager that the agent explicitly does not support writes, which is preferable to silent discard as it allows managers to report a clear error.
-Discarding PDUs from unverified peers enforces the certificate authentication requirement.
-Clamping `max-repetitions` prevents resource exhaustion from requests with excessively large repetition counts."""
+Clamping `max-repetitions` prevents resource exhaustion from requests with excessively large repetition counts.
+REQ-0033, which previously required silently discarding PDUs received over a TLS connection with an unverified peer certificate, has been retired together with RFC-0006; the tag is burned and MUST NOT be reused."""
