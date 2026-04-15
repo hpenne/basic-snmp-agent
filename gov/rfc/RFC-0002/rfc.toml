@@ -3,12 +3,13 @@
 [govctl]
 id = "RFC-0002"
 title = "Crate and Runtime"
-version = "0.1.0"
+version = "0.1.1"
 status = "normative"
 phase = "test"
 owners = ["@Helge Penne"]
 created = "2026-03-16"
-updated = "2026-03-20"
+updated = "2026-04-14"
+signature = "31d06e6770ff4b1db63f2758cf1037517bcd4e29e248c9e0faffad39a8fc863d"
 
 [[sections]]
 title = "Summary"
@@ -19,6 +20,12 @@ clauses = [
     "clauses/C-CRATE.toml",
     "clauses/C-RUNTIME.toml",
 ]
+
+[[changelog]]
+version = "0.1.1"
+date = "2026-04-14"
+notes = "Drop TLS-deferral exception notes; align with ADR-0022"
+changed = ["C-RUNTIME REQ-0050 and REQ-0051 rewritten to drop TLS references and exception notes"]
 
 [[changelog]]
 version = "0.1.0"
