@@ -1,0 +1,17 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-USM-TRAPS"
+title = "Outbound Trap Security"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+[REQ-0105] Outbound trap PDUs MUST be authenticated and, if applicable, encrypted using the single configured USM user's credentials at that user's configured security level.
+
+[REQ-0106] If the configured user's security level is `noAuthNoPriv`, outbound traps MUST be sent without authentication or encryption.
+
+**Rationale:**
+
+With a single configured user, there is no ambiguity about which credentials to use for outbound traps: the trap sender uses the same user entry as inbound request processing. The security level applied to traps matches the user's configured level, so an agent configured for `authPriv` sends authenticated and encrypted traps, and an agent configured for `noAuthNoPriv` sends cleartext traps. This keeps the outbound and inbound security stories consistent under one configuration."""

@@ -22,6 +22,7 @@ clauses = [
     "clauses/C-USM-USERS.toml",
     "clauses/C-USM-DISCOVERY.toml",
     "clauses/C-USM-INBOUND.toml",
+    "clauses/C-USM-TRAPS.toml",
 ]
 
 [[changelog]]
