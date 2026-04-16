@@ -71,6 +71,7 @@ The project currently has a single binary entry point at `src/main.rs`. As SNMP 
 - Code comments should focus on rationale (the "why", not the "how").
 - Do *NOT* add external dependencies without permission.
 - Follow strict RFC compliance when implementing SNMP. Do not assume behavior — verify against the relevant RFC text. Wait for user confirmation before deviating from RFC specifications.
+- Use red/green TDD
 
 ### Gherkin / BDD
 
@@ -117,6 +118,7 @@ Use `grep -r 'Implements: REQ-'` to find all implementation sites, `grep -r 'Ver
 - No compiler warnings: Code must compile without warnings. Do not suppress warnings with `#[expect(...)]` unless there is a compelling reason; prefer fixing the underlying issue instead.
 - Write idiomatic Rust code.
 - Use Rust's type system to enforce correctness and avoid common errors.
+- Use newtypes to wrap more basic types when this can have benefits
 - Document crate and module public APIs with clear and concise (but not too verbose)documentation. Add examples to external APIs.
 - Use "given-when-then" naming and structure for tests (except for simple tests that do not set up any state)
 - Tests may use the "mockall" crate for mocking when this makes tests easier to read.
