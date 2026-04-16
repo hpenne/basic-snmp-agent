@@ -1,0 +1,31 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-USM-DISCOVERY"
+title = "Engine Discovery and Time Synchronisation"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+[REQ-0093] The agent MUST respond to engine-ID discovery probes as defined in RFC 3414 §4. A discovery probe is an SNMPv3 message with an empty `msgAuthoritativeEngineID`. The agent MUST respond with a Report PDU containing the agent's `snmpEngineID` and a `usmStatsUnknownEngineIDs` counter value.
+
+[REQ-0094] The agent MUST maintain an `snmpEngineBoots` counter and an `snmpEngineTime` value as defined in RFC 3414 §2.2. `snmpEngineBoots` MUST be incremented by one at each engine start-up and MUST remain constant for the lifetime of the running agent. `snmpEngineTime` MUST represent the number of seconds since the engine last started, and MUST NOT wrap before reaching 2,147,483,647.
+
+[REQ-0095] The agent MUST persist `snmpEngineBoots` across restarts by delegating storage to an application-provided implementation of a library-defined trait. The trait MUST expose a load operation that returns the stored engine ID and boots counter (or indicates that no state exists), and a save operation that persists a given engine ID and boots counter. All logic — comparing the stored engine ID with the current one, resetting the counter on mismatch, incrementing on match, and refusing to start at the ceiling — is the responsibility of the library, not the trait implementation. The agent MUST call the trait exactly once for load and once for save at start-up, before accepting any inbound messages.
+
+[REQ-0096] The library MUST provide a built-in implementation of the engine-boots persistence trait that reads and writes the engine ID and boots counter as a pair in a file at a path specified by the embedder. The file write MUST be atomic (write to a temporary file, then rename) to prevent corruption if the process is interrupted during the write.
+
+[REQ-0097] If `snmpEngineBoots` would exceed 2,147,483,647 after incrementing, the agent MUST refuse to start and MUST report an error indicating that the engine must be reconfigured per RFC 3414 §2.2.
+
+[REQ-0098] The agent MUST validate time-window authenticity for authenticated messages per RFC 3414 §3.2 step 7b. An authenticated inbound message MUST be rejected if the absolute difference between the message's `msgAuthoritativeEngineTime` and the agent's current `snmpEngineTime` exceeds 150 seconds, or if the message's `msgAuthoritativeEngineBoots` does not equal the agent's current `snmpEngineBoots`. Rejection MUST produce a Report PDU carrying the `usmStatsNotInTimeWindows` counter.
+
+[REQ-0099] The agent MUST respond to time-synchronisation probes per RFC 3414 §4. A time-synchronisation probe is an authenticated message carrying `msgAuthoritativeEngineBoots = 0` and `msgAuthoritativeEngineTime = 0`. The agent MUST respond with a Report PDU carrying the current `snmpEngineBoots` and `snmpEngineTime` values and the `usmStatsNotInTimeWindows` counter.
+
+**Rationale:**
+
+Engine-ID discovery and time synchronisation are protocol-level prerequisites to authenticated communication: a manager cannot construct an authenticated message without knowing the authoritative engine ID, boots, and approximate time. The 150-second time window prevents replay of captured authenticated messages after a delay.
+
+Delegating boots persistence to an application-provided trait keeps the library free of filesystem policy. The trait is a pure storage abstraction; all counter logic (engine-ID comparison, reset-on-mismatch, increment, ceiling check) lives in the library so that trait implementations remain trivial to write and impossible to get wrong on the logic side. The built-in file-backed implementation covers the common case. Atomic file writes prevent a half-written counter from being read as zero or garbage after a crash.
+
+The boots-counter ceiling at 2^31 − 1 is a hard stop specified by RFC 3414 §2.2: once reached, no further authenticated communication is possible without engine reconfiguration. The RFC does not prescribe a specific recovery procedure; refusing to start ensures the embedder must make an explicit decision about how to proceed."""
