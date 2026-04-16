@@ -30,7 +30,7 @@ Key implementation areas:
 
 Implementation plan:
 - [x] Step 1: SecretKey newtype with Drop zeroisation via write_volatile + compiler_fence (REQ-0085, ADR-0025)
-- [ ] Step 2: AuthProtocol types and HMAC-SHA-256/512 compute/verify; key-length validation (REQ-0086, REQ-0087, REQ-0083)
+- [x] Step 2: AuthProtocol types and HMAC-SHA-256/512 compute/verify; key-length validation (REQ-0086, REQ-0087, REQ-0083)
 - [ ] Step 3: PrivProtocol types and AES-128/256-CFB128 encrypt/decrypt; priv-key-from-auth derivation (REQ-0088, REQ-0089, REQ-0084)
 - [ ] Step 4: Type-safe USM user configuration types enforcing security-level and key-length invariants at compile time (REQ-0090, REQ-0091, REQ-0092, REQ-0075, REQ-0076, REQ-0077)
 - [ ] Step 5: Localised key derivation helper per RFC 3414 §2.6 / RFC 7860 (REQ-0081, REQ-0082)
