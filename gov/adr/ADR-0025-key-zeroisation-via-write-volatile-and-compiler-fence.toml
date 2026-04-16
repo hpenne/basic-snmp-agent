@@ -1,0 +1,29 @@
+#:schema ../schema/adr.schema.json
+
+[govctl]
+id = "ADR-0025"
+title = "Key zeroisation via write_volatile and compiler_fence"
+status = "accepted"
+date = "2026-04-16"
+
+[content]
+context = """
+The agent holds localised authentication and privacy keys in memory.
+These must be zeroised on drop to limit exposure via heap dumps, core files, or swap.
+The zeroisation must not be subject to dead-store elimination by the compiler."""
+decision = """
+Key material is held in a newtype wrapper that implements Drop.
+The Drop implementation zeroises the backing memory using core::ptr::write_volatile followed by core::sync::atomic::compiler_fence(SeqCst).
+No external dependency is required."""
+consequences = """
+A small unsafe block in the Drop implementation.
+The approach is the same one used internally by the zeroize crate, so correctness is well-established.
+If the project later adopts the zeroize crate for other reasons, the hand-rolled implementation can be replaced with a derive macro."""
+
+[[content.alternatives]]
+text = "zeroize crate: ecosystem standard, handles edge cases (MaybeUninit, repr(C)), derive macros; but adds an external dependency, which this project avoids without explicit approval."
+status = "considered"
+
+[[content.alternatives]]
+text = "std::hint::black_box: no unsafe, no dependency; but black_box is documented as a best-effort optimiser hint and is not a security primitive — the compiler is permitted to see through it and eliminate the writes."
+status = "considered"

@@ -1,0 +1,40 @@
+#:schema ../schema/adr.schema.json
+
+[govctl]
+id = "ADR-0024"
+title = "Engine boots persistence via application-provided storage trait"
+status = "accepted"
+date = "2026-04-16"
+
+[content]
+context = """
+SNMPv3 USM requires the agent to persist an snmpEngineBoots counter across restarts for replay protection.
+The counter is scoped to a specific engine ID and must be incremented at each start-up.
+The library must not impose filesystem policy on embedders."""
+decision = """
+The library defines a public trait with load and save operations for an (engine ID, boots counter) pair.
+The trait is a pure storage abstraction; all logic (engine-ID comparison, reset-on-mismatch, increment, ceiling check) lives in the library.
+The library also provides a built-in file-backed implementation that stores the pair in a file at an embedder-specified path, using atomic write (temp file + rename).
+The built-in file-backed implementation uses a plain-text format: the engine ID as a hexadecimal string on the first line, and the boots counter as a decimal string on the second line.
+This format is trivially parseable with standard library string operations and requires no serialisation dependency."""
+consequences = """
+Every production embedder must provide or select a trait implementation.
+The built-in file-backed implementation covers the common case.
+Trait implementations are trivial to write (just read/write a pair) because the library owns all counter logic.
+No external serialisation dependency is introduced."""
+
+[[content.alternatives]]
+text = "Library-owned file at a construction-supplied path (no trait): simpler API but opinionated about filesystem; awkward for containerised or embedded deployments with read-only filesystems or database-backed state."
+status = "considered"
+
+[[content.alternatives]]
+text = "In-memory only, always start at 1: non-compliant with RFC 3414 §2.2 for the authoritative engine; reopens the replay-protection window on every restart."
+status = "considered"
+
+[[content.alternatives]]
+text = "Trait with logic delegated to the implementation (reset-on-mismatch, increment): makes trait implementations responsible for security-critical logic that they can get wrong; the library should own this."
+status = "considered"
+
+[[content.alternatives]]
+text = "Structured format (JSON, TOML): more self-describing but requires a parsing dependency, which this project avoids without explicit approval. The stored state is a single pair of values, so a structured format adds complexity without benefit."
+status = "considered"

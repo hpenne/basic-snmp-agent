@@ -1,0 +1,33 @@
+#:schema ../schema/adr.schema.json
+
+[govctl]
+id = "ADR-0023"
+title = "USM user database configuration model"
+status = "accepted"
+date = "2026-04-16"
+
+[content]
+context = """
+The agent needs a USM user database for authentication and privacy.
+The database configuration model affects the public API surface, concurrency story, and operational complexity."""
+decision = """
+The agent supports exactly one configured USM user, fixed at Agent construction time.
+No runtime mutation of the user entry is supported; changes require restarting the agent.
+No SNMP SET provisioning of the usmUserTable is supported.
+Multi-user support is explicit future work that is expected to introduce a breaking API change."""
+consequences = """
+The public API takes a single user value at construction.
+Embedders who need to change the user must rebuild the Agent.
+The construction API will break when multi-user support lands."""
+
+[[content.alternatives]]
+text = "Runtime-mutable user API: allows adding/removing users without restart, but introduces concurrency complexity (key material accessed from the event loop must be synchronised with mutation requests) and widens the attack surface (a bug in the mutation path could leave the agent in an inconsistent security state)."
+status = "considered"
+
+[[content.alternatives]]
+text = "SNMP SET provisioning via usmUserTable (RFC 3414 §5): standard-compliant but requires implementing the full usmUserTable MIB, SET processing, and row-creation semantics — significant complexity for a single-user agent that already returns notWritable for all SETs."
+status = "considered"
+
+[[content.alternatives]]
+text = "Multi-user from the start: premature — adds user-name selection, per-user access control (VACM), and trap-user selection without a concrete use case yet."
+status = "considered"
