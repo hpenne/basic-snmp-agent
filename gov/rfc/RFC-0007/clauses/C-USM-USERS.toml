@@ -5,6 +5,7 @@ id = "C-USM-USERS"
 title = "User Configuration"
 kind = "normative"
 status = "active"
+since = "0.1.0"
 
 [content]
 text = """

@@ -5,6 +5,7 @@ id = "C-USM-KEYS"
 title = "Localised Key Material and Derivation"
 kind = "normative"
 status = "active"
+since = "0.1.0"
 
 [content]
 text = """

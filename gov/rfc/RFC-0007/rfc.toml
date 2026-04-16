@@ -4,10 +4,11 @@
 id = "RFC-0007"
 title = "SNMP USM Authentication and Privacy"
 version = "0.1.0"
-status = "draft"
+status = "normative"
 phase = "spec"
 owners = ["@hpenne"]
 created = "2026-04-15"
+updated = "2026-04-16"
 
 [[sections]]
 title = "Summary"

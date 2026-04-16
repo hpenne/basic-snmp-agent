@@ -5,6 +5,7 @@ id = "C-USM-MODEL"
 title = "USM Model and Single-User Scope"
 kind = "normative"
 status = "active"
+since = "0.1.0"
 
 [content]
 text = """

@@ -5,6 +5,7 @@ id = "C-USM-DISCOVERY"
 title = "Engine Discovery and Time Synchronisation"
 kind = "normative"
 status = "active"
+since = "0.1.0"
 
 [content]
 text = """

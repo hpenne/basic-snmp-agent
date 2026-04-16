@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-04-14-002"
 title = "USM authNoPriv and authPriv support for inbound requests and traps"
-status = "active"
+status = "done"
 created = "2026-04-14"
 started = "2026-04-15"
+completed = "2026-04-16"
 refs = [
     "ADR-0022",
     "WI-2026-03-16-004",
@@ -51,10 +52,10 @@ category = "changed"
 
 [[content.acceptance_criteria]]
 text = "RFC-0007 finalised to normative"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "govctl check passes"
-status = "pending"
+status = "done"
 category = "chore"

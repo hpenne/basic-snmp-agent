@@ -5,6 +5,7 @@ id = "C-USM-INBOUND"
 title = "Inbound USM Message Processing"
 kind = "normative"
 status = "active"
+since = "0.1.0"
 
 [content]
 text = """
