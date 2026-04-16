@@ -19,6 +19,7 @@ clauses = [
     "clauses/C-USM-KEYS.toml",
     "clauses/C-USM-AUTH.toml",
     "clauses/C-USM-PRIV.toml",
+    "clauses/C-USM-USERS.toml",
 ]
 
 [[changelog]]
