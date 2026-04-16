@@ -15,17 +15,46 @@ refs = [
 
 [content]
 description = """
-Placeholder tracking the future extension of the agent's SNMP USM implementation from the current noAuthNoPriv security level to authNoPriv (HMAC message authentication) and authPriv (authentication plus encryption), per RFC 3414.
+Specification and design of SNMPv3 USM authNoPriv and authPriv for inbound requests and outbound traps.
 
-Scope sketch (to be fleshed out when this work item is picked up and a dedicated RFC is drafted):
-- USM user database: storage for users, their security levels, authentication protocol and keys, privacy protocol and keys.
-- Engine discovery and time synchronisation per RFC 3414 §4.
-- Localised key derivation per RFC 3414 §2.6.
-- Authentication protocols: HMAC-SHA-2 family at minimum (HMAC-MD5 and HMAC-SHA-1 are obsolete and need explicit consideration before inclusion).
-- Privacy protocols: AES-128/192/256 CFB per RFC 3826 (DES is obsolete).
-- Apply the same USM security levels to outbound traps so that inbound requests and outbound traps share one authentication story.
-- Governance: a new RFC clause under RFC-0001 (or a new RFC) to replace the retired C-AUTH with USM-specific normative requirements; new REQ tags, since REQ-0015..REQ-0020 are burned.
+Scope:
+- RFC-0007 (SNMP USM Authentication and Privacy): nine clauses covering the USM security model, single-user configuration, HMAC-SHA-256/512 authentication, AES-128/256-CFB privacy, localised key material and zeroisation, engine-ID discovery and time synchronisation, inbound message processing, and outbound trap security.
+- ADR-0023 (USM user database configuration model), ADR-0024 (engine boots persistence trait), ADR-0025 (key zeroisation mechanism).
+- RFC-0005 v0.3.0: retire REQ-0057 (silent discard on contextEngineID mismatch), replaced by RFC-0007 REQ-0104 (Report PDU).
 
-This is a placeholder. Do not start implementation until the follow-up RFC has been drafted and advanced.
+Implementation is out of scope for this work item and will be tracked separately after RFC-0007 is finalised."""
 
-Supersedes the cancelled work items WI-2026-03-16-004 (TLS layer via rustls) and WI-2026-03-16-005 (upgrade MIB read system tests to TLS) per ADR-0022."""
+[[content.acceptance_criteria]]
+text = "RFC-0007 drafted with clauses C-SUMMARY, C-USM-MODEL, C-USM-USERS, C-USM-AUTH, C-USM-PRIV, C-USM-KEYS, C-USM-DISCOVERY, C-USM-INBOUND, C-USM-TRAPS"
+status = "done"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "ADR-0023 (USM user database configuration model) accepted"
+status = "done"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "ADR-0024 (engine boots persistence trait) accepted"
+status = "done"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "ADR-0025 (key zeroisation mechanism) accepted"
+status = "done"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "RFC-0005 bumped to v0.3.0 with REQ-0057 retired"
+status = "done"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "RFC-0007 finalised to normative"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"
