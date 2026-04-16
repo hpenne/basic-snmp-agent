@@ -1,0 +1,23 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-USM-PRIV"
+title = "Privacy Protocols"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+[REQ-0088] The agent MUST support the usmAesCfb128Protocol (AES-128-CFB) as defined in RFC 3826. This is the mandatory-to-implement privacy protocol.
+
+[REQ-0089] The agent MUST support AES-256-CFB with the same CFB-mode construction as usmAesCfb128Protocol but using a 256-bit key.
+
+Where this RFC refers to "AES-128-CFB" in other clauses, it means usmAesCfb128Protocol; "AES-256-CFB" means the 256-bit variant described in REQ-0089.
+
+**Rationale:**
+
+DES-CBC (RFC 3414) is broken and its use in new deployments is prohibited by NIST. AES-192-CFB adds no meaningful security benefit over AES-256 and would widen the implementation surface for no gain. Two protocols — one mandatory, one optional — mirror the auth-protocol approach and offer a choice between broad interop (AES-128, universally supported) and a higher security margin (AES-256) for deployments that require it.
+
+AES-256-CFB lacks a standards-track RFC but is widely implemented (net-snmp, pysnmp) using the same CFB construction as RFC 3826 with a longer key. Specifying it in terms of that construction rather than an OID avoids depending on a non-existent standard while remaining interoperable with every major implementation.
+
+The set of supported protocols is constrained at the type level by the configuration API (see C-USM-USERS) rather than by runtime validation."""

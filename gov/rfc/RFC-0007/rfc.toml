@@ -17,6 +17,8 @@ title = "Specification"
 clauses = [
     "clauses/C-USM-MODEL.toml",
     "clauses/C-USM-KEYS.toml",
+    "clauses/C-USM-AUTH.toml",
+    "clauses/C-USM-PRIV.toml",
 ]
 
 [[changelog]]

@@ -1,0 +1,21 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-USM-AUTH"
+title = "Authentication Protocols"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+[REQ-0086] The agent MUST support the usmHMAC192SHA256AuthProtocol (HMAC-SHA-256 with 192-bit MAC truncation) as defined in RFC 7860 §4.1. This is the mandatory-to-implement authentication protocol.
+
+[REQ-0087] The agent MUST support the usmHMAC384SHA512AuthProtocol (HMAC-SHA-512 with 384-bit MAC truncation) as defined in RFC 7860 §4.4.
+
+Where this RFC refers to "HMAC-SHA-256" in other clauses, it means usmHMAC192SHA256AuthProtocol; where it refers to "HMAC-SHA-512", it means usmHMAC384SHA512AuthProtocol.
+
+**Rationale:**
+
+HMAC-MD5 and HMAC-SHA-1 are cryptographically weakened and their use in new deployments is discouraged by the IETF and NIST. SHA-224 and SHA-384 offer no meaningful security advantage over SHA-256 and SHA-512 for this use case and would double the number of protocol code paths to implement and test. Two protocols — one mandatory, one optional — keep the implementation surface small while offering a choice between performance (SHA-256) and a higher security margin (SHA-512) for deployments that require it.
+
+The set of supported protocols is constrained at the type level by the configuration API (see C-USM-USERS) rather than by runtime validation, so no explicit rejection requirement is needed in this clause."""
