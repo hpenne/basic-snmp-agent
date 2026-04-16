@@ -1,0 +1,89 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-04-16-001"
+title = "Implement RFC-0007: USM authNoPriv and authPriv"
+status = "active"
+created = "2026-04-16"
+started = "2026-04-16"
+refs = [
+    "RFC-0007",
+    "ADR-0023",
+    "ADR-0024",
+    "ADR-0025",
+]
+
+[content]
+description = """
+Implement RFC-0007 (SNMP USM Authentication and Privacy) covering all 33 requirements across the eight normative clauses.
+
+Key implementation areas:
+- SecretKey newtype with write_volatile zeroisation (ADR-0025)
+- USM user configuration types with compile-time safety (C-USM-USERS, C-USM-AUTH, C-USM-PRIV)
+- Localised key derivation helper and priv-key-from-auth derivation (C-USM-KEYS)
+- EngineBootsStore trait and built-in file-backed implementation (C-USM-DISCOVERY, ADR-0024)
+- Engine-ID discovery and time-synchronisation response handling (C-USM-DISCOVERY)
+- Inbound USM message processing: HMAC verification, AES decryption, processing order, Report PDUs (C-USM-INBOUND)
+- contextEngineID mismatch Report PDU replacing retired REQ-0057 (C-USM-INBOUND REQ-0104)
+- Outbound trap authentication and encryption (C-USM-TRAPS)
+- Integration with existing Agent construction API"""
+
+[[content.acceptance_criteria]]
+text = "SecretKey newtype with Drop zeroisation via write_volatile + compiler_fence (REQ-0085, ADR-0025)"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "USM user configuration types enforcing security-level and key-length invariants at compile time (REQ-0090, REQ-0091, REQ-0092)"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "Localised key derivation helper function (REQ-0082)"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "HMAC-SHA-256 and HMAC-SHA-512 authentication (REQ-0086, REQ-0087)"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "AES-128-CFB and AES-256-CFB privacy with priv-key-from-auth derivation (REQ-0088, REQ-0089, REQ-0084)"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "EngineBootsStore trait and built-in file-backed implementation with atomic writes (REQ-0095, REQ-0096, ADR-0024)"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "Engine-ID discovery and time-synchronisation responses (REQ-0093, REQ-0094, REQ-0097, REQ-0098, REQ-0099)"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "Inbound USM processing: user-name lookup, level enforcement, HMAC verification, time-window check, decryption, Report PDUs (REQ-0078, REQ-0079, REQ-0080, REQ-0100, REQ-0101, REQ-0102, REQ-0103)"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "contextEngineID mismatch emits Report PDU instead of silent discard (REQ-0104, replaces RFC-0005 REQ-0057)"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "Outbound traps authenticated and encrypted using the configured user (REQ-0105, REQ-0106)"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "All existing tests pass; no regressions"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"
