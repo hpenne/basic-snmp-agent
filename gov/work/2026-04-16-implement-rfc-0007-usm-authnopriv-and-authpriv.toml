@@ -26,7 +26,21 @@ Key implementation areas:
 - Inbound USM message processing: HMAC verification, AES decryption, processing order, Report PDUs (C-USM-INBOUND)
 - contextEngineID mismatch Report PDU replacing retired REQ-0057 (C-USM-INBOUND REQ-0104)
 - Outbound trap authentication and encryption (C-USM-TRAPS)
-- Integration with existing Agent construction API"""
+- Integration with existing Agent construction API
+
+Implementation plan:
+- [x] Step 1: SecretKey newtype with Drop zeroisation via write_volatile + compiler_fence (REQ-0085, ADR-0025)
+- [ ] Step 2: AuthProtocol types and HMAC-SHA-256/512 compute/verify; key-length validation (REQ-0086, REQ-0087, REQ-0083)
+- [ ] Step 3: PrivProtocol types and AES-128/256-CFB128 encrypt/decrypt; priv-key-from-auth derivation (REQ-0088, REQ-0089, REQ-0084)
+- [ ] Step 4: Type-safe USM user configuration types enforcing security-level and key-length invariants at compile time (REQ-0090, REQ-0091, REQ-0092, REQ-0075, REQ-0076, REQ-0077)
+- [ ] Step 5: Localised key derivation helper per RFC 3414 §2.6 / RFC 7860 (REQ-0081, REQ-0082)
+- [ ] Step 6: EngineBootsStore trait and file-backed implementation with atomic writes (REQ-0094, REQ-0095, REQ-0096, REQ-0097)
+- [ ] Step 7: Wire USM user and boots store into AgentBuilder (keeping existing path intact) (REQ-0074, REQ-0076, REQ-0081)
+- [ ] Step 8: Engine-ID discovery and time synchronisation handling (REQ-0093, REQ-0098, REQ-0099)
+- [ ] Step 9: Inbound USM processing pipeline per RFC 3414 §3.2 (REQ-0078, REQ-0079, REQ-0080, REQ-0100, REQ-0101, REQ-0102, REQ-0103)
+- [ ] Step 10: contextEngineID mismatch Report PDU replacing silent discard (REQ-0104)
+- [ ] Step 11: Outbound trap authentication and encryption (REQ-0105, REQ-0106)
+- [ ] Step 12: Behave tests for USM scenarios"""
 
 [[content.acceptance_criteria]]
 text = "SecretKey newtype with Drop zeroisation via write_volatile + compiler_fence (REQ-0085, ADR-0025)"

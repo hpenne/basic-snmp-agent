@@ -39,6 +39,7 @@ pub mod codec;
 mod error;
 pub mod mib;
 pub mod transport;
+pub mod usm;
 
 use std::io;
 use std::net::SocketAddr;
