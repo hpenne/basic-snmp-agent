@@ -11,6 +11,7 @@ created = "2026-04-15"
 
 [[sections]]
 title = "Summary"
+clauses = ["clauses/C-SUMMARY.toml"]
 
 [[sections]]
 title = "Specification"

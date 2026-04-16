@@ -1,0 +1,20 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-SUMMARY"
+title = "Summary"
+kind = "informative"
+status = "active"
+
+[content]
+text = """
+This RFC specifies the SNMPv3 User-based Security Model (USM) extension for `basic-snmp-agent`, adding authentication and privacy to inbound requests and outbound traps.
+
+**Scope:** Covers USM security levels (noAuthNoPriv, authNoPriv, authPriv), single-user configuration with compile-time type-safety, authentication via HMAC-SHA-256 and HMAC-SHA-512 (RFC 7860), privacy via AES-128-CFB (RFC 3826) and AES-256-CFB, localised key derivation and zeroisation, engine-ID discovery and time synchronisation (RFC 3414 §4), boots-counter persistence via an application-provided storage trait, inbound message authentication and decryption per RFC 3414 §3.2, and outbound trap security using the configured user's credentials.
+SNMPv1, SNMPv2c, community-string authentication, HMAC-MD5, HMAC-SHA-1, DES, VACM, multi-user support, runtime user mutation, and usmUserTable provisioning via SNMP SET are out of scope.
+
+**Rationale:** USM is the security model that the SNMP ecosystem actually deploys; extending the agent from noAuthNoPriv to authNoPriv and authPriv is a prerequisite for production use.
+A single configured user is the minimum viable USM deployment and avoids the complexity of user-name selection, per-user access control (VACM), and runtime user management.
+Pre-derived localised keys at the configuration boundary keep password handling out of the library; a separate derivation helper covers the common case.
+Strict security-level matching (incoming level must equal the configured user's level) closes the msgFlags downgrade path without introducing VACM.
+Boots-counter persistence is delegated to an application-provided storage trait so the library imposes no filesystem policy on embedders."""
