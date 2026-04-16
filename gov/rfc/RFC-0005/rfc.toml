@@ -3,13 +3,13 @@
 [govctl]
 id = "RFC-0005"
 title = "Plain TCP Transport and Inbound Requests"
-version = "0.2.0"
+version = "0.3.0"
 status = "normative"
 phase = "test"
 owners = ["@Helge Penne"]
 created = "2026-03-16"
-updated = "2026-04-14"
-signature = "6ce3c7207736d310c5213eb1a41e5eb8dcf19f9ab0c24c1e345d86904165b63d"
+updated = "2026-04-16"
+signature = "80fca83c53790e0f3176fdbe8be5078a9e4c3f73f19022b8e2ebf898ab48a30b"
 
 [[sections]]
 title = "Summary"
@@ -21,6 +21,12 @@ clauses = [
     "clauses/C-ENGINE.toml",
     "clauses/C-PLAINTCP.toml",
 ]
+
+[[changelog]]
+version = "0.3.0"
+date = "2026-04-16"
+notes = "Retire REQ-0057; contextEngineID mismatch handling moved to RFC-0007"
+removed = ["C-ENGINE REQ-0057 (silent discard on contextEngineID mismatch) retired — replaced by RFC-0007:C-USM-INBOUND REQ-0104 (Report PDU)"]
 
 [[changelog]]
 version = "0.2.0"
