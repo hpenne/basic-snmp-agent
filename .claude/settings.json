@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "cargo clippy --workspace --all-targets -- -W clippy::pedantic -D warnings 2>&1; rc=$?; if [ $rc -ne 0 ]; then echo '{\"continue\": false, \"stopReason\": \"cargo clippy --workspace --all-targets -- -W clippy::pedantic -D warnings failed\"}'; fi",
+            "timeout": 60,
+            "statusMessage": "Running cargo clippy..."
+          }
+        ]
+      }
+    ]
+  }
+}

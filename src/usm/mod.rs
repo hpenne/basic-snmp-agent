@@ -1,6 +1,6 @@
-//! SNMPv3 User-based Security Model (USM) implementation.
+//! `SNMPv3` User-based Security Model (USM) implementation.
 //!
-//! This module provides authentication and privacy for SNMPv3 messages
+//! This module provides authentication and privacy for `SNMPv3` messages
 //! per RFC 3414, with HMAC-SHA-2 extensions per RFC 7860.
 //!
 //! # Requirements
