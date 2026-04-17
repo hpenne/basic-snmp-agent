@@ -327,7 +327,9 @@ mod tests {
         let iv = [0x24u8; 16];
         let ciphertext = PrivProtocol::Aes128.encrypt(&key, &iv, b"").unwrap();
         assert!(ciphertext.is_empty());
-        let recovered = PrivProtocol::Aes128.decrypt(&key, &iv, &ciphertext).unwrap();
+        let recovered = PrivProtocol::Aes128
+            .decrypt(&key, &iv, &ciphertext)
+            .unwrap();
         assert!(recovered.is_empty());
     }
 
