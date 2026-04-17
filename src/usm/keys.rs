@@ -14,12 +14,17 @@ use std::sync::atomic::{compiler_fence, Ordering};
 /// as a dead store. This matches the technique used internally by the `zeroize`
 /// crate and is specified by ADR-0025.
 ///
+/// `Clone` is intentionally not derived: callers must not duplicate key material.
+///
 /// # Requirements
 /// Implements: REQ-0085
 pub struct SecretKey(Box<[u8]>);
 
 impl SecretKey {
     /// Create a `SecretKey` from a byte vector.
+    ///
+    /// `SecretKey` is a raw container; callers are responsible for supplying
+    /// a byte slice of the correct length for the intended protocol.
     #[must_use]
     pub fn new(bytes: Vec<u8>) -> Self {
         Self(bytes.into_boxed_slice())
@@ -86,6 +91,13 @@ mod tests {
         // Verifies: REQ-0085
         let key = SecretKey::new(vec![]);
         assert!(key.is_empty());
+    }
+
+    #[test]
+    fn given_non_empty_key_when_is_empty_then_false() {
+        // Verifies: REQ-0085
+        let key = SecretKey::new(vec![0u8; 32]);
+        assert!(!key.is_empty());
     }
 
     #[test]

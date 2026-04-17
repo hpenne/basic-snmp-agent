@@ -53,6 +53,9 @@ impl AuthProtocol {
     ///
     /// 24 bytes (192 bits) for HMAC-SHA-256 per RFC 7860 §4.1.
     /// 48 bytes (384 bits) for HMAC-SHA-512 per RFC 7860 §4.4.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0086, REQ-0087
     #[must_use]
     pub fn mac_len(self) -> usize {
         match self {
@@ -118,18 +121,31 @@ impl AuthProtocol {
         message: &[u8],
         expected_mac: &[u8],
     ) -> Result<(), AuthError> {
-        let computed = self.compute_mac(key, message)?;
-        // Constant-time comparison to prevent timing attacks.
-        if computed.len() != expected_mac.len()
-            || computed
-                .iter()
-                .zip(expected_mac.iter())
-                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-                != 0
-        {
-            return Err(AuthError::MacMismatch);
+        if key.len() != self.key_len() {
+            return Err(AuthError::InvalidKeyLength {
+                expected: self.key_len(),
+                actual: key.len(),
+            });
         }
-        Ok(())
+        // Uses the `hmac` crate's constant-time `verify_truncated_left`, which
+        // compares the leftmost N bytes of the computed MAC via the `subtle`
+        // crate. RFC 7860 specifies left-truncation for both HMAC-SHA-256 and
+        // HMAC-SHA-512.
+        let result = match self {
+            Self::HmacSha256 => {
+                let mut h = Hmac::<Sha256>::new_from_slice(key.as_bytes())
+                    .unwrap_or_else(|_| unreachable!("HMAC accepts any key length"));
+                h.update(message);
+                h.verify_truncated_left(expected_mac)
+            }
+            Self::HmacSha512 => {
+                let mut h = Hmac::<Sha512>::new_from_slice(key.as_bytes())
+                    .unwrap_or_else(|_| unreachable!("HMAC accepts any key length"));
+                h.update(message);
+                h.verify_truncated_left(expected_mac)
+            }
+        };
+        result.map_err(|_| AuthError::MacMismatch)
     }
 }
 
@@ -256,6 +272,38 @@ mod tests {
         assert_ne!(mac1, mac2);
     }
 
+    #[test]
+    fn given_known_key_and_message_when_compute_sha256_mac_then_matches_reference_vector() {
+        // Verifies: REQ-0086
+        // Expected value computed by Python's hmac module (stdlib) with
+        // key=[0x0b]*32, msg=b"Hi There". Serves as a regression guard;
+        // full interoperability is verified by the Behave system tests.
+        let key = SecretKey::new(vec![0x0Bu8; 32]);
+        let mac = AuthProtocol::HmacSha256.compute_mac(&key, b"Hi There").unwrap();
+        let expected: [u8; 24] = [
+            25, 138, 96, 126, 180, 75, 251, 198, 153, 3, 160, 241,
+            207, 43, 189, 197, 186, 10, 163, 243, 217, 174, 60, 28,
+        ];
+        assert_eq!(mac.as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn given_known_key_and_message_when_compute_sha512_mac_then_matches_reference_vector() {
+        // Verifies: REQ-0087
+        // Expected value computed by Python's hmac module (stdlib) with
+        // key=[0x0b]*64, msg=b"Hi There". Serves as a regression guard;
+        // full interoperability is verified by the Behave system tests.
+        let key = SecretKey::new(vec![0x0Bu8; 64]);
+        let mac = AuthProtocol::HmacSha512.compute_mac(&key, b"Hi There").unwrap();
+        let expected: [u8; 48] = [
+            99, 126, 220, 110, 1, 220, 231, 230, 116, 42, 153, 69,
+            26, 174, 130, 223, 35, 218, 62, 146, 67, 158, 89, 14,
+            67, 231, 97, 179, 62, 145, 15, 184, 172, 40, 120, 235,
+            213, 128, 63, 111, 11, 97, 219, 206, 94, 37, 31, 248,
+        ];
+        assert_eq!(mac.as_slice(), expected.as_slice());
+    }
+
     // ── verify_mac ────────────────────────────────────────────────────────────
 
     #[test]
@@ -263,7 +311,7 @@ mod tests {
         // Verifies: REQ-0086
         let key = SecretKey::new(vec![0x33u8; 32]);
         let mac = AuthProtocol::HmacSha256.compute_mac(&key, b"verify me").unwrap();
-        assert!(AuthProtocol::HmacSha256.verify_mac(&key, b"verify me", &mac).is_ok());
+        assert_eq!(AuthProtocol::HmacSha256.verify_mac(&key, b"verify me", &mac), Ok(()));
     }
 
     #[test]
@@ -271,7 +319,7 @@ mod tests {
         // Verifies: REQ-0087
         let key = SecretKey::new(vec![0x44u8; 64]);
         let mac = AuthProtocol::HmacSha512.compute_mac(&key, b"verify me").unwrap();
-        assert!(AuthProtocol::HmacSha512.verify_mac(&key, b"verify me", &mac).is_ok());
+        assert_eq!(AuthProtocol::HmacSha512.verify_mac(&key, b"verify me", &mac), Ok(()));
     }
 
     #[test]
@@ -316,14 +364,16 @@ mod tests {
     #[test]
     fn auth_error_invalid_key_length_display() {
         let e = AuthError::InvalidKeyLength { expected: 32, actual: 16 };
-        assert!(e.to_string().contains("32"));
-        assert!(e.to_string().contains("16"));
+        assert_eq!(
+            e.to_string(),
+            "invalid authentication key length: expected 32 bytes, got 16"
+        );
     }
 
     #[test]
     fn auth_error_mac_mismatch_display() {
         let e = AuthError::MacMismatch;
-        assert!(e.to_string().contains("mismatch"));
+        assert_eq!(e.to_string(), "authentication MAC mismatch");
     }
 
     #[test]
