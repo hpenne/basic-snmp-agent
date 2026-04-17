@@ -3,7 +3,6 @@
 //! # Requirements
 //! Implements: REQ-0081, REQ-0082
 
-use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256, Sha512};
 
 use crate::usm::auth::AuthProtocol;
@@ -18,11 +17,11 @@ const KDF_STREAM_LEN: usize = 1_048_576;
 /// Derive a localised USM key from a passphrase and an engine identifier.
 ///
 /// Implements the RFC 3414 §2.6 password-to-key algorithm extended to
-/// HMAC-SHA-2 per RFC 7860 §2:
+/// SHA-2 per RFC 7860 §2:
 /// 1. Hash a 1 MiB stream formed by repeating `password` cyclically with
 ///    the protocol's underlying hash (SHA-256 or SHA-512) to produce a
-///    master key.
-/// 2. Localise: `HMAC(master_key, engineID || master_key)`, truncated to
+///    master key `Ku`.
+/// 2. Localise: `Kul = H(Ku || engineID || Ku)`, truncated to
 ///    `protocol.key_len()` bytes.
 ///
 /// If `password` is longer than 1,048,576 bytes, only the first 1,048,576
@@ -67,26 +66,23 @@ pub fn password_to_localised_key(
         }
     };
 
-    // Step 2: localise by HMACing engineID || master_key with the master key.
-    // Using the full HMAC output (before any truncation) ensures we can
-    // provide the correct number of bytes for the target protocol's key length.
-    let mut localisation_message = Vec::with_capacity(engine_id.len() + master_key_bytes.len());
-    localisation_message.extend_from_slice(engine_id);
-    localisation_message.extend_from_slice(&master_key_bytes);
-
-    let localised_bytes = hmac_full(protocol, &master_key_bytes, &localisation_message);
+    // Step 2: localise by hashing the concatenation Ku || engineID || Ku.
+    // RFC 3414 §2.6 specifies H(Ku || snmpEngineID || Ku) — a plain hash,
+    // not an HMAC. RFC 7860 §2 extends this to SHA-256/SHA-512 using the
+    // same plain-hash formula.
+    let localised_bytes = localise_key(&master_key_bytes, engine_id, protocol);
     SecretKey::new(localised_bytes[..protocol.key_len()].to_vec())
 }
 
 /// Derive a USM privacy key from a localised authentication key.
 ///
 /// Implements RFC 3826 §2.1: the privacy key is derived by computing
-/// `HMAC(auth_key, engineID || auth_key)` and taking the first
-/// `priv_protocol.key_len()` bytes of the full HMAC output.
+/// `H(auth_key || engineID || auth_key)` and taking the first
+/// `priv_protocol.key_len()` bytes of the full hash output.
 ///
-/// Using the full (non-truncated) HMAC output before slicing ensures
+/// Using the full (non-truncated) hash output before slicing ensures
 /// AES-256 can obtain its required 32 bytes even when the auth protocol's
-/// normal MAC truncation length is shorter.
+/// hash output length is equal to or shorter than needed.
 ///
 /// # Requirements
 /// Implements: REQ-0081, REQ-0082
@@ -97,34 +93,32 @@ pub fn derive_priv_key_from_auth_key(
     auth_protocol: AuthProtocol,
     priv_protocol: PrivProtocol,
 ) -> SecretKey {
-    let mut localisation_message = Vec::with_capacity(engine_id.len() + auth_key.as_bytes().len());
-    localisation_message.extend_from_slice(engine_id);
-    localisation_message.extend_from_slice(auth_key.as_bytes());
-
-    let full_hmac = hmac_full(auth_protocol, auth_key.as_bytes(), &localisation_message);
-    SecretKey::new(full_hmac[..priv_protocol.key_len()].to_vec())
+    // RFC 3826 §2.1 uses the same plain-hash localisation formula as
+    // RFC 3414 §2.6: H(key || engineID || key).
+    let full_hash = localise_key(auth_key.as_bytes(), engine_id, auth_protocol);
+    SecretKey::new(full_hash[..priv_protocol.key_len()].to_vec())
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
-// TODO: extract hmac_full into a shared helper so adding a new AuthProtocol
-// variant cannot be missed in kdf.rs
-// Implements: REQ-0081, REQ-0082
-fn hmac_full(protocol: AuthProtocol, key: &[u8], message: &[u8]) -> Vec<u8> {
-    // Returns the complete (non-truncated) HMAC output so callers can slice to
-    // whatever length the target protocol requires.
+// Compute H(key || engine_id || key) per RFC 3414 §2.6 / RFC 3826 §2.1.
+// Returns the full hash digest so callers can truncate to their required length.
+// Implements: REQ-0082
+fn localise_key(key: &[u8], engine_id: &[u8], protocol: AuthProtocol) -> Vec<u8> {
     match protocol {
         AuthProtocol::HmacSha256 => {
-            let mut h = Hmac::<Sha256>::new_from_slice(key)
-                .expect("HMAC accepts any key length");
-            h.update(message);
-            h.finalize().into_bytes().to_vec()
+            let mut hasher = Sha256::new();
+            hasher.update(key);
+            hasher.update(engine_id);
+            hasher.update(key);
+            hasher.finalize().to_vec()
         }
         AuthProtocol::HmacSha512 => {
-            let mut h = Hmac::<Sha512>::new_from_slice(key)
-                .expect("HMAC accepts any key length");
-            h.update(message);
-            h.finalize().into_bytes().to_vec()
+            let mut hasher = Sha512::new();
+            hasher.update(key);
+            hasher.update(engine_id);
+            hasher.update(key);
+            hasher.finalize().to_vec()
         }
     }
 }
@@ -186,21 +180,27 @@ mod tests {
     #[test]
     fn given_known_password_and_engine_id_when_derive_sha256_then_matches_reference() {
         // Verifies: REQ-0081
-        // Reference computed using Python:
-        //   import hashlib, hmac
+        // Reference computed using the RFC 3414 §2.6 algorithm H(Ku || eid || Ku),
+        // validated against the RFC 3414 §A.3.1 MD5 and §A.3.2 SHA-1 test vectors
+        // (same algorithm, different hash function):
+        //   import hashlib
         //   pw = b"maplesyrup"
-        //   stream = (pw * (1048576 // len(pw) + 1))[:1048576]
-        //   master = hashlib.sha256(stream).digest()
+        //   stream_len = 1048576
+        //   full_copies = stream_len // len(pw)
+        //   remainder = stream_len % len(pw)
+        //   h = hashlib.sha256()
+        //   for _ in range(full_copies): h.update(pw)
+        //   h.update(pw[:remainder])
+        //   ku = h.digest()
         //   engine_id = bytes([0,0,0,0,0,0,0,0,0,0,0,2])
-        //   msg = engine_id + master
-        //   localised = hmac.new(master, msg, hashlib.sha256).digest()[:32]
-        //   # => fed2bc2c194909b1e76d274ec4072b8c92ee4a411c7e3711c729e5511d67027c
+        //   kul = hashlib.sha256(ku + engine_id + ku).digest()
+        //   # => 8982e0e549e866db361a6b625d84cccc11162d453ee8ce3a6445c2d6776f0f8b
         let key =
             password_to_localised_key(b"maplesyrup", MAPLE_ENGINE_ID, AuthProtocol::HmacSha256);
         let expected: [u8; 32] = [
-            0xfe, 0xd2, 0xbc, 0x2c, 0x19, 0x49, 0x09, 0xb1, 0xe7, 0x6d, 0x27, 0x4e, 0xc4, 0x07,
-            0x2b, 0x8c, 0x92, 0xee, 0x4a, 0x41, 0x1c, 0x7e, 0x37, 0x11, 0xc7, 0x29, 0xe5, 0x51,
-            0x1d, 0x67, 0x02, 0x7c,
+            0x89, 0x82, 0xe0, 0xe5, 0x49, 0xe8, 0x66, 0xdb, 0x36, 0x1a, 0x6b, 0x62, 0x5d, 0x84,
+            0xcc, 0xcc, 0x11, 0x16, 0x2d, 0x45, 0x3e, 0xe8, 0xce, 0x3a, 0x64, 0x45, 0xc2, 0xd6,
+            0x77, 0x6f, 0x0f, 0x8b,
         ];
         assert_eq!(key.as_bytes(), expected.as_slice());
     }
@@ -208,22 +208,29 @@ mod tests {
     #[test]
     fn given_known_password_and_engine_id_when_derive_sha512_then_matches_reference() {
         // Verifies: REQ-0081
-        // Reference computed using Python:
-        //   import hashlib, hmac
+        // Reference computed using the RFC 3414 §2.6 algorithm H(Ku || eid || Ku),
+        // validated against the RFC 3414 §A.3.1 MD5 and §A.3.2 SHA-1 test vectors:
+        //   import hashlib
         //   pw = b"maplesyrup"
-        //   stream = (pw * (1048576 // len(pw) + 1))[:1048576]
-        //   master = hashlib.sha512(stream).digest()
+        //   stream_len = 1048576
+        //   full_copies = stream_len // len(pw)
+        //   remainder = stream_len % len(pw)
+        //   h = hashlib.sha512()
+        //   for _ in range(full_copies): h.update(pw)
+        //   h.update(pw[:remainder])
+        //   ku = h.digest()
         //   engine_id = bytes([0,0,0,0,0,0,0,0,0,0,0,2])
-        //   msg = engine_id + master
-        //   localised = hmac.new(master, msg, hashlib.sha512).digest()[:64]
-        //   # => bc731c73e72186f8fb758bdaaea95c8e81943ec99...
+        //   kul = hashlib.sha512(ku + engine_id + ku).digest()
+        //   # => 22a5a36cedfcc085807a128d7bc6c2382167ad6c0dbc5fdff856740f3d84c099
+        //   #    ad1ea87a8db096714d9788bd544047c9021e4229ce27e4c0a69250adfcffbb0b
         let key =
             password_to_localised_key(b"maplesyrup", MAPLE_ENGINE_ID, AuthProtocol::HmacSha512);
         let expected: [u8; 64] = [
-            188, 115, 28, 115, 231, 33, 134, 248, 251, 117, 139, 218, 174, 169, 92, 142, 129, 148,
-            62, 201, 146, 8, 77, 143, 126, 109, 64, 138, 69, 17, 206, 121, 72, 139, 33, 15, 226,
-            169, 95, 178, 18, 5, 93, 199, 71, 131, 230, 201, 22, 51, 93, 41, 181, 171, 230, 137, 1,
-            204, 71, 230, 198, 140, 223, 43,
+            0x22, 0xa5, 0xa3, 0x6c, 0xed, 0xfc, 0xc0, 0x85, 0x80, 0x7a, 0x12, 0x8d, 0x7b, 0xc6,
+            0xc2, 0x38, 0x21, 0x67, 0xad, 0x6c, 0x0d, 0xbc, 0x5f, 0xdf, 0xf8, 0x56, 0x74, 0x0f,
+            0x3d, 0x84, 0xc0, 0x99, 0xad, 0x1e, 0xa8, 0x7a, 0x8d, 0xb0, 0x96, 0x71, 0x4d, 0x97,
+            0x88, 0xbd, 0x54, 0x40, 0x47, 0xc9, 0x02, 0x1e, 0x42, 0x29, 0xce, 0x27, 0xe4, 0xc0,
+            0xa6, 0x92, 0x50, 0xad, 0xfc, 0xff, 0xbb, 0x0b,
         ];
         assert_eq!(key.as_bytes(), expected.as_slice());
     }
@@ -325,14 +332,14 @@ mod tests {
     #[test]
     fn given_known_auth_key_and_engine_id_when_derive_priv_key_sha256_aes128_then_matches_reference() {
         // Verifies: REQ-0082
-        // Reference computed using Python:
-        //   import hashlib, hmac as hmac_mod
+        // Reference computed using the RFC 3826 §2.1 algorithm H(auth_key || eid || auth_key),
+        // validated against the RFC 3414 §A.3.1 MD5 and §A.3.2 SHA-1 test vectors:
+        //   import hashlib
         //   auth_key = bytes([0xAB] * 32)
         //   engine_id = bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2])
-        //   msg = engine_id + auth_key
-        //   full_hmac = hmac_mod.new(auth_key, msg, hashlib.sha256).digest()
-        //   priv_key_aes128 = full_hmac[:16]
-        //   # => 72a067e3c813a9e499ef311304f0d2dd
+        //   full_hash = hashlib.sha256(auth_key + engine_id + auth_key).digest()
+        //   priv_key_aes128 = full_hash[:16]
+        //   # => f2a0859a33e22a9b5a42af5847f1699e
         let auth_key = SecretKey::new(vec![0xABu8; 32]);
         let priv_key = derive_priv_key_from_auth_key(
             &auth_key,
@@ -341,8 +348,8 @@ mod tests {
             PrivProtocol::Aes128,
         );
         let expected: [u8; 16] = [
-            0x72, 0xa0, 0x67, 0xe3, 0xc8, 0x13, 0xa9, 0xe4, 0x99, 0xef, 0x31, 0x13, 0x04, 0xf0,
-            0xd2, 0xdd,
+            0xf2, 0xa0, 0x85, 0x9a, 0x33, 0xe2, 0x2a, 0x9b, 0x5a, 0x42, 0xaf, 0x58, 0x47, 0xf1,
+            0x69, 0x9e,
         ];
         assert_eq!(priv_key.as_bytes(), expected.as_slice());
     }
@@ -350,14 +357,14 @@ mod tests {
     #[test]
     fn given_known_auth_key_and_engine_id_when_derive_priv_key_sha512_aes256_then_matches_reference() {
         // Verifies: REQ-0082
-        // Reference computed using Python:
-        //   import hashlib, hmac as hmac_mod
+        // Reference computed using the RFC 3826 §2.1 algorithm H(auth_key || eid || auth_key),
+        // validated against the RFC 3414 §A.3.1 MD5 and §A.3.2 SHA-1 test vectors:
+        //   import hashlib
         //   auth_key = bytes([0xCD] * 64)
         //   engine_id = bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2])
-        //   msg = engine_id + auth_key
-        //   full_hmac = hmac_mod.new(auth_key, msg, hashlib.sha512).digest()
-        //   priv_key_aes256 = full_hmac[:32]
-        //   # => 0b177da2cc286c5b8be5f98dd27fe09f65d7263f4a3d015b1a4ca5ede0d62a12
+        //   full_hash = hashlib.sha512(auth_key + engine_id + auth_key).digest()
+        //   priv_key_aes256 = full_hash[:32]
+        //   # => 05e43de2b7fc67e8b1fe1e28454d1e8bef33368e9c1021055ceb6d5a1dcef63d
         let auth_key = SecretKey::new(vec![0xCDu8; 64]);
         let priv_key = derive_priv_key_from_auth_key(
             &auth_key,
@@ -366,9 +373,9 @@ mod tests {
             PrivProtocol::Aes256,
         );
         let expected: [u8; 32] = [
-            0x0b, 0x17, 0x7d, 0xa2, 0xcc, 0x28, 0x6c, 0x5b, 0x8b, 0xe5, 0xf9, 0x8d, 0xd2, 0x7f,
-            0xe0, 0x9f, 0x65, 0xd7, 0x26, 0x3f, 0x4a, 0x3d, 0x01, 0x5b, 0x1a, 0x4c, 0xa5, 0xed,
-            0xe0, 0xd6, 0x2a, 0x12,
+            0x05, 0xe4, 0x3d, 0xe2, 0xb7, 0xfc, 0x67, 0xe8, 0xb1, 0xfe, 0x1e, 0x28, 0x45, 0x4d,
+            0x1e, 0x8b, 0xef, 0x33, 0x36, 0x8e, 0x9c, 0x10, 0x21, 0x05, 0x5c, 0xeb, 0x6d, 0x5a,
+            0x1d, 0xce, 0xf6, 0x3d,
         ];
         assert_eq!(priv_key.as_bytes(), expected.as_slice());
     }
@@ -376,27 +383,26 @@ mod tests {
     #[test]
     fn given_single_byte_password_when_derive_sha256_key_then_matches_reference() {
         // Verifies: REQ-0081
-        // Reference computed using Python:
-        //   import hashlib, hmac as hmac_mod
+        // Reference computed using the RFC 3414 §2.6 algorithm H(Ku || eid || Ku),
+        // validated against the RFC 3414 §A.3.1 MD5 and §A.3.2 SHA-1 test vectors:
+        //   import hashlib
         //   pw = b"x"
         //   stream_len = 1048576
         //   full_copies = stream_len // len(pw)  # = 1048576
         //   remainder = stream_len % len(pw)     # = 0
         //   h = hashlib.sha256()
-        //   for _ in range(full_copies):
-        //       h.update(pw)
-        //   # remainder is 0, skip
-        //   master = h.digest()
+        //   for _ in range(full_copies): h.update(pw)
+        //   # remainder is 0, no update needed
+        //   ku = h.digest()
         //   engine_id = bytes([0,0,0,0,0,0,0,0,0,0,0,2])
-        //   msg = engine_id + master
-        //   localised = hmac_mod.new(master, msg, hashlib.sha256).digest()[:32]
-        //   # => 02a49e62d47e70a75004c07134ea76cd3f9a48956d4730f146c0e1a0b4de1265
+        //   kul = hashlib.sha256(ku + engine_id + ku).digest()
+        //   # => 5c2925551d403cd57b64c5be56d6d1e3a612171ad6beb95fdca472ad88679651
         let key =
             password_to_localised_key(b"x", MAPLE_ENGINE_ID, AuthProtocol::HmacSha256);
         let expected: [u8; 32] = [
-            0x02, 0xa4, 0x9e, 0x62, 0xd4, 0x7e, 0x70, 0xa7, 0x50, 0x04, 0xc0, 0x71, 0x34, 0xea,
-            0x76, 0xcd, 0x3f, 0x9a, 0x48, 0x95, 0x6d, 0x47, 0x30, 0xf1, 0x46, 0xc0, 0xe1, 0xa0,
-            0xb4, 0xde, 0x12, 0x65,
+            0x5c, 0x29, 0x25, 0x55, 0x1d, 0x40, 0x3c, 0xd5, 0x7b, 0x64, 0xc5, 0xbe, 0x56, 0xd6,
+            0xd1, 0xe3, 0xa6, 0x12, 0x17, 0x1a, 0xd6, 0xbe, 0xb9, 0x5f, 0xdc, 0xa4, 0x72, 0xad,
+            0x88, 0x67, 0x96, 0x51,
         ];
         assert_eq!(key.as_bytes(), expected.as_slice());
     }
