@@ -39,7 +39,10 @@ pub fn password_to_localised_key(
     engine_id: &[u8],
     protocol: AuthProtocol,
 ) -> SecretKey {
-    assert!(!password.is_empty(), "USM password must not be empty per RFC 3414");
+    assert!(
+        !password.is_empty(),
+        "USM password must not be empty per RFC 3414"
+    );
 
     // Step 1: hash a 1 MiB stream of cyclically repeated password bytes.
     // The stream length of 2^20 bytes is mandated by RFC 3414 §2.6 and
@@ -330,7 +333,8 @@ mod tests {
     }
 
     #[test]
-    fn given_known_auth_key_and_engine_id_when_derive_priv_key_sha256_aes128_then_matches_reference() {
+    fn given_known_auth_key_and_engine_id_when_derive_priv_key_sha256_aes128_then_matches_reference()
+     {
         // Verifies: REQ-0082
         // Reference computed using the RFC 3826 §2.1 algorithm H(auth_key || eid || auth_key),
         // validated against the RFC 3414 §A.3.1 MD5 and §A.3.2 SHA-1 test vectors:
@@ -355,7 +359,8 @@ mod tests {
     }
 
     #[test]
-    fn given_known_auth_key_and_engine_id_when_derive_priv_key_sha512_aes256_then_matches_reference() {
+    fn given_known_auth_key_and_engine_id_when_derive_priv_key_sha512_aes256_then_matches_reference()
+     {
         // Verifies: REQ-0082
         // Reference computed using the RFC 3826 §2.1 algorithm H(auth_key || eid || auth_key),
         // validated against the RFC 3414 §A.3.1 MD5 and §A.3.2 SHA-1 test vectors:
@@ -397,8 +402,7 @@ mod tests {
         //   engine_id = bytes([0,0,0,0,0,0,0,0,0,0,0,2])
         //   kul = hashlib.sha256(ku + engine_id + ku).digest()
         //   # => 5c2925551d403cd57b64c5be56d6d1e3a612171ad6beb95fdca472ad88679651
-        let key =
-            password_to_localised_key(b"x", MAPLE_ENGINE_ID, AuthProtocol::HmacSha256);
+        let key = password_to_localised_key(b"x", MAPLE_ENGINE_ID, AuthProtocol::HmacSha256);
         let expected: [u8; 32] = [
             0x5c, 0x29, 0x25, 0x55, 0x1d, 0x40, 0x3c, 0xd5, 0x7b, 0x64, 0xc5, 0xbe, 0x56, 0xd6,
             0xd1, 0xe3, 0xa6, 0x12, 0x17, 0x1a, 0xd6, 0xbe, 0xb9, 0x5f, 0xdc, 0xa4, 0x72, 0xad,
@@ -411,7 +415,8 @@ mod tests {
     fn given_password_longer_than_stream_when_derive_then_same_length_key() {
         // Verifies: REQ-0081
         let long_password = vec![0x42u8; 2_000_000]; // longer than 1 MiB
-        let key = password_to_localised_key(&long_password, MAPLE_ENGINE_ID, AuthProtocol::HmacSha256);
+        let key =
+            password_to_localised_key(&long_password, MAPLE_ENGINE_ID, AuthProtocol::HmacSha256);
         assert_eq!(key.len(), 32);
     }
 }

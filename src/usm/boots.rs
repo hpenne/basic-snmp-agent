@@ -235,17 +235,16 @@ impl EngineBootsStore for FileEngineBootsStore {
             let file = std::fs::File::create(&tmp_path)?;
             let mut writer = std::io::BufWriter::new(file);
             let engine_id_len = u32::try_from(engine_id.len()).map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "engine ID too long",
-                )
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "engine ID too long")
             })?;
             writer.write_all(&engine_id_len.to_be_bytes())?;
             writer.write_all(engine_id)?;
             writer.write_all(&boots.to_be_bytes())?;
             writer.flush()?;
             // After explicit flush, into_inner cannot fail (buffer is empty)
-            let file = writer.into_inner().expect("BufWriter flush was explicit; buffer is empty");
+            let file = writer
+                .into_inner()
+                .expect("BufWriter flush was explicit; buffer is empty");
             file.sync_all()?;
         }
         std::fs::rename(&tmp_path, &self.path)
@@ -264,15 +263,27 @@ mod tests {
 
     impl MemStore {
         fn new(state: Option<StoredBootsState>) -> Self {
-            Self { state, fail_load: false, fail_save: false }
+            Self {
+                state,
+                fail_load: false,
+                fail_save: false,
+            }
         }
 
         fn failing_load() -> Self {
-            Self { state: None, fail_load: true, fail_save: false }
+            Self {
+                state: None,
+                fail_load: true,
+                fail_save: false,
+            }
         }
 
         fn failing_save(state: Option<StoredBootsState>) -> Self {
-            Self { state, fail_load: false, fail_save: true }
+            Self {
+                state,
+                fail_load: false,
+                fail_save: true,
+            }
         }
     }
 
@@ -320,7 +331,10 @@ mod tests {
     fn given_same_engine_id_when_initialise_then_boots_incremented() {
         // Verifies: REQ-0094, REQ-0095
         let engine_id = b"my-engine";
-        let prior = StoredBootsState { engine_id: engine_id.to_vec(), boots: 5 };
+        let prior = StoredBootsState {
+            engine_id: engine_id.to_vec(),
+            boots: 5,
+        };
         let mut store = MemStore::new(Some(prior));
         let boots = initialise_engine_boots(&mut store, engine_id).unwrap();
         assert_eq!(boots, 6);
@@ -331,7 +345,10 @@ mod tests {
         // Verifies: REQ-0094, REQ-0095
         let old_engine = b"old-engine";
         let new_engine = b"new-engine";
-        let prior = StoredBootsState { engine_id: old_engine.to_vec(), boots: 42 };
+        let prior = StoredBootsState {
+            engine_id: old_engine.to_vec(),
+            boots: 42,
+        };
         let mut store = MemStore::new(Some(prior));
         let boots = initialise_engine_boots(&mut store, new_engine).unwrap();
         assert_eq!(boots, 1);
@@ -343,20 +360,28 @@ mod tests {
     fn given_boots_at_ceiling_when_initialise_then_error() {
         // Verifies: REQ-0097
         let engine_id = b"ceiling-engine";
-        let prior = StoredBootsState { engine_id: engine_id.to_vec(), boots: MAX_ENGINE_BOOTS };
+        let prior = StoredBootsState {
+            engine_id: engine_id.to_vec(),
+            boots: MAX_ENGINE_BOOTS,
+        };
         let mut store = MemStore::new(Some(prior));
         let result = initialise_engine_boots(&mut store, engine_id);
         assert!(matches!(result, Err(InitBootsError::BootsAtCeiling)));
         // The store state was taken by load; save must NOT have been called
-        assert!(store.state.is_none(), "save must not be called when boots are at ceiling");
+        assert!(
+            store.state.is_none(),
+            "save must not be called when boots are at ceiling"
+        );
     }
 
     #[test]
     fn given_boots_below_ceiling_when_initialise_then_ok() {
         // Verifies: REQ-0097
         let engine_id = b"near-ceiling-engine";
-        let prior =
-            StoredBootsState { engine_id: engine_id.to_vec(), boots: MAX_ENGINE_BOOTS - 1 };
+        let prior = StoredBootsState {
+            engine_id: engine_id.to_vec(),
+            boots: MAX_ENGINE_BOOTS - 1,
+        };
         let mut store = MemStore::new(Some(prior));
         let boots = initialise_engine_boots(&mut store, engine_id).unwrap();
         assert_eq!(boots, MAX_ENGINE_BOOTS);
