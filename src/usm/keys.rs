@@ -3,7 +3,7 @@
 //! # Requirements
 //! Implements: REQ-0085
 
-use std::sync::atomic::{compiler_fence, Ordering};
+use std::sync::atomic::{Ordering, compiler_fence};
 
 // ── SecretKey ────────────────────────────────────────────────────────────────
 
