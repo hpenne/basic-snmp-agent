@@ -183,15 +183,25 @@ impl EngineBootsStore for FileEngineBootsStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e),
         };
-        // Parse: 4 bytes engine_id length, N bytes engine_id, 4 bytes boots
-        if file_data.len() < 8 {
+        // Parse: 4 bytes engine_id length, N bytes engine_id, 4 bytes boots.
+        // The minimum valid file is 8 bytes (4-byte length prefix + empty engine ID
+        // + 4-byte boots), but the exact-length check below rejects any mismatch
+        // with a single consistent error message.
+        if file_data.len() < 4 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "engine-boots file too short",
+                "engine-boots file has unexpected length",
             ));
         }
-        let engine_id_len =
-            u32::from_be_bytes(file_data[0..4].try_into().unwrap()) as usize;
+        let engine_id_len = usize::try_from(u32::from_be_bytes(
+            file_data[0..4].try_into().unwrap(),
+        ))
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "engine-boots file contains implausible engine ID length",
+            )
+        })?;
         if engine_id_len > MAX_ENGINE_ID_LEN {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
