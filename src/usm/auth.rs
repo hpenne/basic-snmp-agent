@@ -71,6 +71,11 @@ impl AuthProtocol {
     /// # Requirements
     /// Implements: REQ-0083, REQ-0086, REQ-0087
     ///
+    /// # Panics
+    ///
+    /// Unreachable in practice: the HMAC constructor is guarded by the
+    /// key-length check above it; HMAC also accepts any key length regardless.
+    ///
     /// # Errors
     ///
     /// Returns [`AuthError::InvalidKeyLength`] if the key length does not match
@@ -88,13 +93,13 @@ impl AuthProtocol {
                 // digest types; HMAC accepts any key length, so this is
                 // unreachable after the length check above.
                 let mut hmac = Hmac::<Sha256>::new_from_slice(key.as_bytes())
-                    .unwrap_or_else(|_| unreachable!("HMAC accepts any key length"));
+                    .expect("HMAC accepts any key length");
                 hmac.update(message);
                 hmac.finalize().into_bytes().to_vec()
             }
             Self::HmacSha512 => {
                 let mut hmac = Hmac::<Sha512>::new_from_slice(key.as_bytes())
-                    .unwrap_or_else(|_| unreachable!("HMAC accepts any key length"));
+                    .expect("HMAC accepts any key length");
                 hmac.update(message);
                 hmac.finalize().into_bytes().to_vec()
             }
@@ -109,6 +114,11 @@ impl AuthProtocol {
     ///
     /// # Requirements
     /// Implements: REQ-0083, REQ-0086, REQ-0087
+    ///
+    /// # Panics
+    ///
+    /// Unreachable in practice: the HMAC constructor is guarded by the
+    /// key-length check above it; HMAC also accepts any key length regardless.
     ///
     /// # Errors
     ///
@@ -134,13 +144,13 @@ impl AuthProtocol {
         let result = match self {
             Self::HmacSha256 => {
                 let mut h = Hmac::<Sha256>::new_from_slice(key.as_bytes())
-                    .unwrap_or_else(|_| unreachable!("HMAC accepts any key length"));
+                    .expect("HMAC accepts any key length");
                 h.update(message);
                 h.verify_truncated_left(expected_mac)
             }
             Self::HmacSha512 => {
                 let mut h = Hmac::<Sha512>::new_from_slice(key.as_bytes())
-                    .unwrap_or_else(|_| unreachable!("HMAC accepts any key length"));
+                    .expect("HMAC accepts any key length");
                 h.update(message);
                 h.verify_truncated_left(expected_mac)
             }
