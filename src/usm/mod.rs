@@ -13,3 +13,4 @@
 pub mod auth;
 pub mod keys;
 pub mod privacy;
+pub mod user;
