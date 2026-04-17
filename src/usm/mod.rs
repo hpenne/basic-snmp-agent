@@ -11,6 +11,7 @@
 //! REQ-0101, REQ-0102, REQ-0103, REQ-0104, REQ-0105, REQ-0106
 
 pub mod auth;
+pub mod boots;
 pub mod kdf;
 pub mod keys;
 pub mod privacy;
