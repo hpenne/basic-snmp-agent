@@ -65,6 +65,10 @@ struct AgentInner {
     command_sender: crate::transport::event_loop::CommandSender,
     trap_sender: TrapSender,
     thread_handle: Mutex<Option<std::thread::JoinHandle<io::Result<()>>>>,
+    #[allow(dead_code)]
+    usm_user: Option<std::sync::Arc<crate::usm::user::UsmUser>>,
+    #[allow(dead_code)]
+    engine_boots: u32,
 }
 
 impl Drop for AgentInner {
@@ -202,6 +206,8 @@ pub struct AgentBuilder {
     /// `SNMPv3` engine ID for this agent instance. Inbound requests with a
     /// different engine ID are silently discarded (REQ-0057).
     engine_id: Vec<u8>,
+    usm_user: Option<crate::usm::user::UsmUser>,
+    boots_store: Option<Box<dyn crate::usm::boots::EngineBootsStore>>,
 }
 
 impl AgentBuilder {
@@ -222,6 +228,8 @@ impl AgentBuilder {
             // Default engine ID: enterprise OID format (0x80 = enterprise,
             // 0x00 0x1f 0x88 = enterprise number 8072, 0x04 = text format).
             engine_id: b"\x80\x00\x1f\x88\x04basic-snmp-agent".to_vec(),
+            usm_user: None,
+            boots_store: None,
         }
     }
 
@@ -247,6 +255,40 @@ impl AgentBuilder {
         self
     }
 
+    /// Set the USM user for this agent.
+    ///
+    /// The agent is configured with exactly one USM user per RFC 3414 (REQ-0076).
+    /// The user's localised keys must already be derived for the configured
+    /// engine ID (REQ-0081). If not set, the agent processes requests without
+    /// USM authentication or privacy enforcement.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0074, REQ-0076, REQ-0081
+    #[must_use]
+    pub fn usm_user(mut self, user: crate::usm::user::UsmUser) -> Self {
+        self.usm_user = Some(user);
+        self
+    }
+
+    /// Set the engine-boots persistence store.
+    ///
+    /// Called once at [`build`][Self::build] time: the store is loaded, the
+    /// boots counter is incremented (or reset if the engine ID changed), and
+    /// the new value is saved back. All counter logic follows RFC 3414 §2.2.
+    ///
+    /// If not set, `snmpEngineBoots` starts at 1 and is not persisted.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0094, REQ-0095, REQ-0096
+    #[must_use]
+    pub fn engine_boots_store(
+        mut self,
+        store: impl crate::usm::boots::EngineBootsStore + 'static,
+    ) -> Self {
+        self.boots_store = Some(Box::new(store));
+        self
+    }
+
     /// Construct and start the agent.
     ///
     /// Binds the TCP listener on [`listen_addr`][`Self::listen_addr`], creates
@@ -263,21 +305,32 @@ impl AgentBuilder {
     /// be initialised ([`AgentError::Socket`]), the UDP trap socket cannot be created
     /// ([`AgentError::UdpSocket`]), or the event loop thread cannot be spawned
     /// ([`AgentError::Spawn`]).
+    /// Returns [`AgentError::EngineBoots`] if the engine-boots counter is at its ceiling or the backing store fails.
     pub fn build(self) -> Result<Agent, AgentError> {
         // RFC 3411 §5: SnmpEngineID must be between 5 and 32 octets inclusive.
         if self.engine_id.len() < 5 || self.engine_id.len() > 32 {
             return Err(AgentError::InvalidEngineId);
         }
 
+        let engine_boots = match self.boots_store {
+            Some(mut store) => {
+                crate::usm::boots::initialise_engine_boots(&mut *store, &self.engine_id)
+                    .map_err(AgentError::EngineBoots)?
+            }
+            None => 1,
+        };
+        let usm_user = self.usm_user.map(std::sync::Arc::new);
+
         let listen_addr = self.listen_addr;
 
-        let (event_loop, _bound_addr, command_sender) = EventLoop::new(listen_addr, self.engine_id)
-            .map_err(|e| match e {
-                EventLoopError::Bind { addr, source } => AgentError::Bind { addr, source },
-                EventLoopError::Pipe(source) | EventLoopError::Registration(source) => {
-                    AgentError::Socket(source)
-                }
-            })?;
+        let (event_loop, _bound_addr, command_sender) =
+            EventLoop::new(listen_addr, self.engine_id, engine_boots, usm_user.clone())
+                .map_err(|e| match e {
+                    EventLoopError::Bind { addr, source } => AgentError::Bind { addr, source },
+                    EventLoopError::Pipe(source) | EventLoopError::Registration(source) => {
+                        AgentError::Socket(source)
+                    }
+                })?;
 
         let trap_sender = TrapSender::new(Instant::now()).map_err(AgentError::UdpSocket)?;
 
@@ -290,6 +343,8 @@ impl AgentBuilder {
             command_sender,
             trap_sender,
             thread_handle: Mutex::new(Some(thread_handle)),
+            usm_user,
+            engine_boots,
         })))
     }
 }
@@ -299,6 +354,14 @@ impl Default for AgentBuilder {
         Self::new()
     }
 }
+
+const _: () = {
+    fn assert_send_sync<T: Send + Sync>() {}
+    fn check() {
+        assert_send_sync::<crate::usm::user::UsmUser>();
+    }
+    let _ = check;
+};
 
 #[cfg(test)]
 mod tests {
@@ -497,5 +560,88 @@ mod tests {
             Some(Value::Integer32(123)),
             "expected the value set via Agent::set to be present in the MIB store"
         );
+    }
+
+    #[test]
+    fn given_usm_user_when_build_then_agent_starts() {
+        // Verifies: REQ-0074, REQ-0076
+        use crate::usm::user::UsmUser;
+        let user = UsmUser::no_auth_no_priv("public");
+        let result = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .usm_user(user)
+            .build();
+        assert!(result.is_ok(), "expected agent to start with USM user configured");
+    }
+
+    #[test]
+    fn given_boots_store_when_build_then_boots_initialised() {
+        // Verifies: REQ-0094, REQ-0095
+        use crate::usm::boots::{EngineBootsStore, StoredBootsState};
+        use std::sync::{Arc, Mutex};
+
+        struct TrackingStore {
+            loaded: bool,
+            saved: bool,
+        }
+        impl EngineBootsStore for TrackingStore {
+            fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> {
+                self.loaded = true;
+                Ok(None)
+            }
+            fn save(&mut self, _engine_id: &[u8], _boots: u32) -> Result<(), std::io::Error> {
+                self.saved = true;
+                Ok(())
+            }
+        }
+
+        struct ObservableStore(Arc<Mutex<TrackingStore>>);
+        impl EngineBootsStore for ObservableStore {
+            fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> {
+                self.0.lock().unwrap().load()
+            }
+            fn save(&mut self, engine_id: &[u8], boots: u32) -> Result<(), std::io::Error> {
+                self.0.lock().unwrap().save(engine_id, boots)
+            }
+        }
+
+        let inner = Arc::new(Mutex::new(TrackingStore { loaded: false, saved: false }));
+        let store = ObservableStore(Arc::clone(&inner));
+        AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .engine_boots_store(store)
+            .build()
+            .unwrap();
+
+        let state = inner.lock().unwrap();
+        assert!(state.loaded, "store.load() must be called at build time");
+        assert!(state.saved, "store.save() must be called at build time");
+    }
+
+    #[test]
+    fn given_boots_at_ceiling_when_build_then_engine_boots_error() {
+        // Verifies: REQ-0097
+        use crate::usm::boots::{EngineBootsStore, StoredBootsState, MAX_ENGINE_BOOTS};
+        use crate::error::AgentError;
+
+        struct CeilingStore;
+        impl EngineBootsStore for CeilingStore {
+            fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> {
+                Ok(Some(StoredBootsState {
+                    // Must match the default engine ID in AgentBuilder::new()
+                    engine_id: b"\x80\x00\x1f\x88\x04basic-snmp-agent".to_vec(),
+                    boots: MAX_ENGINE_BOOTS,
+                }))
+            }
+            fn save(&mut self, _engine_id: &[u8], _boots: u32) -> Result<(), std::io::Error> {
+                unreachable!("save must not be called at ceiling")
+            }
+        }
+
+        let result = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .engine_boots_store(CeilingStore)
+            .build();
+        assert!(matches!(result, Err(AgentError::EngineBoots(_))));
     }
 }

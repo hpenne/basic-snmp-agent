@@ -52,6 +52,18 @@ pub trait EngineBootsStore {
     fn save(&mut self, engine_id: &[u8], boots: u32) -> Result<(), std::io::Error>;
 }
 
+/// # Requirements
+/// Implements: REQ-0095
+impl<T: EngineBootsStore + ?Sized> EngineBootsStore for &mut T {
+    fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> {
+        (*self).load()
+    }
+
+    fn save(&mut self, engine_id: &[u8], boots: u32) -> Result<(), std::io::Error> {
+        (*self).save(engine_id, boots)
+    }
+}
+
 /// Error returned by [`initialise_engine_boots`].
 ///
 /// # Requirements
@@ -119,7 +131,7 @@ impl From<std::io::Error> for InitBootsError {
 /// # Requirements
 /// Implements: REQ-0094, REQ-0095, REQ-0097
 pub fn initialise_engine_boots(
-    store: &mut impl EngineBootsStore,
+    store: &mut (impl EngineBootsStore + ?Sized),
     engine_id: &[u8],
 ) -> Result<u32, InitBootsError> {
     let stored = store.load()?;

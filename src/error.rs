@@ -19,6 +19,11 @@ pub enum AgentError {
     Spawn(io::Error),
     /// The engine ID length is outside the RFC 3411 §5 range of 5–32 octets.
     InvalidEngineId,
+    /// The engine-boots counter could not be initialised (ceiling reached or store failed).
+    ///
+    /// # Requirements
+    /// Implements: REQ-0094, REQ-0095, REQ-0097
+    EngineBoots(crate::usm::boots::InitBootsError),
 }
 
 impl fmt::Display for AgentError {
@@ -34,6 +39,7 @@ impl fmt::Display for AgentError {
                 f,
                 "engine ID length is invalid: must be between 5 and 32 octets (RFC 3411 \u{a7}5)"
             ),
+            Self::EngineBoots(e) => write!(f, "engine-boots initialisation failed: {e}"),
         }
     }
 }
@@ -44,6 +50,7 @@ impl std::error::Error for AgentError {
             Self::Bind { source, .. } => Some(source),
             Self::Socket(e) | Self::UdpSocket(e) | Self::Spawn(e) => Some(e),
             Self::InvalidEngineId => None,
+            Self::EngineBoots(e) => Some(e),
         }
     }
 }
@@ -138,6 +145,22 @@ mod tests {
         let invalid_error = AgentError::InvalidEngineId;
         let msg = invalid_error.to_string();
         assert!(msg.contains('5') && msg.contains("32"), "{msg}");
+    }
+
+    #[test]
+    fn agent_error_engine_boots_display_mentions_initialisation() {
+        use crate::usm::boots::InitBootsError;
+        let e = AgentError::EngineBoots(InitBootsError::BootsAtCeiling);
+        assert!(e.to_string().contains("engine-boots"), "{}", e);
+    }
+
+    #[test]
+    fn agent_error_engine_boots_source_returns_some() {
+        use crate::usm::boots::InitBootsError;
+        use std::error::Error;
+        let io_err = io::Error::other("disk full");
+        let e = AgentError::EngineBoots(InitBootsError::Store(io_err));
+        assert!(e.source().is_some());
     }
 
     // ── AgentError source ────────────────────────────────────────────────
