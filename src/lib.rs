@@ -65,8 +65,10 @@ struct AgentInner {
     command_sender: crate::transport::event_loop::CommandSender,
     trap_sender: TrapSender,
     thread_handle: Mutex<Option<std::thread::JoinHandle<io::Result<()>>>>,
+    // Stored here for use by outbound trap sending (Step 11); not yet consumed.
     #[allow(dead_code)]
     usm_user: Option<std::sync::Arc<crate::usm::user::UsmUser>>,
+    // Stored here for access from the application side; the event loop has its own copy.
     #[allow(dead_code)]
     engine_boots: u32,
 }
@@ -206,7 +208,11 @@ pub struct AgentBuilder {
     /// `SNMPv3` engine ID for this agent instance. Inbound requests with a
     /// different engine ID are silently discarded (REQ-0057).
     engine_id: Vec<u8>,
+    // USM user configured for this agent instance; `None` means no USM enforcement.
+    // Implements: REQ-0074, REQ-0076, REQ-0081
     usm_user: Option<crate::usm::user::UsmUser>,
+    // Engine-boots persistence store; `None` means boots start at 1 and are not persisted.
+    // Implements: REQ-0094, REQ-0095, REQ-0096
     boots_store: Option<Box<dyn crate::usm::boots::EngineBootsStore>>,
 }
 
@@ -305,7 +311,9 @@ impl AgentBuilder {
     /// be initialised ([`AgentError::Socket`]), the UDP trap socket cannot be created
     /// ([`AgentError::UdpSocket`]), or the event loop thread cannot be spawned
     /// ([`AgentError::Spawn`]).
-    /// Returns [`AgentError::EngineBoots`] if the engine-boots counter is at its ceiling or the backing store fails.
+    ///
+    /// Returns [`AgentError::EngineBoots`] if the `snmpEngineBoots` counter is at its ceiling
+    /// (per RFC 3414 §2.2) or the backing store fails.
     pub fn build(self) -> Result<Agent, AgentError> {
         // RFC 3411 §5: SnmpEngineID must be between 5 and 32 octets inclusive.
         if self.engine_id.len() < 5 || self.engine_id.len() > 32 {
@@ -359,6 +367,7 @@ const _: () = {
     fn assert_send_sync<T: Send + Sync>() {}
     fn check() {
         assert_send_sync::<crate::usm::user::UsmUser>();
+        assert_send_sync::<Agent>();
     }
     let _ = check;
 };
@@ -583,14 +592,16 @@ mod tests {
         struct TrackingStore {
             loaded: bool,
             saved: bool,
+            saved_boots: u32,
         }
         impl EngineBootsStore for TrackingStore {
             fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> {
                 self.loaded = true;
                 Ok(None)
             }
-            fn save(&mut self, _engine_id: &[u8], _boots: u32) -> Result<(), std::io::Error> {
+            fn save(&mut self, _engine_id: &[u8], boots: u32) -> Result<(), std::io::Error> {
                 self.saved = true;
+                self.saved_boots = boots;
                 Ok(())
             }
         }
@@ -605,7 +616,7 @@ mod tests {
             }
         }
 
-        let inner = Arc::new(Mutex::new(TrackingStore { loaded: false, saved: false }));
+        let inner = Arc::new(Mutex::new(TrackingStore { loaded: false, saved: false, saved_boots: 0 }));
         let store = ObservableStore(Arc::clone(&inner));
         AgentBuilder::new()
             .listen_addr("127.0.0.1:0".parse().unwrap())
@@ -616,6 +627,7 @@ mod tests {
         let state = inner.lock().unwrap();
         assert!(state.loaded, "store.load() must be called at build time");
         assert!(state.saved, "store.save() must be called at build time");
+        assert_eq!(state.saved_boots, 1, "first-time initialisation must save boots = 1");
     }
 
     #[test]

@@ -155,12 +155,17 @@ mod tests {
     }
 
     #[test]
-    fn agent_error_engine_boots_source_returns_some() {
+    fn agent_error_engine_boots_source_returns_inner_boots_error() {
         use crate::usm::boots::InitBootsError;
         use std::error::Error;
         let io_err = io::Error::other("disk full");
         let e = AgentError::EngineBoots(InitBootsError::Store(io_err));
-        assert!(e.source().is_some());
+        let source = e.source().expect("source should be Some for EngineBoots variant");
+        // The direct source is InitBootsError; confirm via its Display.
+        assert!(
+            source.to_string().contains("engine-boots store error"),
+            "source should be the inner InitBootsError, got: {source}"
+        );
     }
 
     // ── AgentError source ────────────────────────────────────────────────

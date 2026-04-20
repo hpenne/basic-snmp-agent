@@ -245,10 +245,12 @@ pub struct EventLoop {
     engine_id: Vec<u8>,
     /// `snmpEngineBoots` counter, initialised at agent start-up.
     // Implements: REQ-0094
+    // Consumed by inbound USM message processing (Steps 8–11); not yet used.
     #[allow(dead_code)]
     engine_boots: u32,
     /// Configured USM user; `None` if the agent runs without USM.
     // Implements: REQ-0076
+    // Consumed by inbound USM message processing (Steps 8–11); not yet used.
     #[allow(dead_code)]
     usm_user: Option<std::sync::Arc<crate::usm::user::UsmUser>>,
 }
