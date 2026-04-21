@@ -39,9 +39,10 @@ Implementation plan:
 - [x] Step 8: Engine-ID discovery and time synchronisation handling (REQ-0093, REQ-0098, REQ-0099)
 - [ ] Step 9: Behave test for engine-ID discovery (REQ-0093)
 - [ ] Step 10: Inbound USM processing pipeline per RFC 3414 §3.2 (REQ-0078, REQ-0079, REQ-0080, REQ-0100, REQ-0101, REQ-0102, REQ-0103)
-- [ ] Step 11: contextEngineID mismatch Report PDU replacing silent discard (REQ-0104)
-- [ ] Step 12: Outbound trap authentication and encryption (REQ-0105, REQ-0106)
-- [ ] Step 13: Behave tests for authenticated USM scenarios"""
+- [ ] Step 11: Behave tests for authenticated GET requests (authNoPriv and authPriv) (REQ-0078, REQ-0079, REQ-0080)
+- [ ] Step 12: contextEngineID mismatch Report PDU replacing silent discard (REQ-0104)
+- [ ] Step 13: Outbound trap authentication and encryption (REQ-0105, REQ-0106)
+- [ ] Step 14: Behave tests for authenticated traps (REQ-0105, REQ-0106)"""
 
 [[content.acceptance_criteria]]
 text = "SecretKey newtype with Drop zeroisation via write_volatile + compiler_fence (REQ-0085, ADR-0025)"
