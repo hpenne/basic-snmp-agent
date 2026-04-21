@@ -37,10 +37,11 @@ Implementation plan:
 - [x] Step 6: EngineBootsStore trait and file-backed implementation with atomic writes (REQ-0094, REQ-0095, REQ-0096, REQ-0097)
 - [x] Step 7: Wire USM user and boots store into AgentBuilder (keeping existing path intact) (REQ-0074, REQ-0076, REQ-0081)
 - [x] Step 8: Engine-ID discovery and time synchronisation handling (REQ-0093, REQ-0098, REQ-0099)
-- [ ] Step 9: Inbound USM processing pipeline per RFC 3414 §3.2 (REQ-0078, REQ-0079, REQ-0080, REQ-0100, REQ-0101, REQ-0102, REQ-0103)
-- [ ] Step 10: contextEngineID mismatch Report PDU replacing silent discard (REQ-0104)
-- [ ] Step 11: Outbound trap authentication and encryption (REQ-0105, REQ-0106)
-- [ ] Step 12: Behave tests for USM scenarios"""
+- [ ] Step 9: Behave test for engine-ID discovery (REQ-0093)
+- [ ] Step 10: Inbound USM processing pipeline per RFC 3414 §3.2 (REQ-0078, REQ-0079, REQ-0080, REQ-0100, REQ-0101, REQ-0102, REQ-0103)
+- [ ] Step 11: contextEngineID mismatch Report PDU replacing silent discard (REQ-0104)
+- [ ] Step 12: Outbound trap authentication and encryption (REQ-0105, REQ-0106)
+- [ ] Step 13: Behave tests for authenticated USM scenarios"""
 
 [[content.acceptance_criteria]]
 text = "SecretKey newtype with Drop zeroisation via write_volatile + compiler_fence (REQ-0085, ADR-0025)"
