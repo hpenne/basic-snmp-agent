@@ -3,6 +3,7 @@
 use std::sync::OnceLock;
 
 use basic_snmp_agent::mib::Store;
+use basic_snmp_agent::transport::dispatch::DispatchContext;
 use basic_snmp_agent::{Oid, Value, process_snmpv3_request};
 use libfuzzer_sys::fuzz_target;
 
@@ -53,5 +54,12 @@ fuzz_target!(|data: &[u8]| {
     // Use a fixed engine ID; the fuzzer will explore both matching and
     // non-matching cases by varying the bytes that map to the engine ID field.
     let engine_id = b"\x80\x00\x1f\x88\x80test";
-    let _ = process_snmpv3_request(data, engine_id, mib());
+    let mut unknown_engine_ids_counter = 0u32;
+    let mut ctx = DispatchContext {
+        engine_id,
+        engine_boots: 1,
+        engine_time: 0,
+        unknown_engine_ids_counter: &mut unknown_engine_ids_counter,
+    };
+    let _ = process_snmpv3_request(data, &mut ctx, mib());
 });
