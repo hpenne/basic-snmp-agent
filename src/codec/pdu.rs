@@ -236,7 +236,7 @@ pub enum InboundPdu {
 /// PDU ready for dispatch.
 ///
 /// # Requirements
-/// Implements: REQ-0068, REQ-0069, REQ-0070
+/// Implements: REQ-0068, REQ-0069, REQ-0070, REQ-0093, REQ-0098, REQ-0099
 #[derive(Debug)]
 pub struct V3InboundMessage {
     /// Message ID from `HeaderData`; echoed in the `SNMPv3` response.
@@ -250,6 +250,29 @@ pub struct V3InboundMessage {
     pub user_name: Vec<u8>,
     /// The inner PDU ready for dispatch to request handlers.
     pub pdu: InboundPdu,
+    /// `msgAuthoritativeEngineID` from USM security parameters.
+    /// Empty for engine-ID discovery probes (REQ-0093).
+    ///
+    /// # Requirements
+    /// Implements: REQ-0093, REQ-0098, REQ-0099
+    pub auth_engine_id: Vec<u8>,
+    /// `msgAuthoritativeEngineBoots` from USM security parameters.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0098, REQ-0099
+    pub auth_engine_boots: u32,
+    /// `msgAuthoritativeEngineTime` from USM security parameters.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0098, REQ-0099
+    pub auth_engine_time: u32,
+    /// Message flags byte from `HeaderData`:
+    /// bit 0 (`0x01`) = authFlag, bit 1 (`0x02`) = privFlag,
+    /// bit 2 (`0x04`) = reportableFlag.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0098, REQ-0099
+    pub security_flags: u8,
 }
 
 // ── Outbound PDU structs ──────────────────────────────────────────────────────
@@ -379,14 +402,23 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> 
         }
     };
 
-    // Extract the user name from USMSecurityParameters so it can be echoed in
-    // the response (RFC 3414 §8.2.4 requires msgUserName to be the same in both).
+    // Extract the USM security parameters:
+    // - user_name is echoed in the response (RFC 3414 §8.2.4).
+    // - auth_engine_id is empty for engine-ID discovery probes (REQ-0093).
+    // - auth_engine_boots / auth_engine_time are used for time-window validation (REQ-0098, REQ-0099).
     // Failure to decode the security parameters is treated as a BER error.
     let usm_params: USMSecurityParameters =
         rasn::ber::decode(v3_message.security_parameters.as_ref()).map_err(|e| {
             DecodeError::new(DecodeErrorKind::Ber, format!("USM decode failed: {e}"))
         })?;
     let user_name = usm_params.user_name.to_vec();
+    let auth_engine_id = usm_params.authoritative_engine_id.to_vec();
+    // Values outside the u32 range are clamped to u32::MAX; they will fail
+    // time-window validation and trigger a Report PDU rather than causing a panic.
+    let auth_engine_boots =
+        u32::try_from(&usm_params.authoritative_engine_boots).unwrap_or(u32::MAX);
+    let auth_engine_time = u32::try_from(&usm_params.authoritative_engine_time).unwrap_or(u32::MAX);
+    let security_flags = v3_message.global_data.flags.first().copied().unwrap_or(0);
 
     let engine_id = scoped_pdu.engine_id.to_vec();
     let context_name = scoped_pdu.name.to_vec();
@@ -398,6 +430,10 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> 
         context_name,
         user_name,
         pdu,
+        auth_engine_id,
+        auth_engine_boots,
+        auth_engine_time,
+        security_flags,
     })
 }
 
@@ -521,6 +557,91 @@ pub fn encode_v3_response(
 
     rasn::ber::encode(&v3_message)
         .map_err(|e| EncodeError::new(format!("BER encoding of SNMPv3 Message failed: {e}")))
+}
+
+// ── encode_v3_report ──────────────────────────────────────────────────────────
+
+/// BER-encode an `SNMPv3` Report PDU in a full message envelope.
+///
+/// Report PDUs are used for:
+/// - Engine-ID discovery responses: `counter_oid` is `usmStatsUnknownEngineIDs` (REQ-0093).
+/// - Time-synchronisation responses: `counter_oid` is `usmStatsNotInTimeWindows` (REQ-0098, REQ-0099).
+///
+/// The Report PDU carries a single varbind: `counter_oid` bound to a
+/// [`Counter32`](crate::codec::Value::Counter32) with `counter_value`.
+///
+/// The USM security parameters carry the authoritative engine state
+/// (`engine_id`, `engine_boots`, `engine_time`) so the manager can synchronise.
+///
+/// # Errors
+///
+/// Returns an [`EncodeError`] if `rasn` fails to BER-encode any part of the message.
+///
+/// # Requirements
+/// Implements: REQ-0093, REQ-0098, REQ-0099
+///
+/// # Examples
+///
+/// ```
+/// use basic_snmp_agent::codec::{Oid, encode_v3_report};
+///
+/// let engine_id = b"\x80\x00\x1f\x88\x04test";
+/// let oid: Oid = "1.3.6.1.6.3.15.1.1.4.0".parse().unwrap();
+/// let bytes = encode_v3_report(42, engine_id, 3, 100, &oid, 1).unwrap();
+/// assert!(!bytes.is_empty());
+/// ```
+pub fn encode_v3_report(
+    msg_id: i32,
+    engine_id: &[u8],
+    engine_boots: u32,
+    engine_time: u32,
+    counter_oid: &super::Oid,
+    counter_value: u32,
+) -> Result<Vec<u8>, EncodeError> {
+    use rasn_snmp::v2::Report;
+
+    let varbind = Varbind {
+        oid: counter_oid.clone(),
+        value: VarbindValue::Value(Value::Counter32(counter_value)),
+    };
+    let report_pdu = Report(RasnPdu {
+        request_id: msg_id,
+        error_status: 0,
+        error_index: 0,
+        variable_bindings: vec![varbind_to_rasn(&varbind)],
+    });
+    let scoped_pdu = ScopedPdu {
+        engine_id: engine_id.to_vec().into(),
+        name: vec![].into(),
+        data: Pdus::Report(report_pdu),
+    };
+    // RFC 3414 §8.2.4: the report's USM security parameters carry the authoritative
+    // engine state so the manager can synchronise its local copy.
+    let usm_params = USMSecurityParameters {
+        authoritative_engine_id: engine_id.to_vec().into(),
+        authoritative_engine_boots: engine_boots.into(),
+        authoritative_engine_time: engine_time.into(),
+        user_name: vec![].into(),
+        authentication_parameters: rasn::types::OctetString::from(vec![]),
+        privacy_parameters: rasn::types::OctetString::from(vec![]),
+    };
+    let security_parameters_bytes = rasn::ber::encode(&usm_params).map_err(|e| {
+        EncodeError::new(format!("BER encoding of USMSecurityParameters failed: {e}"))
+    })?;
+    // Flags byte 0x00: noAuthNoPriv, reportable bit clear (this is a report).
+    let v3_message = V3Message {
+        version: 3.into(),
+        global_data: HeaderData {
+            message_id: msg_id.into(),
+            max_size: 65535.into(),
+            flags: rasn::types::OctetString::from(vec![0x00]),
+            security_model: 3.into(),
+        },
+        security_parameters: security_parameters_bytes.into(),
+        scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
+    };
+    rasn::ber::encode(&v3_message)
+        .map_err(|e| EncodeError::new(format!("BER encoding of SNMPv3 Report failed: {e}")))
 }
 
 // ── encode_trap ───────────────────────────────────────────────────────────────
@@ -1827,5 +1948,58 @@ mod tests {
             }
             other => panic!("expected GetRequest, got {other:?}"),
         }
+    }
+
+    // ── V3InboundMessage USM security fields ──────────────────────────────────
+
+    #[test]
+    fn given_normal_request_when_decode_v3_then_auth_engine_id_matches_engine_id() {
+        // Verifies: REQ-0093, REQ-0098, REQ-0099
+        // The snmpv3_frames helper sets authoritative_engine_id = engine_id for normal requests.
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        let encoded = snmpv3_frames::encode_get_request(engine_id, b"", 42, 7, oid.as_slice());
+
+        let msg = decode_v3_message(&encoded).unwrap();
+
+        assert_eq!(msg.auth_engine_id, engine_id);
+        assert_eq!(msg.auth_engine_boots, 0);
+        assert_eq!(msg.auth_engine_time, 0);
+        assert_eq!(msg.security_flags, 0x04); // reportableFlag set by encode_get_request
+    }
+
+    // ── encode_v3_report ──────────────────────────────────────────────────────
+
+    #[test]
+    fn given_valid_inputs_when_encode_v3_report_then_returns_non_empty_bytes() {
+        // Verifies: REQ-0093
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let oid: Oid = "1.3.6.1.6.3.15.1.1.4.0".parse().unwrap();
+        let result = encode_v3_report(42, engine_id, 3, 100, &oid, 7);
+        assert!(result.is_ok(), "encode_v3_report should succeed");
+        assert!(!result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn given_encode_v3_report_when_decoded_then_security_params_contain_engine_state() {
+        // Verifies: REQ-0093, REQ-0099
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let oid: Oid = "1.3.6.1.6.3.15.1.1.4.0".parse().unwrap();
+        let encoded = encode_v3_report(42, engine_id, 3, 100, &oid, 7).unwrap();
+
+        let decoded: rasn_snmp::v3::Message = rasn::ber::decode(&encoded).unwrap();
+        let security_params: USMSecurityParameters =
+            rasn::ber::decode(decoded.security_parameters.as_ref()).unwrap();
+
+        assert_eq!(security_params.authoritative_engine_id.as_ref(), engine_id);
+        assert_eq!(
+            u32::try_from(&security_params.authoritative_engine_boots).unwrap(),
+            3
+        );
+        assert_eq!(
+            u32::try_from(&security_params.authoritative_engine_time).unwrap(),
+            100
+        );
+        assert!(security_params.user_name.is_empty());
     }
 }

@@ -20,6 +20,7 @@ pub use oid::{Oid, OidErrorCategory, ParseOidError};
 pub use pdu::{
     DecodeError, DecodeErrorKind, EncodeError, ErrorStatus, GetBulkRequest, GetNextRequest,
     GetRequest, GetResponse, InboundPdu, SetRequest, V3InboundMessage, Varbind, VarbindValue,
-    WireTrapPdu, decode_pdu, decode_v3_message, encode_response, encode_trap, encode_v3_response,
+    WireTrapPdu, decode_pdu, decode_v3_message, encode_response, encode_trap, encode_v3_report,
+    encode_v3_response,
 };
 pub use value::Value;

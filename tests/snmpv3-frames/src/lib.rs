@@ -155,7 +155,91 @@ pub fn encode_set_request(
     encode_v3_message(engine_id, context_name, msg_id, Pdus::SetRequest(rasn_pdu))
 }
 
-// Encode a complete SNMPv3 message with empty (noAuthNoPriv) USM security parameters.
+/// Encode an engine-ID discovery probe: a `GetRequest` with empty
+/// `msgAuthoritativeEngineID` in the USM security parameters and the
+/// `reportableFlag` (bit 2, `0x04`) set in `msgFlags`.
+/// The `contextEngineID` in the `ScopedPDU` is left empty.
+///
+/// # Panics
+///
+/// Does not panic in practice; all internal BER encodings are of well-formed structures.
+///
+/// # Examples
+///
+/// ```
+/// let frame = snmpv3_frames::encode_discovery_probe();
+/// assert!(!frame.is_empty());
+/// ```
+#[must_use]
+pub fn encode_discovery_probe() -> Vec<u8> {
+    encode_discovery_probe_with_flags(vec![0x04])
+}
+
+/// Encode an engine-ID discovery probe with the `reportableFlag` (`0x04`) cleared in
+/// `msgFlags`. Per RFC 3412 §7.1.3a the agent must silently discard such a message
+/// without sending a Report PDU.
+///
+/// # Panics
+///
+/// Does not panic in practice; all internal BER encodings are of well-formed structures.
+///
+/// # Examples
+///
+/// ```
+/// let frame = snmpv3_frames::encode_discovery_probe_no_report();
+/// assert!(!frame.is_empty());
+/// ```
+#[must_use]
+pub fn encode_discovery_probe_no_report() -> Vec<u8> {
+    encode_discovery_probe_with_flags(vec![0x00])
+}
+
+// Build a discovery probe frame using the given raw msgFlags byte(s).
+// An empty authoritative engine ID signals a discovery probe per RFC 3414.
+fn encode_discovery_probe_with_flags(flags: Vec<u8>) -> Vec<u8> {
+    let usm_params = USMSecurityParameters {
+        authoritative_engine_id: vec![].into(), // empty = discovery probe per RFC 3414
+        authoritative_engine_boots: 0.into(),
+        authoritative_engine_time: 0.into(),
+        user_name: rasn::types::OctetString::from(vec![]),
+        authentication_parameters: rasn::types::OctetString::from(vec![]),
+        privacy_parameters: rasn::types::OctetString::from(vec![]),
+    };
+    let security_parameters_bytes =
+        rasn::ber::encode(&usm_params).expect("USMSecurityParameters must encode");
+
+    let oid =
+        rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(vec![1, 3, 6, 1, 2, 1, 1, 1, 0]));
+    let get_request = RasnGetRequest(RasnPdu {
+        request_id: 1,
+        error_status: 0,
+        error_index: 0,
+        variable_bindings: vec![VarBind {
+            name: oid,
+            value: RasnVarBindValue::Unspecified,
+        }],
+    });
+    let scoped_pdu = ScopedPdu {
+        engine_id: vec![].into(),
+        name: vec![].into(),
+        data: Pdus::GetRequest(get_request),
+    };
+    let v3_message = V3Message {
+        version: 3.into(),
+        global_data: HeaderData {
+            message_id: 42.into(),
+            max_size: 65535.into(),
+            flags: rasn::types::OctetString::from(flags),
+            security_model: 3.into(),
+        },
+        security_parameters: security_parameters_bytes.into(),
+        scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
+    };
+    rasn::ber::encode(&v3_message).expect("V3Message must encode")
+}
+
+// Encode a complete SNMPv3 message with noAuthNoPriv USM security parameters,
+// with the authoritative engine ID set to the agent's engine_id.
 // msg_id is used as the message identifier in the V3 header.
 fn encode_v3_message(engine_id: &[u8], context_name: &[u8], msg_id: i32, pdus: Pdus) -> Vec<u8> {
     let scoped_pdu = ScopedPdu {
@@ -164,7 +248,9 @@ fn encode_v3_message(engine_id: &[u8], context_name: &[u8], msg_id: i32, pdus: P
         data: pdus,
     };
     let usm_params = USMSecurityParameters {
-        authoritative_engine_id: rasn::types::OctetString::from(vec![]),
+        // RFC 3414 §3.1.4b: for normal requests, the authoritative engine ID
+        // identifies the agent. Discovery probes set this to empty.
+        authoritative_engine_id: engine_id.to_vec().into(),
         authoritative_engine_boots: 0.into(),
         authoritative_engine_time: 0.into(),
         user_name: rasn::types::OctetString::from(vec![]),

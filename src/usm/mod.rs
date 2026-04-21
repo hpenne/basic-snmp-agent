@@ -12,7 +12,9 @@
 
 pub mod auth;
 pub mod boots;
+pub mod counters;
 pub mod kdf;
 pub mod keys;
 pub mod privacy;
+pub mod time_window;
 pub mod user;

@@ -245,12 +245,16 @@ pub struct EventLoop {
     engine_id: Vec<u8>,
     /// `snmpEngineBoots` counter, initialised at agent start-up.
     // Implements: REQ-0094
-    // Consumed by inbound USM message processing (Steps 8–11); not yet used.
-    #[allow(dead_code)]
     engine_boots: u32,
+    /// Instant at which the engine started; used to compute `snmpEngineTime`.
+    // Implements: REQ-0094
+    engine_start: std::time::Instant,
+    /// Counter for `usmStatsUnknownEngineIDs`; incremented for each discovery probe.
+    // Implements: REQ-0093
+    unknown_engine_ids_counter: u32,
     /// Configured USM user; `None` if the agent runs without USM.
     // Implements: REQ-0076
-    // Consumed by inbound USM message processing (Steps 8–11); not yet used.
+    // Consumed by inbound USM message processing (Steps 9–11); not yet used.
     #[allow(dead_code)]
     usm_user: Option<std::sync::Arc<crate::usm::user::UsmUser>>,
 }
@@ -327,11 +331,22 @@ impl EventLoop {
             store: crate::mib::Store::new(),
             engine_id,
             engine_boots,
+            engine_start: std::time::Instant::now(),
+            unknown_engine_ids_counter: 0,
             usm_user,
         };
         let sender = CommandSender { tx, pipe_write_fd };
 
         Ok((event_loop, bound_addr, sender))
+    }
+
+    /// Return `snmpEngineTime`: seconds elapsed since engine start-up, capped at `u32::MAX`.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0094
+    fn engine_time_seconds(&self) -> u32 {
+        // Saturate at u32::MAX rather than wrapping; `as_secs()` returns u64.
+        u32::try_from(self.engine_start.elapsed().as_secs()).unwrap_or(u32::MAX)
     }
 
     /// Run the event loop until [`Command::Shutdown`] is received.
@@ -463,6 +478,14 @@ impl EventLoop {
     /// # Requirements
     /// Implements: REQ-0057, REQ-0058, REQ-0068, REQ-0071, REQ-0073
     fn handle_connection_event(&mut self, token: Token) {
+        // Extract engine state before borrowing the connection map.
+        // `engine_time_seconds()` takes `&self`; calling it after `connections.get_mut()`
+        // would conflict because the mutable reference to the connection map holds
+        // a partial mutable borrow of `self` that the borrow checker cannot prove
+        // is disjoint from `&self`.
+        let engine_boots = self.engine_boots;
+        let engine_time = self.engine_time_seconds();
+
         let Some(conn) = self.connections.get_mut(&token) else {
             return;
         };
@@ -543,9 +566,14 @@ impl EventLoop {
             let ber_frame: Vec<u8> = conn.read_buf[..total_frame_bytes].to_vec();
             conn.read_buf.drain(..total_frame_bytes);
 
-            let Some(encoded_response) =
-                Self::dispatch_snmpv3_frame(&ber_frame, &self.engine_id, &self.store)
-            else {
+            let Some(encoded_response) = Self::dispatch_snmpv3_frame(
+                &ber_frame,
+                &self.engine_id,
+                engine_boots,
+                engine_time,
+                &mut self.unknown_engine_ids_counter,
+                &self.store,
+            ) else {
                 continue;
             };
 
@@ -571,13 +599,23 @@ impl EventLoop {
     /// Decode, validate, and dispatch a single RFC 3430 BER frame.
     ///
     /// Thin wrapper around [`crate::transport::dispatch::process_snmpv3_request`].
-    // Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073
+    // Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0093
     fn dispatch_snmpv3_frame(
         ber_frame: &[u8],
         engine_id: &[u8],
+        engine_boots: u32,
+        engine_time: u32,
+        unknown_engine_ids_counter: &mut u32,
         store: &crate::mib::Store,
     ) -> Option<Vec<u8>> {
-        crate::transport::dispatch::process_snmpv3_request(ber_frame, engine_id, store)
+        crate::transport::dispatch::process_snmpv3_request(
+            ber_frame,
+            engine_id,
+            engine_boots,
+            engine_time,
+            unknown_engine_ids_counter,
+            store,
+        )
     }
 
     /// Allocate the next unique connection token, skipping reserved values.
@@ -937,6 +975,8 @@ mod tests {
             store: crate::mib::Store::new(),
             engine_id: test_engine_id(),
             engine_boots: 1,
+            engine_start: std::time::Instant::now(),
+            unknown_engine_ids_counter: 0,
             usm_user: None,
         };
 
