@@ -47,8 +47,15 @@ fn main() {
 
     for (name, encoded) in seeds {
         // Verify the seed actually reaches the dispatch path before writing.
+        let mut unknown_engine_ids_counter = 0u32;
+        let mut ctx = basic_snmp_agent::transport::dispatch::DispatchContext {
+            engine_id: ENGINE_ID,
+            engine_boots: 1,
+            engine_time: 0,
+            unknown_engine_ids_counter: &mut unknown_engine_ids_counter,
+        };
         let response =
-            basic_snmp_agent::process_snmpv3_request(encoded, ENGINE_ID, &empty_mib());
+            basic_snmp_agent::process_snmpv3_request(encoded, &mut ctx, &empty_mib());
         assert!(
             response.is_some(),
             "seed '{name}' did not produce a response — check engine ID or encoding"
