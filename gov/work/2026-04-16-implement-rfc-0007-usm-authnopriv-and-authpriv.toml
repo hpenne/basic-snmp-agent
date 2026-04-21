@@ -37,7 +37,7 @@ Implementation plan:
 - [x] Step 6: EngineBootsStore trait and file-backed implementation with atomic writes (REQ-0094, REQ-0095, REQ-0096, REQ-0097)
 - [x] Step 7: Wire USM user and boots store into AgentBuilder (keeping existing path intact) (REQ-0074, REQ-0076, REQ-0081)
 - [x] Step 8: Engine-ID discovery and time synchronisation handling (REQ-0093, REQ-0098, REQ-0099)
-- [ ] Step 9: Behave test for engine-ID discovery (REQ-0093)
+- [x] Step 9: Behave test for engine-ID discovery (REQ-0093)
 - [ ] Step 10: Inbound USM processing pipeline per RFC 3414 §3.2 (REQ-0078, REQ-0079, REQ-0080, REQ-0100, REQ-0101, REQ-0102, REQ-0103)
 - [ ] Step 11: Behave tests for authenticated GET requests (authNoPriv and authPriv) (REQ-0078, REQ-0079, REQ-0080)
 - [ ] Step 12: contextEngineID mismatch Report PDU replacing silent discard (REQ-0104)
@@ -77,7 +77,7 @@ category = "added"
 
 [[content.acceptance_criteria]]
 text = "Engine-ID discovery and time-synchronisation responses (REQ-0093, REQ-0094, REQ-0097, REQ-0098, REQ-0099)"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
