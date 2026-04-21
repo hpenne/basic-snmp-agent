@@ -332,13 +332,14 @@ impl AgentBuilder {
         let listen_addr = self.listen_addr;
 
         let (event_loop, _bound_addr, command_sender) =
-            EventLoop::new(listen_addr, self.engine_id, engine_boots, usm_user.clone())
-                .map_err(|e| match e {
+            EventLoop::new(listen_addr, self.engine_id, engine_boots, usm_user.clone()).map_err(
+                |e| match e {
                     EventLoopError::Bind { addr, source } => AgentError::Bind { addr, source },
                     EventLoopError::Pipe(source) | EventLoopError::Registration(source) => {
                         AgentError::Socket(source)
                     }
-                })?;
+                },
+            )?;
 
         let trap_sender = TrapSender::new(Instant::now()).map_err(AgentError::UdpSocket)?;
 
@@ -580,7 +581,10 @@ mod tests {
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .usm_user(user)
             .build();
-        assert!(result.is_ok(), "expected agent to start with USM user configured");
+        assert!(
+            result.is_ok(),
+            "expected agent to start with USM user configured"
+        );
     }
 
     #[test]
@@ -616,7 +620,11 @@ mod tests {
             }
         }
 
-        let inner = Arc::new(Mutex::new(TrackingStore { loaded: false, saved: false, saved_boots: 0 }));
+        let inner = Arc::new(Mutex::new(TrackingStore {
+            loaded: false,
+            saved: false,
+            saved_boots: 0,
+        }));
         let store = ObservableStore(Arc::clone(&inner));
         AgentBuilder::new()
             .listen_addr("127.0.0.1:0".parse().unwrap())
@@ -627,14 +635,17 @@ mod tests {
         let state = inner.lock().unwrap();
         assert!(state.loaded, "store.load() must be called at build time");
         assert!(state.saved, "store.save() must be called at build time");
-        assert_eq!(state.saved_boots, 1, "first-time initialisation must save boots = 1");
+        assert_eq!(
+            state.saved_boots, 1,
+            "first-time initialisation must save boots = 1"
+        );
     }
 
     #[test]
     fn given_boots_at_ceiling_when_build_then_engine_boots_error() {
         // Verifies: REQ-0097
-        use crate::usm::boots::{EngineBootsStore, StoredBootsState, MAX_ENGINE_BOOTS};
         use crate::error::AgentError;
+        use crate::usm::boots::{EngineBootsStore, MAX_ENGINE_BOOTS, StoredBootsState};
 
         struct CeilingStore;
         impl EngineBootsStore for CeilingStore {

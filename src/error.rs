@@ -160,7 +160,9 @@ mod tests {
         use std::error::Error;
         let io_err = io::Error::other("disk full");
         let e = AgentError::EngineBoots(InitBootsError::Store(io_err));
-        let source = e.source().expect("source should be Some for EngineBoots variant");
+        let source = e
+            .source()
+            .expect("source should be Some for EngineBoots variant");
         // The direct source is InitBootsError; confirm via its Display.
         assert!(
             source.to_string().contains("engine-boots store error"),
