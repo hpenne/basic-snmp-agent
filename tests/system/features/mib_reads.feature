@@ -54,6 +54,6 @@ Feature: SNMP MIB reads over plain TCP
     Then the SNMP request times out or returns an error
 
   @REQ-0093
-  Scenario: Engine-ID discovery probe receives a Report PDU and subsequent GET succeeds
+  Scenario: GET without explicit engine ID succeeds after automatic engine-ID discovery
     When snmpget without explicit engine ID queries OID "1.3.6.1.2.1.1.1.0" from the agent
     Then the SNMP response contains OID "1.3.6.1.2.1.1.1.0" with string value "basic-snmp-agent test instance"

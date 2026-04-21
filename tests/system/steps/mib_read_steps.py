@@ -148,10 +148,11 @@ def step_snmpget_with_context_name(context, context_name, oid):
 
 @when('snmpget without explicit engine ID queries OID "{oid}" from the agent')
 def step_snmpget_no_engine_id(context, oid):
-    # Omitting -e triggers automatic engine-ID discovery per RFC 3414 §4.
+    # Other steps pass -e to skip discovery. Omitting it here forces net-snmp to
+    # perform engine-ID discovery (RFC 3414 §4) before the actual GET.
     result = _snmp_client_run(
         context,
-        ["snmpget", "-v3", "-l", "noAuthNoPriv", "-u", "noauth", "-On",
+        ["snmpget"] + SNMPV3_FLAGS + ["-t", "5", "-r", "1",
          _agent_addr(context), oid],
     )
     context.last_snmp_output = result.stdout + result.stderr
