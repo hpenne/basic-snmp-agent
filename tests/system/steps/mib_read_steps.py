@@ -146,6 +146,18 @@ def step_snmpget_with_context_name(context, context_name, oid):
     context.last_snmp_returncode = result.returncode
 
 
+@when('snmpget without explicit engine ID queries OID "{oid}" from the agent')
+def step_snmpget_no_engine_id(context, oid):
+    # Omitting -e triggers automatic engine-ID discovery per RFC 3414 §4.
+    result = _snmp_client_run(
+        context,
+        ["snmpget", "-v3", "-l", "noAuthNoPriv", "-u", "noauth", "-On",
+         _agent_addr(context), oid],
+    )
+    context.last_snmp_output = result.stdout + result.stderr
+    context.last_snmp_returncode = result.returncode
+
+
 @then('the SNMP response contains OID "{oid}" with string value "{value}"')
 def step_response_contains_oid_with_value(context, oid, value):
     output = context.last_snmp_output

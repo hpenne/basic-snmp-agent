@@ -52,3 +52,8 @@ Feature: SNMP MIB reads over plain TCP
   Scenario: Request with non-empty context name is silently discarded
     When snmpget with context name "badcontext" queries OID "1.3.6.1.2.1.1.1.0" from the agent
     Then the SNMP request times out or returns an error
+
+  @REQ-0093
+  Scenario: Engine-ID discovery probe receives a Report PDU and subsequent GET succeeds
+    When snmpget without explicit engine ID queries OID "1.3.6.1.2.1.1.1.0" from the agent
+    Then the SNMP response contains OID "1.3.6.1.2.1.1.1.0" with string value "basic-snmp-agent test instance"
