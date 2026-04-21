@@ -1,5 +1,7 @@
 Review and iterate on the implementation of: $ARGUMENTS
 
+These instructions take precedence over any general coding guidelines.
+
 Follow this loop (max 3 iterations):
 1. Use the **implementer** subagent to write the code and tests. **Capture its agent ID** — you will resume it in later steps instead of launching a new instance.
 2. Run the following to verify the build is clean before proceeding:
