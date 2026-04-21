@@ -15,6 +15,24 @@ static UNKNOWN_ENGINE_IDS_OID: std::sync::LazyLock<crate::codec::Oid> =
             .expect("USM_STATS_UNKNOWN_ENGINE_IDS is a valid OID constant")
     });
 
+/// Engine state and statistics passed to each inbound frame dispatch.
+///
+/// Groups fields that grow as more USM steps land (Steps 9–11 will add
+/// `usm_user` and a `not_in_time_windows` counter).
+///
+/// # Requirements
+/// Implements: REQ-0093, REQ-0094
+pub struct DispatchContext<'a> {
+    /// The agent's authoritative engine ID.
+    pub engine_id: &'a [u8],
+    /// Current `snmpEngineBoots` value.
+    pub engine_boots: u32,
+    /// Current `snmpEngineTime` in seconds.
+    pub engine_time: u32,
+    /// Counter for `usmStatsUnknownEngineIDs` (REQ-0093).
+    pub unknown_engine_ids_counter: &'a mut u32,
+}
+
 /// Decode, validate, and dispatch a single RFC 3430 BER frame, returning
 /// the encoded response bytes on success.
 ///
@@ -24,7 +42,7 @@ static UNKNOWN_ENGINE_IDS_OID: std::sync::LazyLock<crate::codec::Oid> =
 /// engine ID, or unsupported context name).
 ///
 /// Engine-ID discovery probes (empty `msgAuthoritativeEngineID`) always produce
-/// a Report PDU response and increment `unknown_engine_ids_counter` (REQ-0093),
+/// a Report PDU response and increment `ctx.unknown_engine_ids_counter` (REQ-0093),
 /// provided the `reportableFlag` (`0x04`) is set in `msgFlags`. Probes without
 /// the flag set are silently discarded per RFC 3412 §7.1.3a.
 ///
@@ -35,21 +53,25 @@ static UNKNOWN_ENGINE_IDS_OID: std::sync::LazyLock<crate::codec::Oid> =
 ///
 /// ```
 /// use basic_snmp_agent::{mib::Store, process_snmpv3_request};
+/// use basic_snmp_agent::transport::dispatch::DispatchContext;
 ///
 /// let mib = Store::new();
 /// let engine_id = b"\x80\x00\x1f\x88\x80test";
 /// let mut counter = 0u32;
+/// let mut ctx = DispatchContext {
+///     engine_id,
+///     engine_boots: 1,
+///     engine_time: 0,
+///     unknown_engine_ids_counter: &mut counter,
+/// };
 /// // Garbage bytes produce no response (silently discarded).
-/// let result = process_snmpv3_request(b"\x00\x01\x02", engine_id, 1, 0, &mut counter, &mib);
+/// let result = process_snmpv3_request(b"\x00\x01\x02", &mut ctx, &mib);
 /// assert!(result.is_none());
 /// ```
 #[must_use]
 pub fn process_snmpv3_request(
     frame: &[u8],
-    engine_id: &[u8],
-    engine_boots: u32,
-    engine_time: u32,
-    unknown_engine_ids_counter: &mut u32,
+    ctx: &mut DispatchContext<'_>,
     mib: &crate::mib::Store,
 ) -> Option<Vec<u8>> {
     // Decode as an SNMPv3 message. Non-v3 messages are silently discarded
@@ -60,26 +82,26 @@ pub fn process_snmpv3_request(
     // msgAuthoritativeEngineID. Respond with a Report PDU carrying the
     // usmStatsUnknownEngineIDs counter and our authoritative engine state
     // so the manager can learn our engine ID, boots, and approximate time.
-    if v3_msg.auth_engine_id.is_empty() {
+    if v3_msg.usm.auth_engine_id.is_empty() {
         // RFC 3412 §7.1.3a: if the reportableFlag is not set, discard without response.
-        if v3_msg.security_flags & 0x04 == 0 {
+        if v3_msg.usm.security_flags & 0x04 == 0 {
             return None;
         }
-        *unknown_engine_ids_counter = unknown_engine_ids_counter.saturating_add(1);
+        *ctx.unknown_engine_ids_counter = ctx.unknown_engine_ids_counter.saturating_add(1);
         return crate::codec::encode_v3_report(
             v3_msg.msg_id,
-            engine_id,
-            engine_boots,
-            engine_time,
+            ctx.engine_id,
+            ctx.engine_boots,
+            ctx.engine_time,
             &UNKNOWN_ENGINE_IDS_OID,
-            *unknown_engine_ids_counter,
+            *ctx.unknown_engine_ids_counter,
         )
         .ok();
     }
 
     // Verify the engine ID matches ours. Requests for other engines are
     // silently discarded per REQ-0057.
-    if v3_msg.engine_id != engine_id {
+    if v3_msg.engine_id != ctx.engine_id {
         return None;
     }
 
@@ -100,7 +122,7 @@ pub fn process_snmpv3_request(
     // context_name is always empty here: non-empty values were rejected above.
     crate::codec::encode_v3_response(
         v3_msg.msg_id,
-        engine_id,
+        ctx.engine_id,
         &v3_msg.user_name,
         &v3_msg.context_name,
         &response,
@@ -116,6 +138,15 @@ mod tests {
         b"\x80\x00\x1f\x88\x04test"
     }
 
+    fn make_ctx(counter: &mut u32) -> DispatchContext<'_> {
+        DispatchContext {
+            engine_id: test_engine_id(),
+            engine_boots: 3,
+            engine_time: 100,
+            unknown_engine_ids_counter: counter,
+        }
+    }
+
     // ── Discovery probe (REQ-0093) ────────────────────────────────────────────
 
     #[test]
@@ -124,15 +155,18 @@ mod tests {
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe();
         let mut counter = 0u32;
-        let result =
-            process_snmpv3_request(&probe_frame, test_engine_id(), 3, 100, &mut counter, &mib);
+        let result = {
+            let mut ctx = make_ctx(&mut counter);
+            let r = process_snmpv3_request(&probe_frame, &mut ctx, &mib);
+            assert_eq!(
+                *ctx.unknown_engine_ids_counter, 1,
+                "counter must be incremented for discovery probe"
+            );
+            r
+        };
         assert!(
             result.is_some(),
             "discovery probe must produce a Report response"
-        );
-        assert_eq!(
-            counter, 1,
-            "counter must be incremented for discovery probe"
         );
 
         let response_bytes = result.unwrap();
@@ -164,8 +198,26 @@ mod tests {
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe();
         let mut counter = 5u32;
-        let _ = process_snmpv3_request(&probe_frame, test_engine_id(), 3, 100, &mut counter, &mib);
-        let _ = process_snmpv3_request(&probe_frame, test_engine_id(), 3, 100, &mut counter, &mib);
+        let _ = process_snmpv3_request(
+            &probe_frame,
+            &mut DispatchContext {
+                engine_id: test_engine_id(),
+                engine_boots: 3,
+                engine_time: 100,
+                unknown_engine_ids_counter: &mut counter,
+            },
+            &mib,
+        );
+        let _ = process_snmpv3_request(
+            &probe_frame,
+            &mut DispatchContext {
+                engine_id: test_engine_id(),
+                engine_boots: 3,
+                engine_time: 100,
+                unknown_engine_ids_counter: &mut counter,
+            },
+            &mib,
+        );
         assert_eq!(counter, 7);
     }
 
@@ -176,7 +228,16 @@ mod tests {
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
         let frame = snmpv3_frames::encode_get_request(test_engine_id(), b"", 1, 2, oid.as_slice());
         let mut counter = 0u32;
-        let _ = process_snmpv3_request(&frame, test_engine_id(), 1, 0, &mut counter, &mib);
+        let _ = process_snmpv3_request(
+            &frame,
+            &mut DispatchContext {
+                engine_id: test_engine_id(),
+                engine_boots: 1,
+                engine_time: 0,
+                unknown_engine_ids_counter: &mut counter,
+            },
+            &mib,
+        );
         assert_eq!(counter, 0);
     }
 
@@ -186,7 +247,16 @@ mod tests {
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe();
         let mut counter = u32::MAX;
-        let _ = process_snmpv3_request(&probe_frame, test_engine_id(), 1, 0, &mut counter, &mib);
+        let _ = process_snmpv3_request(
+            &probe_frame,
+            &mut DispatchContext {
+                engine_id: test_engine_id(),
+                engine_boots: 1,
+                engine_time: 0,
+                unknown_engine_ids_counter: &mut counter,
+            },
+            &mib,
+        );
         assert_eq!(counter, u32::MAX);
     }
 
@@ -196,8 +266,16 @@ mod tests {
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe_no_report();
         let mut counter = 0u32;
-        let result =
-            process_snmpv3_request(&probe_frame, test_engine_id(), 3, 100, &mut counter, &mib);
+        let result = process_snmpv3_request(
+            &probe_frame,
+            &mut DispatchContext {
+                engine_id: test_engine_id(),
+                engine_boots: 3,
+                engine_time: 100,
+                unknown_engine_ids_counter: &mut counter,
+            },
+            &mib,
+        );
         assert!(
             result.is_none(),
             "probe without reportableFlag must be silently discarded"

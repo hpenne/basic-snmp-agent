@@ -568,10 +568,12 @@ impl EventLoop {
 
             let Some(encoded_response) = Self::dispatch_snmpv3_frame(
                 &ber_frame,
-                &self.engine_id,
-                engine_boots,
-                engine_time,
-                &mut self.unknown_engine_ids_counter,
+                &mut crate::transport::dispatch::DispatchContext {
+                    engine_id: &self.engine_id,
+                    engine_boots,
+                    engine_time,
+                    unknown_engine_ids_counter: &mut self.unknown_engine_ids_counter,
+                },
                 &self.store,
             ) else {
                 continue;
@@ -602,20 +604,10 @@ impl EventLoop {
     // Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0093
     fn dispatch_snmpv3_frame(
         ber_frame: &[u8],
-        engine_id: &[u8],
-        engine_boots: u32,
-        engine_time: u32,
-        unknown_engine_ids_counter: &mut u32,
+        ctx: &mut crate::transport::dispatch::DispatchContext<'_>,
         store: &crate::mib::Store,
     ) -> Option<Vec<u8>> {
-        crate::transport::dispatch::process_snmpv3_request(
-            ber_frame,
-            engine_id,
-            engine_boots,
-            engine_time,
-            unknown_engine_ids_counter,
-            store,
-        )
+        crate::transport::dispatch::process_snmpv3_request(ber_frame, ctx, store)
     }
 
     /// Allocate the next unique connection token, skipping reserved values.

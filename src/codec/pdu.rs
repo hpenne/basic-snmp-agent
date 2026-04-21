@@ -229,7 +229,24 @@ pub enum InboundPdu {
     SetRequest(SetRequest),
 }
 
-// ── V3InboundMessage ──────────────────────────────────────────────────────────
+// ── UsmSecurityFields / V3InboundMessage ─────────────────────────────────────
+
+/// USM security parameters extracted from the inbound message header.
+///
+/// # Requirements
+/// Implements: REQ-0093, REQ-0098, REQ-0099
+#[derive(Debug)]
+pub struct UsmSecurityFields {
+    /// `msgAuthoritativeEngineID` from USM security parameters.
+    /// Empty for engine-ID discovery probes (REQ-0093).
+    pub auth_engine_id: Vec<u8>,
+    /// `msgAuthoritativeEngineBoots` from USM security parameters.
+    pub auth_engine_boots: u32,
+    /// `msgAuthoritativeEngineTime` from USM security parameters.
+    pub auth_engine_time: u32,
+    /// Message flags byte: bit 0 = authFlag, bit 1 = privFlag, bit 2 = reportableFlag.
+    pub security_flags: u8,
+}
 
 /// A decoded inbound `SNMPv3` message, containing the message-level fields
 /// extracted from the `HeaderData` and `ScopedPdu` envelope, plus the inner
@@ -250,29 +267,8 @@ pub struct V3InboundMessage {
     pub user_name: Vec<u8>,
     /// The inner PDU ready for dispatch to request handlers.
     pub pdu: InboundPdu,
-    /// `msgAuthoritativeEngineID` from USM security parameters.
-    /// Empty for engine-ID discovery probes (REQ-0093).
-    ///
-    /// # Requirements
-    /// Implements: REQ-0093, REQ-0098, REQ-0099
-    pub auth_engine_id: Vec<u8>,
-    /// `msgAuthoritativeEngineBoots` from USM security parameters.
-    ///
-    /// # Requirements
-    /// Implements: REQ-0098, REQ-0099
-    pub auth_engine_boots: u32,
-    /// `msgAuthoritativeEngineTime` from USM security parameters.
-    ///
-    /// # Requirements
-    /// Implements: REQ-0098, REQ-0099
-    pub auth_engine_time: u32,
-    /// Message flags byte from `HeaderData`:
-    /// bit 0 (`0x01`) = authFlag, bit 1 (`0x02`) = privFlag,
-    /// bit 2 (`0x04`) = reportableFlag.
-    ///
-    /// # Requirements
-    /// Implements: REQ-0098, REQ-0099
-    pub security_flags: u8,
+    /// USM security parameters extracted from the message header.
+    pub usm: UsmSecurityFields,
 }
 
 // ── Outbound PDU structs ──────────────────────────────────────────────────────
@@ -412,13 +408,15 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> 
             DecodeError::new(DecodeErrorKind::Ber, format!("USM decode failed: {e}"))
         })?;
     let user_name = usm_params.user_name.to_vec();
-    let auth_engine_id = usm_params.authoritative_engine_id.to_vec();
     // Values outside the u32 range are clamped to u32::MAX; they will fail
     // time-window validation and trigger a Report PDU rather than causing a panic.
-    let auth_engine_boots =
-        u32::try_from(&usm_params.authoritative_engine_boots).unwrap_or(u32::MAX);
-    let auth_engine_time = u32::try_from(&usm_params.authoritative_engine_time).unwrap_or(u32::MAX);
-    let security_flags = v3_message.global_data.flags.first().copied().unwrap_or(0);
+    let usm = UsmSecurityFields {
+        auth_engine_id: usm_params.authoritative_engine_id.to_vec(),
+        auth_engine_boots: u32::try_from(&usm_params.authoritative_engine_boots)
+            .unwrap_or(u32::MAX),
+        auth_engine_time: u32::try_from(&usm_params.authoritative_engine_time).unwrap_or(u32::MAX),
+        security_flags: v3_message.global_data.flags.first().copied().unwrap_or(0),
+    };
 
     let engine_id = scoped_pdu.engine_id.to_vec();
     let context_name = scoped_pdu.name.to_vec();
@@ -430,10 +428,7 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> 
         context_name,
         user_name,
         pdu,
-        auth_engine_id,
-        auth_engine_boots,
-        auth_engine_time,
-        security_flags,
+        usm,
     })
 }
 
@@ -1962,10 +1957,10 @@ mod tests {
 
         let msg = decode_v3_message(&encoded).unwrap();
 
-        assert_eq!(msg.auth_engine_id, engine_id);
-        assert_eq!(msg.auth_engine_boots, 0);
-        assert_eq!(msg.auth_engine_time, 0);
-        assert_eq!(msg.security_flags, 0x04); // reportableFlag set by encode_get_request
+        assert_eq!(msg.usm.auth_engine_id, engine_id);
+        assert_eq!(msg.usm.auth_engine_boots, 0);
+        assert_eq!(msg.usm.auth_engine_time, 0);
+        assert_eq!(msg.usm.security_flags, 0x04); // reportableFlag set by encode_get_request
     }
 
     // ── encode_v3_report ──────────────────────────────────────────────────────
