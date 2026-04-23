@@ -173,6 +173,53 @@ pub fn encode_get_request_with_user_and_flags(
     )
 }
 
+/// Encode a `SNMPv3` `GetRequest` frame with explicit `msgAuthenticationParameters`.
+///
+/// Unlike [`encode_get_request_with_user_and_flags`] (which always encodes empty `auth_params`),
+/// this function places the given `auth_params` bytes into the USM security parameters.
+/// Use this to build frames for HMAC verification tests: first encode with zeroed `auth_params`,
+/// compute the HMAC, then encode again with the real MAC.
+///
+/// # Examples
+///
+/// ```
+/// // Build with 24 zeroed auth_params (placeholder for HMAC computation)
+/// let frame = snmpv3_frames::encode_get_request_with_auth_params(
+///     b"\x80\x00\x1f\x88\x04test",
+///     b"alice",
+///     b"",
+///     1,
+///     42,
+///     &[1, 3, 6, 1, 2, 1, 1, 1, 0],
+///     0x05, // authNoPriv + reportable
+///     &[0u8; 24],
+/// );
+/// assert!(!frame.is_empty());
+/// ```
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn encode_get_request_with_auth_params(
+    engine_id: &[u8],
+    user_name: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    request_id: i32,
+    oid_arcs: &[u32],
+    msg_flags_byte: u8,
+    auth_params: &[u8],
+) -> Vec<u8> {
+    let rasn_pdu = RasnGetRequest(single_varbind_pdu(request_id, oid_arcs));
+    encode_v3_message_with_auth_params(
+        engine_id,
+        user_name,
+        context_name,
+        msg_id,
+        Pdus::GetRequest(rasn_pdu),
+        msg_flags_byte,
+        auth_params,
+    )
+}
+
 /// Encode a minimal `SNMPv3` `GetNextRequest` frame (noAuthNoPriv, USM).
 ///
 /// # Examples
@@ -370,9 +417,7 @@ fn encode_discovery_probe_with_flags(flags: Vec<u8>) -> Vec<u8> {
 
 // Encode a complete SNMPv3 message with noAuthNoPriv USM security parameters,
 // with the authoritative engine ID set to the agent's engine_id.
-// user_name is placed in the USM msgUserName field.
-// msg_id is used as the message identifier in the V3 header.
-// msg_flags_byte is placed as the sole byte of msgFlags.
+// Delegates to encode_v3_message_with_auth_params with empty auth_params.
 fn encode_v3_message(
     engine_id: &[u8],
     user_name: &[u8],
@@ -381,19 +426,38 @@ fn encode_v3_message(
     pdus: Pdus,
     msg_flags_byte: u8,
 ) -> Vec<u8> {
+    encode_v3_message_with_auth_params(
+        engine_id,
+        user_name,
+        context_name,
+        msg_id,
+        pdus,
+        msg_flags_byte,
+        &[],
+    )
+}
+
+// Like encode_v3_message but with explicit auth_params bytes in USMSecurityParameters.
+fn encode_v3_message_with_auth_params(
+    engine_id: &[u8],
+    user_name: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    pdus: Pdus,
+    msg_flags_byte: u8,
+    auth_params: &[u8],
+) -> Vec<u8> {
     let scoped_pdu = ScopedPdu {
         engine_id: engine_id.to_vec().into(),
         name: context_name.to_vec().into(),
         data: pdus,
     };
     let usm_params = USMSecurityParameters {
-        // RFC 3414 §3.1.4b: for normal requests, the authoritative engine ID
-        // identifies the agent. Discovery probes set this to empty.
         authoritative_engine_id: engine_id.to_vec().into(),
         authoritative_engine_boots: 0.into(),
         authoritative_engine_time: 0.into(),
         user_name: rasn::types::OctetString::from(user_name.to_vec()),
-        authentication_parameters: rasn::types::OctetString::from(vec![]),
+        authentication_parameters: rasn::types::OctetString::from(auth_params.to_vec()),
         privacy_parameters: rasn::types::OctetString::from(vec![]),
     };
     let security_parameters_bytes =

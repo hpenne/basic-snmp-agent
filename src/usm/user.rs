@@ -486,7 +486,10 @@ mod tests {
             SecurityLevel::from_msg_flags(0x03),
             Ok(SecurityLevel::AuthPriv)
         );
-        assert_eq!(SecurityLevel::from_msg_flags(0x02), Err(InvalidMsgFlags(0x02)));
+        assert_eq!(
+            SecurityLevel::from_msg_flags(0x02),
+            Err(InvalidMsgFlags(0x02))
+        );
     }
 
     #[test]
@@ -525,7 +528,7 @@ mod tests {
     }
 
     #[test]
-    fn from_msg_flags_invalid_combination_preserves_raw_byte_in_error() {
+    fn from_msg_flags_invalid_combination_carries_raw_byte() {
         // Verifies: REQ-0079 — the error carries the raw flags byte for diagnostics
         let err = SecurityLevel::from_msg_flags(0x02).unwrap_err();
         assert_eq!(err, InvalidMsgFlags(0x02));
@@ -533,6 +536,9 @@ mod tests {
         let err = SecurityLevel::from_msg_flags(0xFE).unwrap_err(); // 0xFE & 0x03 == 0x02
         assert_eq!(err, InvalidMsgFlags(0xFE));
         // Display includes the raw byte in hex
-        assert!(err.to_string().contains("0xfe"), "error message must include the raw flags byte");
+        assert!(
+            err.to_string().contains("0xfe"),
+            "error message must include the raw flags byte"
+        );
     }
 }

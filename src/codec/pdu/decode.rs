@@ -166,6 +166,9 @@ pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
 /// The inner `Pdus` variant must be an inbound request type; response and trap
 /// PDUs are rejected.
 ///
+/// The `raw_message` field of the returned struct is a reference to the input
+/// `bytes` slice, so the returned value borrows from `bytes`.
+///
 /// # Errors
 ///
 /// Returns a [`DecodeError`] if:
@@ -174,6 +177,12 @@ pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
 /// - The scoped PDU is encrypted ([`DecodeErrorKind::EncryptedPdu`]).
 /// - The inner PDU type is not a recognised inbound type.
 /// - An OID or value in a varbind cannot be decoded.
+///
+/// # Panics
+///
+/// Panics if the successfully decoded USM security parameters or `auth_params`
+/// bytes cannot be located within the raw message bytes. This is a decode
+/// invariant violation: if the BER decode succeeded, the bytes must be present.
 ///
 /// # Requirements
 /// Implements: REQ-0068, REQ-0069, REQ-0071, REQ-0073, REQ-0100
@@ -189,7 +198,7 @@ pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
 ///     Err(e) => eprintln!("decode failed: {e}"),
 /// }
 /// ```
-pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> {
+pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeError> {
     let v3_message: V3Message = rasn::ber::decode(bytes)
         .map_err(|e| DecodeError::new(DecodeErrorKind::Ber, format!("BER decode failed: {e}")))?;
 
@@ -250,6 +259,31 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> 
     let context_name = scoped_pdu.name.to_vec();
     let pdu = pdus_to_inbound_pdu(scoped_pdu.data)?;
 
+    // Find auth_params_offset using a two-step restricted search.
+    // Step 1: locate the USM security parameters bytes within raw_message.
+    //   (These ~50+ bytes include the engine_id which is agent-controlled,
+    //   making a false match in the ScopedPDU region astronomically unlikely.)
+    // Step 2: find auth_params within that restricted region.
+    //   (Only attacker-controlled bytes within USM are user_name — validated to
+    //   match the configured user — and auth_params itself.)
+    // This avoids false matches against attacker-controlled varbind data in the ScopedPDU.
+    let usm_raw = v3_message.security_parameters.as_ref();
+    let auth_params_offset = if usm.auth_params.is_empty() {
+        None
+    } else {
+        let usm_pos = bytes
+            .windows(usm_raw.len())
+            .position(|w| w == usm_raw)
+            // Decoded from bytes, so it must be present.
+            .expect("USM security parameters must appear in raw_message");
+        let auth_pos = bytes[usm_pos..usm_pos + usm_raw.len()]
+            .windows(usm.auth_params.len())
+            .position(|w| w == usm.auth_params.as_slice())
+            // Decoded from USM params, so auth_params must be within the USM region.
+            .expect("auth_params must appear within the USM security parameters region");
+        Some(usm_pos + auth_pos)
+    };
+
     Ok(V3InboundMessage {
         msg_id,
         engine_id,
@@ -257,9 +291,8 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> 
         user_name,
         pdu,
         usm,
-        // Copied unconditionally to keep the decode path simple; dispatch skips
-        // HMAC verification for noAuthNoPriv messages (REQ-0103).
-        raw_message: bytes.to_vec(),
+        raw_message: bytes,
+        auth_params_offset,
     })
 }
 
@@ -668,24 +701,35 @@ mod tests {
         assert_eq!(msg.usm.auth_engine_boots, 0);
         assert_eq!(msg.usm.auth_engine_time, 0);
         assert_eq!(msg.usm.security_flags, 0x04); // reportableFlag set by encode_get_request
+        assert!(
+            msg.usm.auth_params.is_empty(),
+            "noAuthNoPriv messages must have empty auth_params"
+        );
     }
 
     #[test]
     fn given_v3_message_with_auth_params_when_decode_then_auth_params_preserved() {
         // Verifies: REQ-0100 — auth params are preserved for HMAC verification
+        use rasn_snmp::v2::{
+            GetRequest as RasnGetRequest2, Pdu, Pdus as V2Pdus, VarBind, VarBindValue,
+        };
         use rasn_snmp::v3::{HeaderData, ScopedPdu, ScopedPduData as V3ScopedPduData};
-        use rasn_snmp::v2::{GetRequest as RasnGetRequest2, Pdu, Pdus as V2Pdus, VarBind, VarBindValue};
         use std::borrow::Cow;
 
         let engine_id = b"\x80\x00\x1f\x88\x04test";
         let expected_auth_params: Vec<u8> = vec![0xABu8; 24]; // 24 bytes as for SHA-256
 
-        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(vec![1, 3, 6, 1, 2, 1, 1, 1, 0]));
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(vec![
+            1, 3, 6, 1, 2, 1, 1, 1, 0,
+        ]));
         let get_request = RasnGetRequest2(Pdu {
             request_id: 1,
             error_status: 0,
             error_index: 0,
-            variable_bindings: vec![VarBind { name: rasn_oid, value: VarBindValue::Unspecified }],
+            variable_bindings: vec![VarBind {
+                name: rasn_oid,
+                value: VarBindValue::Unspecified,
+            }],
         });
         let usm_params = USMSecurityParameters {
             authoritative_engine_id: engine_id.to_vec().into(),
@@ -720,6 +764,11 @@ mod tests {
             msg.usm.auth_params, expected_auth_params,
             "auth_params must be preserved from msgAuthenticationParameters"
         );
+        assert_eq!(
+            msg.raw_message,
+            encoded.as_slice(),
+            "raw_message must be the input bytes slice"
+        );
     }
 
     #[test]
@@ -733,7 +782,85 @@ mod tests {
 
         assert_eq!(
             msg.raw_message, encoded,
-            "raw_message must be a copy of the input bytes"
+            "raw_message must reference the input bytes"
+        );
+    }
+
+    #[test]
+    fn given_v3_message_with_auth_params_when_decode_then_offset_points_to_auth_params() {
+        // Verifies: REQ-0100 — auth_params_offset enables secure HMAC zeroing in dispatch
+        use rasn_snmp::v2::{
+            GetRequest as RasnGetRequest2, Pdu, Pdus as V2Pdus, VarBind, VarBindValue,
+        };
+        use rasn_snmp::v3::{HeaderData, ScopedPdu, ScopedPduData as V3ScopedPduData};
+        use std::borrow::Cow;
+
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let expected_auth_params: Vec<u8> = vec![0xABu8; 24];
+
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(vec![
+            1, 3, 6, 1, 2, 1, 1, 1, 0,
+        ]));
+        let get_request = RasnGetRequest2(Pdu {
+            request_id: 1,
+            error_status: 0,
+            error_index: 0,
+            variable_bindings: vec![VarBind {
+                name: rasn_oid,
+                value: VarBindValue::Unspecified,
+            }],
+        });
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: engine_id.to_vec().into(),
+            authoritative_engine_boots: 1.into(),
+            authoritative_engine_time: 0.into(),
+            user_name: rasn::types::OctetString::from(b"alice".to_vec()),
+            authentication_parameters: rasn::types::OctetString::from(expected_auth_params.clone()),
+            privacy_parameters: rasn::types::OctetString::from(vec![]),
+        };
+        let security_params = rasn::ber::encode(&usm_params).unwrap();
+        let scoped_pdu = ScopedPdu {
+            engine_id: engine_id.to_vec().into(),
+            name: vec![].into(),
+            data: V2Pdus::GetRequest(get_request),
+        };
+        let v3_msg = V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 42.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x05u8]),
+                security_model: 3.into(),
+            },
+            security_parameters: security_params.into(),
+            scoped_data: V3ScopedPduData::CleartextPdu(scoped_pdu),
+        };
+        let encoded = rasn::ber::encode(&v3_msg).unwrap();
+
+        let msg = decode_v3_message(&encoded).unwrap();
+
+        let offset = msg
+            .auth_params_offset
+            .expect("authenticated message must have an auth_params_offset");
+        assert_eq!(
+            &msg.raw_message[offset..offset + expected_auth_params.len()],
+            expected_auth_params.as_slice(),
+            "raw_message at auth_params_offset must contain the auth_params bytes"
+        );
+    }
+
+    #[test]
+    fn given_noauthnopri_v3_message_when_decode_then_auth_params_offset_is_none() {
+        // Verifies: REQ-0100 — noAuthNoPriv messages have no auth_params offset
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        let encoded = snmpv3_frames::encode_get_request(engine_id, b"", 1, 2, oid.as_slice());
+
+        let msg = decode_v3_message(&encoded).unwrap();
+
+        assert!(
+            msg.auth_params_offset.is_none(),
+            "noAuthNoPriv messages must have auth_params_offset = None"
         );
     }
 }

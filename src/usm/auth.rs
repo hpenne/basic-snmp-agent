@@ -113,7 +113,7 @@ impl AuthProtocol {
     /// key length is wrong.
     ///
     /// # Requirements
-    /// Implements: REQ-0083, REQ-0086, REQ-0087
+    /// Implements: REQ-0083, REQ-0086, REQ-0087, REQ-0100
     ///
     /// # Panics
     ///
@@ -123,18 +123,27 @@ impl AuthProtocol {
     /// # Errors
     ///
     /// Returns [`AuthError::InvalidKeyLength`] if the key length does not match
-    /// the protocol's required length, or [`AuthError::MacMismatch`] if the
-    /// MAC does not match.
+    /// the protocol's required length, [`AuthError::InvalidMacLength`] if the
+    /// MAC is not exactly [`mac_len`][Self::mac_len] bytes, or
+    /// [`AuthError::MacMismatch`] if the MAC does not match.
     pub fn verify_mac(
         self,
         key: &SecretKey,
         message: &[u8],
         expected_mac: &[u8],
     ) -> Result<(), AuthError> {
+        // Validate the internal key length first (precondition on our own state).
         if key.len() != self.key_len() {
             return Err(AuthError::InvalidKeyLength {
                 expected: self.key_len(),
                 actual: key.len(),
+            });
+        }
+        // Then validate the external MAC length (attacker-controlled input).
+        if expected_mac.len() != self.mac_len() {
+            return Err(AuthError::InvalidMacLength {
+                expected: self.mac_len(),
+                actual: expected_mac.len(),
             });
         }
         // Uses the `hmac` crate's constant-time `verify_truncated_left`, which
@@ -166,6 +175,8 @@ impl AuthProtocol {
 pub enum AuthError {
     /// The supplied key has the wrong length for the authentication protocol.
     InvalidKeyLength { expected: usize, actual: usize },
+    /// The received MAC has the wrong length for this protocol.
+    InvalidMacLength { expected: usize, actual: usize },
     /// The MAC did not match.
     MacMismatch,
 }
@@ -176,6 +187,10 @@ impl std::fmt::Display for AuthError {
             Self::InvalidKeyLength { expected, actual } => write!(
                 f,
                 "invalid authentication key length: expected {expected} bytes, got {actual}"
+            ),
+            Self::InvalidMacLength { expected, actual } => write!(
+                f,
+                "invalid MAC length: expected {expected} bytes, got {actual}"
             ),
             Self::MacMismatch => write!(f, "authentication MAC mismatch"),
         }
@@ -398,6 +413,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn given_wrong_mac_length_when_verify_sha256_then_invalid_mac_length_error() {
+        // Verifies: REQ-0100
+        let key = SecretKey::new(vec![0x33u8; 32]);
+        let short_mac = vec![0u8; 12]; // 12 bytes, not 24
+        assert_eq!(
+            AuthProtocol::HmacSha256.verify_mac(&key, b"msg", &short_mac),
+            Err(AuthError::InvalidMacLength {
+                expected: 24,
+                actual: 12
+            })
+        );
+    }
+
+    #[test]
+    fn given_empty_mac_when_verify_sha256_then_invalid_mac_length_error() {
+        // Verifies: REQ-0100
+        let key = SecretKey::new(vec![0x33u8; 32]);
+        assert_eq!(
+            AuthProtocol::HmacSha256.verify_mac(&key, b"msg", &[]),
+            Err(AuthError::InvalidMacLength {
+                expected: 24,
+                actual: 0
+            })
+        );
+    }
+
     // ── error display ─────────────────────────────────────────────────────────
 
     #[test]
@@ -409,6 +451,18 @@ mod tests {
         assert_eq!(
             e.to_string(),
             "invalid authentication key length: expected 32 bytes, got 16"
+        );
+    }
+
+    #[test]
+    fn auth_error_invalid_mac_length_display() {
+        let e = AuthError::InvalidMacLength {
+            expected: 24,
+            actual: 12,
+        };
+        assert_eq!(
+            e.to_string(),
+            "invalid MAC length: expected 24 bytes, got 12"
         );
     }
 

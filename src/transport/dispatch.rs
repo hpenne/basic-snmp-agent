@@ -31,6 +31,13 @@ static UNSUPPORTED_SEC_LEVELS_OID: std::sync::LazyLock<crate::codec::Oid> =
             .expect("USM_STATS_UNSUPPORTED_SEC_LEVELS is a valid OID constant")
     });
 
+// Implements: REQ-0100
+static WRONG_DIGESTS_OID: std::sync::LazyLock<crate::codec::Oid> = std::sync::LazyLock::new(|| {
+    crate::usm::counters::USM_STATS_WRONG_DIGESTS
+        .parse()
+        .expect("USM_STATS_WRONG_DIGESTS is a valid OID constant")
+});
+
 /// Engine state and statistics passed to each inbound frame dispatch.
 ///
 /// # Requirements
@@ -61,6 +68,30 @@ pub struct DispatchContext<'a> {
     pub usm_user: Option<&'a crate::usm::user::UsmUser>,
 }
 
+/// Return a copy of `raw_message` with the `msgAuthenticationParameters` bytes zeroed.
+///
+/// `auth_params_offset` is the byte offset within `raw_message` where the MAC
+/// field starts; `auth_params_len` is its length. Both are recorded during
+/// decode to avoid byte-value searching, which could be misled by attacker-
+/// controlled varbind data in the `ScopedPDU`.
+///
+/// # Requirements
+/// Implements: REQ-0100
+#[must_use]
+fn zero_auth_params_in_message(
+    raw_message: &[u8],
+    auth_params_offset: usize,
+    auth_params_len: usize,
+) -> Vec<u8> {
+    debug_assert!(
+        auth_params_len > 0,
+        "caller must check auth_params is non-empty"
+    );
+    let mut zeroed = raw_message.to_vec();
+    zeroed[auth_params_offset..auth_params_offset + auth_params_len].fill(0);
+    zeroed
+}
+
 /// Decode, validate, and dispatch a single RFC 3430 BER frame, returning
 /// the encoded response bytes on success.
 ///
@@ -75,7 +106,7 @@ pub struct DispatchContext<'a> {
 /// the flag set are silently discarded per RFC 3412 §7.1.3a.
 ///
 /// # Requirements
-/// Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0103
+/// Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0100, REQ-0102, REQ-0103
 ///
 /// # Examples
 ///
@@ -106,6 +137,9 @@ pub struct DispatchContext<'a> {
 /// assert!(result.is_none());
 /// ```
 #[must_use]
+// Each branch implements a sequential RFC 3414 security check; extracting them
+// into helpers would obscure the mandated processing order.
+#[allow(clippy::too_many_lines)]
 pub fn process_snmpv3_request(
     frame: &[u8],
     ctx: &mut DispatchContext<'_>,
@@ -189,6 +223,41 @@ pub fn process_snmpv3_request(
         }
     }
 
+    // REQ-0100, REQ-0102: HMAC verification for authenticated messages.
+    // Runs after security-level check per REQ-0102 processing order.
+    // For noAuthNoPriv users, auth_protocol() returns None so this block is skipped (REQ-0103).
+    if let Some(user) = ctx.usm_user
+        && let (Some(auth_protocol), Some(auth_key)) = (user.auth_protocol(), user.auth_key())
+    {
+        let auth_params = &v3_msg.usm.auth_params;
+        let hmac_ok = match v3_msg.auth_params_offset {
+            Some(offset) => {
+                let zeroed =
+                    zero_auth_params_in_message(v3_msg.raw_message, offset, auth_params.len());
+                auth_protocol
+                    .verify_mac(auth_key, &zeroed, auth_params)
+                    .is_ok()
+            }
+            // Empty auth_params for an auth user is always wrong.
+            None => false,
+        };
+        if !hmac_ok {
+            *ctx.wrong_digests_counter = ctx.wrong_digests_counter.saturating_add(1);
+            if v3_msg.usm.security_flags & 0x04 == 0 {
+                return None;
+            }
+            return crate::codec::encode_v3_report(
+                v3_msg.msg_id,
+                ctx.engine_id,
+                ctx.engine_boots,
+                ctx.engine_time,
+                &WRONG_DIGESTS_OID,
+                *ctx.wrong_digests_counter,
+            )
+            .ok();
+        }
+    }
+
     // Only the default (empty) context name is supported per REQ-0058.
     if !v3_msg.context_name.is_empty() {
         return None;
@@ -251,18 +320,23 @@ mod tests {
             }
         }
 
-        fn with_unknown_engine_ids(mut self, n: u32) -> Self {
-            self.unknown_engine_ids = n;
+        fn with_unknown_engine_ids(mut self, initial_count: u32) -> Self {
+            self.unknown_engine_ids = initial_count;
             self
         }
 
-        fn with_unknown_user_names(mut self, n: u32) -> Self {
-            self.unknown_user_names = n;
+        fn with_unknown_user_names(mut self, initial_count: u32) -> Self {
+            self.unknown_user_names = initial_count;
             self
         }
 
-        fn with_unsupported_sec_levels(mut self, n: u32) -> Self {
-            self.unsupported_sec_levels = n;
+        fn with_unsupported_sec_levels(mut self, initial_count: u32) -> Self {
+            self.unsupported_sec_levels = initial_count;
+            self
+        }
+
+        fn with_wrong_digests(mut self, initial_count: u32) -> Self {
+            self.wrong_digests = initial_count;
             self
         }
 
@@ -302,8 +376,14 @@ mod tests {
             let mut ctx = tc.ctx(None);
             process_snmpv3_request(&probe_frame, &mut ctx, &mib)
         };
-        assert_eq!(tc.unknown_engine_ids, 1, "counter must be incremented for discovery probe");
-        assert!(result.is_some(), "discovery probe must produce a Report response");
+        assert_eq!(
+            tc.unknown_engine_ids, 1,
+            "counter must be incremented for discovery probe"
+        );
+        assert!(
+            result.is_some(),
+            "discovery probe must produce a Report response"
+        );
 
         let response_bytes = result.unwrap();
         let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
@@ -333,7 +413,9 @@ mod tests {
         // Verifies: REQ-0093 — counter accumulates across calls
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe();
-        let mut tc = TestCtx::new().with_unknown_engine_ids(5).with_boots_time(3, 100);
+        let mut tc = TestCtx::new()
+            .with_unknown_engine_ids(5)
+            .with_boots_time(3, 100);
         {
             let mut ctx = tc.ctx(None);
             let _ = process_snmpv3_request(&probe_frame, &mut ctx, &mib);
@@ -382,8 +464,14 @@ mod tests {
             let mut ctx = tc.ctx(None);
             process_snmpv3_request(&probe_frame, &mut ctx, &mib)
         };
-        assert!(result.is_none(), "probe without reportableFlag must be silently discarded");
-        assert_eq!(tc.unknown_engine_ids, 0, "counter must not be incremented for non-reportable probe");
+        assert!(
+            result.is_none(),
+            "probe without reportableFlag must be silently discarded"
+        );
+        assert_eq!(
+            tc.unknown_engine_ids, 0,
+            "counter must not be incremented for non-reportable probe"
+        );
     }
 
     // ── User-name lookup (REQ-0078, REQ-0080) ────────────────────────────────
@@ -399,7 +487,10 @@ mod tests {
             let mut ctx = tc.ctx(None);
             process_snmpv3_request(&frame, &mut ctx, &mib)
         };
-        assert!(result.is_some(), "request must pass through when no USM user is configured");
+        assert!(
+            result.is_some(),
+            "request must pass through when no USM user is configured"
+        );
         assert_eq!(tc.unknown_user_names, 0, "counter must not be incremented");
     }
 
@@ -421,8 +512,14 @@ mod tests {
             let mut ctx = tc.ctx(Some(&alice));
             process_snmpv3_request(&frame, &mut ctx, &mib)
         };
-        assert!(result.is_some(), "matching user name must produce a response");
-        assert_eq!(tc.unknown_user_names, 0, "counter must not be incremented on match");
+        assert!(
+            result.is_some(),
+            "matching user name must produce a response"
+        );
+        assert_eq!(
+            tc.unknown_user_names, 0,
+            "counter must not be incremented on match"
+        );
 
         // Verify the response is a normal GetResponse (Pdus::Response), not a Report.
         let response_bytes = result.unwrap();
@@ -457,8 +554,14 @@ mod tests {
             let mut ctx = tc.ctx(Some(&alice));
             process_snmpv3_request(&frame, &mut ctx, &mib)
         };
-        assert!(result.is_some(), "mismatched user name must produce a Report response");
-        assert_eq!(tc.unknown_user_names, 1, "counter must be incremented on mismatch");
+        assert!(
+            result.is_some(),
+            "mismatched user name must produce a Report response"
+        );
+        assert_eq!(
+            tc.unknown_user_names, 1,
+            "counter must be incremented on mismatch"
+        );
 
         let response_bytes = result.unwrap();
         let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
@@ -485,7 +588,7 @@ mod tests {
 
     #[test]
     fn given_mismatched_user_name_without_reportable_flag_when_process_then_discarded_but_counter_incremented()
-    {
+     {
         // Verifies: REQ-0078 — no Report when reportableFlag is not set, but counter still increments
         let mib = crate::mib::Store::new();
         let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
@@ -503,8 +606,14 @@ mod tests {
             let mut ctx = tc.ctx(Some(&alice));
             process_snmpv3_request(&frame, &mut ctx, &mib)
         };
-        assert!(result.is_none(), "user-name mismatch without reportableFlag must be silently discarded");
-        assert_eq!(tc.unknown_user_names, 1, "counter must still be incremented even when no Report is sent");
+        assert!(
+            result.is_none(),
+            "user-name mismatch without reportableFlag must be silently discarded"
+        );
+        assert_eq!(
+            tc.unknown_user_names, 1,
+            "counter must still be incremented even when no Report is sent"
+        );
     }
 
     #[test]
@@ -549,8 +658,14 @@ mod tests {
             let mut ctx = tc.ctx(Some(&alice));
             process_snmpv3_request(&frame, &mut ctx, &mib)
         };
-        assert!(result.is_some(), "matching security level must produce a response");
-        assert_eq!(tc.unsupported_sec_levels, 0, "counter must not be incremented on match");
+        assert!(
+            result.is_some(),
+            "matching security level must produce a response"
+        );
+        assert_eq!(
+            tc.unsupported_sec_levels, 0,
+            "counter must not be incremented on match"
+        );
         let response_bytes = result.unwrap();
         let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
             .expect("response must be a valid SNMPv3 message");
@@ -583,8 +698,14 @@ mod tests {
             let mut ctx = tc.ctx(Some(&alice));
             process_snmpv3_request(&frame, &mut ctx, &mib)
         };
-        assert!(result.is_some(), "security-level mismatch must produce a Report response");
-        assert_eq!(tc.unsupported_sec_levels, 1, "counter must be incremented on mismatch");
+        assert!(
+            result.is_some(),
+            "security-level mismatch must produce a Report response"
+        );
+        assert_eq!(
+            tc.unsupported_sec_levels, 1,
+            "counter must be incremented on mismatch"
+        );
         let response_bytes = result.unwrap();
         let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
             .expect("response must be a valid SNMPv3 message");
@@ -596,8 +717,14 @@ mod tests {
             test_engine_id(),
             "Report response must carry the agent's engine ID"
         );
-        assert_eq!(u32::try_from(usm_params.authoritative_engine_boots).unwrap(), 1u32);
-        assert_eq!(u32::try_from(usm_params.authoritative_engine_time).unwrap(), 0u32);
+        assert_eq!(
+            u32::try_from(usm_params.authoritative_engine_boots).unwrap(),
+            1u32
+        );
+        assert_eq!(
+            u32::try_from(usm_params.authoritative_engine_time).unwrap(),
+            0u32
+        );
 
         // Verify the Report PDU contains the correct varbind (usmStatsUnsupportedSecLevels).
         let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
@@ -606,10 +733,16 @@ mod tests {
         let rasn_snmp::v2::Pdus::Report(report_pdu) = scoped_pdu.data else {
             panic!("response must be a Report PDU, not a GetResponse");
         };
-        assert_eq!(report_pdu.0.variable_bindings.len(), 1, "Report PDU must contain exactly one varbind");
+        assert_eq!(
+            report_pdu.0.variable_bindings.len(),
+            1,
+            "Report PDU must contain exactly one varbind"
+        );
         let varbind = &report_pdu.0.variable_bindings[0];
         let expected_oid: crate::codec::Oid =
-            crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS.parse().unwrap();
+            crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS
+                .parse()
+                .unwrap();
         assert_eq!(
             varbind.name.as_ref(),
             expected_oid.as_slice(),
@@ -627,7 +760,7 @@ mod tests {
 
     #[test]
     fn given_mismatched_security_level_without_reportable_flag_when_process_then_discarded_but_counter_incremented()
-    {
+     {
         // Verifies: REQ-0079
         let mib = crate::mib::Store::new();
         let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
@@ -646,8 +779,14 @@ mod tests {
             let mut ctx = tc.ctx(Some(&alice));
             process_snmpv3_request(&frame, &mut ctx, &mib)
         };
-        assert!(result.is_none(), "security-level mismatch without reportableFlag must be silently discarded");
-        assert_eq!(tc.unsupported_sec_levels, 1, "counter must still be incremented even when no Report is sent");
+        assert!(
+            result.is_none(),
+            "security-level mismatch without reportableFlag must be silently discarded"
+        );
+        assert_eq!(
+            tc.unsupported_sec_levels, 1,
+            "counter must still be incremented even when no Report is sent"
+        );
     }
 
     #[test]
@@ -669,8 +808,14 @@ mod tests {
             let mut ctx = tc.ctx(None);
             process_snmpv3_request(&frame, &mut ctx, &mib)
         };
-        assert!(result.is_some(), "request must pass through when no USM user is configured");
-        assert_eq!(tc.unsupported_sec_levels, 0, "counter must not be incremented");
+        assert!(
+            result.is_some(),
+            "request must pass through when no USM user is configured"
+        );
+        assert_eq!(
+            tc.unsupported_sec_levels, 0,
+            "counter must not be incremented"
+        );
     }
 
     #[test]
@@ -692,12 +837,16 @@ mod tests {
             let mut ctx = tc.ctx(Some(&alice));
             let _ = process_snmpv3_request(&frame, &mut ctx, &mib);
         }
-        assert_eq!(tc.unsupported_sec_levels, u32::MAX, "counter must not overflow");
+        assert_eq!(
+            tc.unsupported_sec_levels,
+            u32::MAX,
+            "counter must not overflow"
+        );
     }
 
     #[test]
     fn given_invalid_priv_without_auth_flags_when_process_then_returns_report_and_increments_counter()
-    {
+     {
         // Verifies: REQ-0079 — privFlag=1, authFlag=0 (0x06) is invalid and treated as a mismatch
         let mib = crate::mib::Store::new();
         let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
@@ -716,7 +865,308 @@ mod tests {
             let mut ctx = tc.ctx(Some(&alice));
             process_snmpv3_request(&frame, &mut ctx, &mib)
         };
-        assert!(result.is_some(), "invalid msgFlags combination must produce a Report response");
-        assert_eq!(tc.unsupported_sec_levels, 1, "counter must be incremented for invalid msgFlags");
+        assert!(
+            result.is_some(),
+            "invalid msgFlags combination must produce a Report response"
+        );
+        assert_eq!(
+            tc.unsupported_sec_levels, 1,
+            "counter must be incremented for invalid msgFlags"
+        );
+    }
+
+    // ── HMAC verification (REQ-0100, REQ-0102) ───────────────────────────────
+
+    /// Build a `GetRequest` frame authenticated with HMAC-SHA-256 using the given key bytes.
+    /// The frame is addressed to `test_engine_id()` with user "alice", flags 0x05 (authNoPriv + reportable).
+    fn build_authenticated_frame(auth_key_bytes: &[u8]) -> Vec<u8> {
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let mac_len = AuthProtocol::HmacSha256.mac_len(); // 24 bytes
+        let engine_id = test_engine_id();
+        let oid = test_oid_arcs();
+
+        // Step 1: build with zeroed auth_params so we can compute the HMAC.
+        let frame_with_zeros = snmpv3_frames::encode_get_request_with_auth_params(
+            engine_id,
+            b"alice",
+            b"",
+            1,
+            2,
+            oid,
+            0x05,
+            &vec![0u8; mac_len],
+        );
+
+        // Step 2: compute the HMAC over the frame with zeroed auth_params.
+        let key = SecretKey::new(auth_key_bytes.to_vec());
+        let mac = AuthProtocol::HmacSha256
+            .compute_mac(&key, &frame_with_zeros)
+            .unwrap();
+
+        // Step 3: replace the zeroed auth_params with the real MAC.
+        // Safe here: [0u8; 24] only appears at the auth_params position in this test message.
+        let zeros = vec![0u8; mac_len];
+        let pos = frame_with_zeros
+            .windows(mac_len)
+            .position(|w| w == zeros.as_slice())
+            .unwrap();
+        let mut frame = frame_with_zeros;
+        frame[pos..pos + mac_len].copy_from_slice(&mac);
+        frame
+    }
+
+    #[test]
+    fn given_correct_hmac_when_process_then_proceeds() {
+        // Verifies: REQ-0100, REQ-0102
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let mib = crate::mib::Store::new();
+        let auth_key_bytes = [0x42u8; 32];
+        let alice = crate::usm::user::UsmUser::auth_no_priv(
+            "alice",
+            AuthProtocol::HmacSha256,
+            SecretKey::new(auth_key_bytes.to_vec()),
+        );
+        let authenticated_frame = build_authenticated_frame(&auth_key_bytes);
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&authenticated_frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_some(),
+            "correct HMAC must produce a normal response"
+        );
+        assert_eq!(
+            tc.wrong_digests, 0,
+            "counter must not be incremented on correct HMAC"
+        );
+        // Verify it's a GetResponse (not a Report)
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&result.unwrap())
+            .expect("response must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("response must contain a cleartext ScopedPDU");
+        };
+        assert!(
+            matches!(scoped_pdu.data, rasn_snmp::v2::Pdus::Response(_)),
+            "response must be a GetResponse, not a Report"
+        );
+    }
+
+    #[test]
+    fn given_wrong_hmac_when_process_then_returns_report_and_increments_counter() {
+        // Verifies: REQ-0100, REQ-0102
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let mib = crate::mib::Store::new();
+        let alice = crate::usm::user::UsmUser::auth_no_priv(
+            "alice",
+            AuthProtocol::HmacSha256,
+            SecretKey::new(vec![0x42u8; 32]),
+        );
+        // Build frame with an incorrect MAC (all-0xBB bytes)
+        let frame_with_wrong_mac = snmpv3_frames::encode_get_request_with_auth_params(
+            test_engine_id(),
+            b"alice",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+            0x05,
+            &[0xBBu8; 24],
+        );
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame_with_wrong_mac, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_some(),
+            "wrong HMAC must produce a Report response"
+        );
+        assert_eq!(
+            tc.wrong_digests, 1,
+            "counter must be incremented on wrong HMAC"
+        );
+        // Verify the Report carries usmStatsWrongDigests
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&result.unwrap())
+            .expect("response must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("Report response must contain a cleartext ScopedPDU");
+        };
+        let rasn_snmp::v2::Pdus::Report(report_pdu) = scoped_pdu.data else {
+            panic!("response must be a Report PDU, not a GetResponse");
+        };
+        assert_eq!(
+            report_pdu.0.variable_bindings.len(),
+            1,
+            "Report must contain exactly one varbind"
+        );
+        let varbind = &report_pdu.0.variable_bindings[0];
+        let expected_oid: crate::codec::Oid = crate::usm::counters::USM_STATS_WRONG_DIGESTS
+            .parse()
+            .unwrap();
+        assert_eq!(
+            varbind.name.as_ref(),
+            expected_oid.as_slice(),
+            "Report varbind OID must be usmStatsWrongDigests"
+        );
+        let rasn_snmp::v2::VarBindValue::Value(rasn_smi::v2::ObjectSyntax::ApplicationWide(
+            rasn_smi::v2::ApplicationSyntax::Counter(ref counter),
+        )) = varbind.value
+        else {
+            panic!("Report varbind value must be a Counter32");
+        };
+        assert_eq!(counter.0, 1u32, "Report varbind must carry counter value 1");
+    }
+
+    #[test]
+    fn given_empty_auth_params_with_auth_user_when_process_then_returns_report() {
+        // Verifies: REQ-0100 — empty auth_params for an authenticated user is rejected
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let mib = crate::mib::Store::new();
+        let alice = crate::usm::user::UsmUser::auth_no_priv(
+            "alice",
+            AuthProtocol::HmacSha256,
+            SecretKey::new(vec![0x42u8; 32]),
+        );
+        // Build frame with authFlag but empty auth_params (malformed)
+        let frame = snmpv3_frames::encode_get_request_with_auth_params(
+            test_engine_id(),
+            b"alice",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+            0x05,
+            &[],
+        );
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_some(),
+            "empty auth_params must produce a Report response"
+        );
+        assert_eq!(
+            tc.wrong_digests, 1,
+            "counter must be incremented for empty auth_params"
+        );
+    }
+
+    #[test]
+    fn given_wrong_hmac_without_reportable_flag_when_process_then_discarded_but_counter_incremented()
+     {
+        // Verifies: REQ-0100 — no Report when reportableFlag not set, counter still increments
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let mib = crate::mib::Store::new();
+        let alice = crate::usm::user::UsmUser::auth_no_priv(
+            "alice",
+            AuthProtocol::HmacSha256,
+            SecretKey::new(vec![0x42u8; 32]),
+        );
+        // flags 0x01 = authFlag only (no reportableFlag)
+        let frame = snmpv3_frames::encode_get_request_with_auth_params(
+            test_engine_id(),
+            b"alice",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+            0x01,
+            &[0xBBu8; 24],
+        );
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_none(),
+            "wrong HMAC without reportableFlag must be silently discarded"
+        );
+        assert_eq!(
+            tc.wrong_digests, 1,
+            "counter must still be incremented even when no Report is sent"
+        );
+    }
+
+    #[test]
+    fn given_counter_at_max_when_wrong_hmac_then_counter_does_not_overflow() {
+        // Verifies: REQ-0100 — saturating_add prevents overflow
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let mib = crate::mib::Store::new();
+        let alice = crate::usm::user::UsmUser::auth_no_priv(
+            "alice",
+            AuthProtocol::HmacSha256,
+            SecretKey::new(vec![0x42u8; 32]),
+        );
+        let frame = snmpv3_frames::encode_get_request_with_auth_params(
+            test_engine_id(),
+            b"alice",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+            0x05,
+            &[0xBBu8; 24],
+        );
+        let mut tc = TestCtx::new().with_wrong_digests(u32::MAX);
+        {
+            let mut ctx = tc.ctx(Some(&alice));
+            let _ = process_snmpv3_request(&frame, &mut ctx, &mib);
+        }
+        assert_eq!(tc.wrong_digests, u32::MAX, "counter must not overflow");
+    }
+
+    // ── zero_auth_params_in_message ──────────────────────────────────────────────
+
+    #[test]
+    fn given_offset_and_len_when_zero_auth_params_then_bytes_at_offset_are_zeroed() {
+        // Verifies: REQ-0100 — correct region is zeroed
+        let message = b"hello MAC-goes-here world";
+        let zeroed = zero_auth_params_in_message(message, 6, 12);
+        assert_eq!(&zeroed[..6], b"hello ");
+        assert_eq!(&zeroed[6..18], &[0u8; 12]);
+        assert_eq!(&zeroed[18..], b"e world");
+    }
+
+    #[test]
+    fn given_offset_at_start_when_zero_auth_params_then_prefix_zeroed() {
+        // Verifies: REQ-0100 — boundary at start
+        let message = b"MACxxxxrest";
+        let zeroed = zero_auth_params_in_message(message, 0, 3);
+        assert_eq!(&zeroed[..3], &[0u8; 3]);
+        assert_eq!(&zeroed[3..], b"xxxxrest");
+    }
+
+    #[test]
+    fn given_offset_at_end_when_zero_auth_params_then_suffix_zeroed() {
+        // Verifies: REQ-0100 — boundary at end
+        let message = b"prefixMAC";
+        let zeroed = zero_auth_params_in_message(message, 6, 3);
+        assert_eq!(&zeroed[..6], b"prefix");
+        assert_eq!(&zeroed[6..], &[0u8; 3]);
+    }
+
+    #[test]
+    fn given_input_when_zero_auth_params_then_original_message_is_not_modified() {
+        // Verifies: REQ-0100 — original raw_message is not mutated
+        let message = b"prefix MAC suffix";
+        let zeroed = zero_auth_params_in_message(message, 7, 3);
+        assert_eq!(message, b"prefix MAC suffix", "original must be unchanged");
+        assert_eq!(&zeroed[7..10], &[0u8; 3]);
     }
 }

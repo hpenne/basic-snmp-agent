@@ -237,7 +237,7 @@ pub struct UsmSecurityFields {
 /// # Requirements
 /// Implements: REQ-0068, REQ-0069, REQ-0070, REQ-0093, REQ-0098, REQ-0099, REQ-0100
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct V3InboundMessage {
+pub struct V3InboundMessage<'a> {
     /// Message ID from `HeaderData`; echoed in the `SNMPv3` response.
     pub msg_id: i32,
     /// Engine ID from the `ScopedPdu`; used to verify the request targets this agent.
@@ -251,12 +251,19 @@ pub struct V3InboundMessage {
     pub pdu: InboundPdu,
     /// USM security parameters extracted from the message header.
     pub usm: UsmSecurityFields,
-    /// The raw BER bytes of the complete `SNMPv3` message as received.
+    /// A reference to the raw BER bytes of the complete `SNMPv3` message as received.
     ///
     /// Required for HMAC verification: to recompute the MAC, the
     /// `msgAuthenticationParameters` field in these bytes must be zeroed
     /// before passing the buffer to the HMAC function.
-    pub raw_message: Vec<u8>,
+    pub raw_message: &'a [u8],
+    /// Byte offset of `msgAuthenticationParameters` within `raw_message`.
+    ///
+    /// `None` for `noAuthNoPriv` messages (empty `auth_params`).
+    /// Recorded during decode to enable secure HMAC zeroing in dispatch — the
+    /// offset is derived from the structural position within the USM security
+    /// parameters, not from a byte-value search.
+    pub(crate) auth_params_offset: Option<usize>,
 }
 
 // ── Outbound PDU structs ──────────────────────────────────────────────────────
