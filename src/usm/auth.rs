@@ -428,6 +428,19 @@ mod tests {
     }
 
     #[test]
+    fn given_wrong_mac_length_when_verify_sha512_then_invalid_mac_length_error() {
+        // Verifies: REQ-0100
+        let key = SecretKey::new(vec![0x33u8; 64]);
+        assert_eq!(
+            AuthProtocol::HmacSha512.verify_mac(&key, b"msg", &[0u8; 1]),
+            Err(AuthError::InvalidMacLength {
+                expected: 48,
+                actual: 1
+            })
+        );
+    }
+
+    #[test]
     fn given_empty_mac_when_verify_sha256_then_invalid_mac_length_error() {
         // Verifies: REQ-0100
         let key = SecretKey::new(vec![0x33u8; 32]);

@@ -888,6 +888,7 @@ mod tests {
         let oid = test_oid_arcs();
 
         // Step 1: build with zeroed auth_params so we can compute the HMAC.
+        let zeroed_auth_params = vec![0u8; mac_len];
         let frame_with_zeros = snmpv3_frames::encode_get_request_with_auth_params(
             engine_id,
             b"alice",
@@ -896,7 +897,7 @@ mod tests {
             2,
             oid,
             0x05,
-            &vec![0u8; mac_len],
+            &zeroed_auth_params,
         );
 
         // Step 2: compute the HMAC over the frame with zeroed auth_params.
@@ -907,10 +908,9 @@ mod tests {
 
         // Step 3: replace the zeroed auth_params with the real MAC.
         // Safe here: [0u8; 24] only appears at the auth_params position in this test message.
-        let zeros = vec![0u8; mac_len];
         let pos = frame_with_zeros
             .windows(mac_len)
-            .position(|w| w == zeros.as_slice())
+            .position(|w| w == zeroed_auth_params.as_slice())
             .unwrap();
         let mut frame = frame_with_zeros;
         frame[pos..pos + mac_len].copy_from_slice(&mac);
