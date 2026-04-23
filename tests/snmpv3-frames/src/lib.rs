@@ -51,7 +51,91 @@ pub fn encode_get_request(
     oid_arcs: &[u32],
 ) -> Vec<u8> {
     let rasn_pdu = RasnGetRequest(single_varbind_pdu(request_id, oid_arcs));
-    encode_v3_message(engine_id, context_name, msg_id, Pdus::GetRequest(rasn_pdu))
+    encode_v3_message(
+        engine_id,
+        b"",
+        context_name,
+        msg_id,
+        Pdus::GetRequest(rasn_pdu),
+        0x04,
+    )
+}
+
+/// Encode a minimal `SNMPv3` `GetRequest` frame with a specific `msgUserName`.
+///
+/// This lets tests supply an explicit user name in the USM security parameters,
+/// exercising user-name lookup without relying on the empty-user default.
+///
+/// # Examples
+///
+/// ```
+/// let frame = snmpv3_frames::encode_get_request_with_user(
+///     b"\x80\x00\x1f\x88\x04test",
+///     b"alice",
+///     b"",
+///     1,
+///     42,
+///     &[1, 3, 6, 1, 2, 1, 1, 1, 0],
+/// );
+/// assert!(!frame.is_empty());
+/// ```
+#[must_use]
+pub fn encode_get_request_with_user(
+    engine_id: &[u8],
+    user_name: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    request_id: i32,
+    oid_arcs: &[u32],
+) -> Vec<u8> {
+    let rasn_pdu = RasnGetRequest(single_varbind_pdu(request_id, oid_arcs));
+    encode_v3_message(
+        engine_id,
+        user_name,
+        context_name,
+        msg_id,
+        Pdus::GetRequest(rasn_pdu),
+        0x04,
+    )
+}
+
+/// Encode a minimal `SNMPv3` `GetRequest` frame with a specific `msgUserName` and
+/// the `reportableFlag` (`0x04`) cleared in `msgFlags`.
+///
+/// Use this to test that the agent silently discards a user-name-mismatch response
+/// when the manager has not requested a Report PDU (RFC 3412 §7.1.3a).
+///
+/// # Examples
+///
+/// ```
+/// let frame = snmpv3_frames::encode_get_request_with_user_no_report(
+///     b"\x80\x00\x1f\x88\x04test",
+///     b"eve",
+///     b"",
+///     1,
+///     42,
+///     &[1, 3, 6, 1, 2, 1, 1, 1, 0],
+/// );
+/// assert!(!frame.is_empty());
+/// ```
+#[must_use]
+pub fn encode_get_request_with_user_no_report(
+    engine_id: &[u8],
+    user_name: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    request_id: i32,
+    oid_arcs: &[u32],
+) -> Vec<u8> {
+    let rasn_pdu = RasnGetRequest(single_varbind_pdu(request_id, oid_arcs));
+    encode_v3_message(
+        engine_id,
+        user_name,
+        context_name,
+        msg_id,
+        Pdus::GetRequest(rasn_pdu),
+        0x00,
+    )
 }
 
 /// Encode a minimal `SNMPv3` `GetNextRequest` frame (noAuthNoPriv, USM).
@@ -79,9 +163,11 @@ pub fn encode_get_next_request(
     let rasn_pdu = RasnGetNextRequest(single_varbind_pdu(request_id, oid_arcs));
     encode_v3_message(
         engine_id,
+        b"",
         context_name,
         msg_id,
         Pdus::GetNextRequest(rasn_pdu),
+        0x04,
     )
 }
 
@@ -123,9 +209,11 @@ pub fn encode_get_bulk_request(
     });
     encode_v3_message(
         engine_id,
+        b"",
         context_name,
         msg_id,
         Pdus::GetBulkRequest(rasn_pdu),
+        0x04,
     )
 }
 
@@ -152,7 +240,14 @@ pub fn encode_set_request(
     oid_arcs: &[u32],
 ) -> Vec<u8> {
     let rasn_pdu = RasnSetRequest(single_varbind_pdu(request_id, oid_arcs));
-    encode_v3_message(engine_id, context_name, msg_id, Pdus::SetRequest(rasn_pdu))
+    encode_v3_message(
+        engine_id,
+        b"",
+        context_name,
+        msg_id,
+        Pdus::SetRequest(rasn_pdu),
+        0x04,
+    )
 }
 
 /// Encode an engine-ID discovery probe: a `GetRequest` with empty
@@ -240,8 +335,17 @@ fn encode_discovery_probe_with_flags(flags: Vec<u8>) -> Vec<u8> {
 
 // Encode a complete SNMPv3 message with noAuthNoPriv USM security parameters,
 // with the authoritative engine ID set to the agent's engine_id.
+// user_name is placed in the USM msgUserName field.
 // msg_id is used as the message identifier in the V3 header.
-fn encode_v3_message(engine_id: &[u8], context_name: &[u8], msg_id: i32, pdus: Pdus) -> Vec<u8> {
+// msg_flags_byte is placed as the sole byte of msgFlags.
+fn encode_v3_message(
+    engine_id: &[u8],
+    user_name: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    pdus: Pdus,
+    msg_flags_byte: u8,
+) -> Vec<u8> {
     let scoped_pdu = ScopedPdu {
         engine_id: engine_id.to_vec().into(),
         name: context_name.to_vec().into(),
@@ -253,7 +357,7 @@ fn encode_v3_message(engine_id: &[u8], context_name: &[u8], msg_id: i32, pdus: P
         authoritative_engine_id: engine_id.to_vec().into(),
         authoritative_engine_boots: 0.into(),
         authoritative_engine_time: 0.into(),
-        user_name: rasn::types::OctetString::from(vec![]),
+        user_name: rasn::types::OctetString::from(user_name.to_vec()),
         authentication_parameters: rasn::types::OctetString::from(vec![]),
         privacy_parameters: rasn::types::OctetString::from(vec![]),
     };
@@ -264,7 +368,7 @@ fn encode_v3_message(engine_id: &[u8], context_name: &[u8], msg_id: i32, pdus: P
         global_data: HeaderData {
             message_id: msg_id.into(),
             max_size: 65535.into(),
-            flags: rasn::types::OctetString::from(vec![0x04]),
+            flags: rasn::types::OctetString::from(vec![msg_flags_byte]),
             security_model: 3.into(),
         },
         security_parameters: security_parameters_bytes.into(),
