@@ -2,7 +2,7 @@
 //! and the key material required for that level.
 //!
 //! # Requirements
-//! Implements: REQ-0075, REQ-0076, REQ-0077, REQ-0090, REQ-0091, REQ-0092
+//! Implements: REQ-0075, REQ-0076, REQ-0077, REQ-0079, REQ-0090, REQ-0091, REQ-0092
 
 use crate::usm::auth::AuthProtocol;
 use crate::usm::keys::SecretKey;
@@ -16,7 +16,7 @@ use crate::usm::privacy::PrivProtocol;
 /// `NoAuthNoPriv < AuthNoPriv < AuthPriv`.
 ///
 /// # Requirements
-/// Implements: REQ-0075, REQ-0076, REQ-0077
+/// Implements: REQ-0075, REQ-0076, REQ-0077, REQ-0079
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SecurityLevel {
     /// No authentication and no privacy.  Messages are neither authenticated
@@ -30,6 +30,38 @@ pub enum SecurityLevel {
     /// Authentication with privacy.  Messages carry a MAC and the payload is
     /// encrypted.
     AuthPriv,
+}
+
+impl SecurityLevel {
+    /// Derive the security level from the `msgFlags` byte (RFC 3412 §7.2.4).
+    ///
+    /// Returns `None` for the invalid combination where `privFlag` is set without
+    /// `authFlag` (RFC 3412 §7.1.2a forbids this combination).
+    ///
+    /// # Requirements
+    /// Implements: REQ-0079
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use basic_snmp_agent::usm::user::SecurityLevel;
+    ///
+    /// assert_eq!(SecurityLevel::from_msg_flags(0x00), Some(SecurityLevel::NoAuthNoPriv));
+    /// assert_eq!(SecurityLevel::from_msg_flags(0x01), Some(SecurityLevel::AuthNoPriv));
+    /// assert_eq!(SecurityLevel::from_msg_flags(0x03), Some(SecurityLevel::AuthPriv));
+    /// assert_eq!(SecurityLevel::from_msg_flags(0x02), None); // privFlag without authFlag
+    /// // The reportableFlag (bit 2) is ignored:
+    /// assert_eq!(SecurityLevel::from_msg_flags(0x04), Some(SecurityLevel::NoAuthNoPriv));
+    /// ```
+    #[must_use]
+    pub fn from_msg_flags(flags: u8) -> Option<Self> {
+        match flags & 0x03 {
+            0x00 => Some(SecurityLevel::NoAuthNoPriv),
+            0x01 => Some(SecurityLevel::AuthNoPriv),
+            0x03 => Some(SecurityLevel::AuthPriv),
+            _ => None, // 0x02: privFlag without authFlag — invalid per RFC 3412 §7.1.2a
+        }
+    }
 }
 
 // ── UsmUser ───────────────────────────────────────────────────────────────────
@@ -413,5 +445,58 @@ mod tests {
         assert_eq!(user.auth_key().unwrap().as_bytes(), &[0xAAu8; 32]);
         assert_eq!(user.priv_protocol(), Some(PrivProtocol::Aes128));
         assert_eq!(user.priv_key().unwrap().as_bytes(), &[0xCCu8; 16]);
+    }
+
+    #[test]
+    fn from_msg_flags_maps_flag_bits_correctly() {
+        // Verifies: REQ-0079
+        assert_eq!(
+            SecurityLevel::from_msg_flags(0x00),
+            Some(SecurityLevel::NoAuthNoPriv)
+        );
+        assert_eq!(
+            SecurityLevel::from_msg_flags(0x01),
+            Some(SecurityLevel::AuthNoPriv)
+        );
+        assert_eq!(
+            SecurityLevel::from_msg_flags(0x03),
+            Some(SecurityLevel::AuthPriv)
+        );
+        assert_eq!(SecurityLevel::from_msg_flags(0x02), None);
+    }
+
+    #[test]
+    fn from_msg_flags_ignores_reportable_bit() {
+        // Verifies: REQ-0079
+        // Bit 2 (0x04) is the reportableFlag, which must not affect the security level.
+        assert_eq!(
+            SecurityLevel::from_msg_flags(0x04),
+            Some(SecurityLevel::NoAuthNoPriv)
+        );
+        assert_eq!(
+            SecurityLevel::from_msg_flags(0x05),
+            Some(SecurityLevel::AuthNoPriv)
+        );
+        assert_eq!(
+            SecurityLevel::from_msg_flags(0x07),
+            Some(SecurityLevel::AuthPriv)
+        );
+    }
+
+    #[test]
+    fn from_msg_flags_ignores_reserved_high_bits() {
+        // Verifies: REQ-0079 — bits 3-7 of msgFlags are reserved and must be masked out
+        assert_eq!(
+            SecurityLevel::from_msg_flags(0xF8), // 0xF8 & 0x03 == 0x00 → NoAuthNoPriv
+            Some(SecurityLevel::NoAuthNoPriv)
+        );
+        assert_eq!(
+            SecurityLevel::from_msg_flags(0xF9), // 0xF9 & 0x03 == 0x01 → AuthNoPriv
+            Some(SecurityLevel::AuthNoPriv)
+        );
+        assert_eq!(
+            SecurityLevel::from_msg_flags(0xFF), // 0xFF & 0x03 == 0x03 → AuthPriv
+            Some(SecurityLevel::AuthPriv)
+        );
     }
 }

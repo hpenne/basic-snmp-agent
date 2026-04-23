@@ -50,15 +50,7 @@ pub fn encode_get_request(
     request_id: i32,
     oid_arcs: &[u32],
 ) -> Vec<u8> {
-    let rasn_pdu = RasnGetRequest(single_varbind_pdu(request_id, oid_arcs));
-    encode_v3_message(
-        engine_id,
-        b"",
-        context_name,
-        msg_id,
-        Pdus::GetRequest(rasn_pdu),
-        0x04,
-    )
+    encode_get_request_with_user(engine_id, b"", context_name, msg_id, request_id, oid_arcs)
 }
 
 /// Encode a minimal `SNMPv3` `GetRequest` frame with a specific `msgUserName`.
@@ -88,13 +80,13 @@ pub fn encode_get_request_with_user(
     request_id: i32,
     oid_arcs: &[u32],
 ) -> Vec<u8> {
-    let rasn_pdu = RasnGetRequest(single_varbind_pdu(request_id, oid_arcs));
-    encode_v3_message(
+    encode_get_request_with_user_and_flags(
         engine_id,
         user_name,
         context_name,
         msg_id,
-        Pdus::GetRequest(rasn_pdu),
+        request_id,
+        oid_arcs,
         0x04,
     )
 }
@@ -127,6 +119,49 @@ pub fn encode_get_request_with_user_no_report(
     request_id: i32,
     oid_arcs: &[u32],
 ) -> Vec<u8> {
+    encode_get_request_with_user_and_flags(
+        engine_id,
+        user_name,
+        context_name,
+        msg_id,
+        request_id,
+        oid_arcs,
+        0x00,
+    )
+}
+
+/// Encode a `SNMPv3` `GetRequest` frame with explicit `msgUserName` and `msgFlags` byte.
+///
+/// Use this when you need precise control over both the USM user name and the
+/// security-level bits in `msgFlags`. For common cases, prefer
+/// [`encode_get_request_with_user`] (`msgFlags = 0x04`) or
+/// [`encode_get_request_with_user_no_report`] (`msgFlags = 0x00`).
+///
+/// # Examples
+///
+/// ```
+/// // authNoPriv flags (0x05 = authFlag set, reportableFlag set):
+/// let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
+///     b"\x80\x00\x1f\x88\x04test",
+///     b"alice",
+///     b"",
+///     1,
+///     42,
+///     &[1, 3, 6, 1, 2, 1, 1, 1, 0],
+///     0x05,
+/// );
+/// assert!(!frame.is_empty());
+/// ```
+#[must_use]
+pub fn encode_get_request_with_user_and_flags(
+    engine_id: &[u8],
+    user_name: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    request_id: i32,
+    oid_arcs: &[u32],
+    msg_flags_byte: u8,
+) -> Vec<u8> {
     let rasn_pdu = RasnGetRequest(single_varbind_pdu(request_id, oid_arcs));
     encode_v3_message(
         engine_id,
@@ -134,7 +169,7 @@ pub fn encode_get_request_with_user_no_report(
         context_name,
         msg_id,
         Pdus::GetRequest(rasn_pdu),
-        0x00,
+        msg_flags_byte,
     )
 }
 

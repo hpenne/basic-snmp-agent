@@ -23,6 +23,14 @@ static UNKNOWN_USER_NAMES_OID: std::sync::LazyLock<crate::codec::Oid> =
             .expect("USM_STATS_UNKNOWN_USER_NAMES is a valid OID constant")
     });
 
+// Implements: REQ-0079
+static UNSUPPORTED_SEC_LEVELS_OID: std::sync::LazyLock<crate::codec::Oid> =
+    std::sync::LazyLock::new(|| {
+        crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS
+            .parse()
+            .expect("USM_STATS_UNSUPPORTED_SEC_LEVELS is a valid OID constant")
+    });
+
 /// Engine state and statistics passed to each inbound frame dispatch.
 ///
 /// # Requirements
@@ -67,7 +75,7 @@ pub struct DispatchContext<'a> {
 /// the flag set are silently discarded per RFC 3412 §7.1.3a.
 ///
 /// # Requirements
-/// Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0078, REQ-0080, REQ-0093
+/// Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0103
 ///
 /// # Examples
 ///
@@ -154,6 +162,31 @@ pub fn process_snmpv3_request(
             *ctx.unknown_user_names_counter,
         )
         .ok();
+    }
+
+    // REQ-0079, REQ-0103: security-level enforcement — runs after user-name lookup.
+    // If a USM user is configured, derive the security level from msgFlags and compare
+    // against the configured user's level. The invalid combination (privFlag without
+    // authFlag) is treated as a mismatch. For noAuthNoPriv messages that pass this
+    // check, authentication and decryption are skipped naturally (REQ-0103).
+    if let Some(user) = ctx.usm_user {
+        let msg_level = crate::usm::user::SecurityLevel::from_msg_flags(v3_msg.usm.security_flags);
+        if msg_level != Some(user.security_level()) {
+            *ctx.unsupported_sec_levels_counter =
+                ctx.unsupported_sec_levels_counter.saturating_add(1);
+            if v3_msg.usm.security_flags & 0x04 == 0 {
+                return None;
+            }
+            return crate::codec::encode_v3_report(
+                v3_msg.msg_id,
+                ctx.engine_id,
+                ctx.engine_boots,
+                ctx.engine_time,
+                &UNSUPPORTED_SEC_LEVELS_OID,
+                *ctx.unsupported_sec_levels_counter,
+            )
+            .ok();
+        }
     }
 
     // Only the default (empty) context name is supported per REQ-0058.
@@ -623,5 +656,330 @@ mod tests {
             &mib,
         );
         assert_eq!(unknown_user_names, u32::MAX, "counter must not overflow");
+    }
+
+    // ── Security-level enforcement (REQ-0079, REQ-0103) ──────────────────────
+
+    #[test]
+    fn given_matching_security_level_when_process_then_proceeds() {
+        // Verifies: REQ-0079, REQ-0103
+        let mib = crate::mib::Store::new();
+        let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
+        // flags 0x04 = reportableFlag only → noAuthNoPriv security level
+        let frame = snmpv3_frames::encode_get_request_with_user(
+            test_engine_id(),
+            b"alice",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+        );
+        let mut unknown_engine_ids = 0u32;
+        let mut unknown_user_names = 0u32;
+        let mut unsupported_sec_levels = 0u32;
+        let mut wrong_digests = 0u32;
+        let mut decryption_errors = 0u32;
+        let result = process_snmpv3_request(
+            &frame,
+            &mut DispatchContext {
+                engine_id: test_engine_id(),
+                engine_boots: 1,
+                engine_time: 0,
+                unknown_engine_ids_counter: &mut unknown_engine_ids,
+                unknown_user_names_counter: &mut unknown_user_names,
+                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
+                wrong_digests_counter: &mut wrong_digests,
+                decryption_errors_counter: &mut decryption_errors,
+                usm_user: Some(&alice),
+            },
+            &mib,
+        );
+        assert!(
+            result.is_some(),
+            "matching security level must produce a response"
+        );
+        assert_eq!(
+            unsupported_sec_levels, 0,
+            "counter must not be incremented on match"
+        );
+        let response_bytes = result.unwrap();
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
+            .expect("response must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("response must contain a cleartext ScopedPDU");
+        };
+        assert!(
+            matches!(scoped_pdu.data, rasn_snmp::v2::Pdus::Response(_)),
+            "response must be a GetResponse, not a Report"
+        );
+    }
+
+    #[test]
+    fn given_mismatched_security_level_when_process_then_returns_report_and_increments_counter() {
+        // Verifies: REQ-0079
+        let mib = crate::mib::Store::new();
+        let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
+        // flags 0x05 = authFlag + reportableFlag → authNoPriv; configured user is noAuthNoPriv
+        let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
+            test_engine_id(),
+            b"alice",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+            0x05, // authFlag set, reportableFlag set → authNoPriv, reportable
+        );
+        let mut unknown_engine_ids = 0u32;
+        let mut unknown_user_names = 0u32;
+        let mut unsupported_sec_levels = 0u32;
+        let mut wrong_digests = 0u32;
+        let mut decryption_errors = 0u32;
+        let result = process_snmpv3_request(
+            &frame,
+            &mut DispatchContext {
+                engine_id: test_engine_id(),
+                engine_boots: 1,
+                engine_time: 0,
+                unknown_engine_ids_counter: &mut unknown_engine_ids,
+                unknown_user_names_counter: &mut unknown_user_names,
+                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
+                wrong_digests_counter: &mut wrong_digests,
+                decryption_errors_counter: &mut decryption_errors,
+                usm_user: Some(&alice),
+            },
+            &mib,
+        );
+        assert!(
+            result.is_some(),
+            "security-level mismatch must produce a Report response"
+        );
+        assert_eq!(
+            unsupported_sec_levels, 1,
+            "counter must be incremented on mismatch"
+        );
+        let response_bytes = result.unwrap();
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
+            .expect("response must be a valid SNMPv3 message");
+        let usm_params: rasn_snmp::v3::USMSecurityParameters =
+            rasn::ber::decode(v3_response.security_parameters.as_ref())
+                .expect("security parameters must be valid USMSecurityParameters");
+        assert_eq!(
+            usm_params.authoritative_engine_id.as_ref(),
+            test_engine_id(),
+            "Report response must carry the agent's engine ID"
+        );
+        assert_eq!(
+            u32::try_from(usm_params.authoritative_engine_boots).unwrap(),
+            1u32,
+        );
+        assert_eq!(
+            u32::try_from(usm_params.authoritative_engine_time).unwrap(),
+            0u32,
+        );
+
+        // Verify the Report PDU contains the correct varbind (usmStatsUnsupportedSecLevels).
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("Report response must contain a cleartext ScopedPDU");
+        };
+        let rasn_snmp::v2::Pdus::Report(report_pdu) = scoped_pdu.data else {
+            panic!("response must be a Report PDU, not a GetResponse");
+        };
+        assert_eq!(
+            report_pdu.0.variable_bindings.len(),
+            1,
+            "Report PDU must contain exactly one varbind"
+        );
+        let varbind = &report_pdu.0.variable_bindings[0];
+        let expected_oid: crate::codec::Oid =
+            crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS
+                .parse()
+                .unwrap();
+        assert_eq!(
+            varbind.name.as_ref(),
+            expected_oid.as_slice(),
+            "Report varbind OID must be usmStatsUnsupportedSecLevels"
+        );
+        // Counter32(1) encodes on the wire as ObjectSyntax::ApplicationWide(ApplicationSyntax::Counter).
+        let rasn_snmp::v2::VarBindValue::Value(rasn_smi::v2::ObjectSyntax::ApplicationWide(
+            rasn_smi::v2::ApplicationSyntax::Counter(ref counter),
+        )) = varbind.value
+        else {
+            panic!("Report varbind value must be a Counter32");
+        };
+        assert_eq!(counter.0, 1u32, "Report varbind must carry counter value 1");
+    }
+
+    #[test]
+    fn given_mismatched_security_level_without_reportable_flag_when_process_then_discarded_but_counter_incremented()
+     {
+        // Verifies: REQ-0079
+        let mib = crate::mib::Store::new();
+        let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
+        // flags 0x01 = authFlag only (no reportableFlag) → authNoPriv, not reportable
+        let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
+            test_engine_id(),
+            b"alice",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+            0x01,
+        );
+        let mut unknown_engine_ids = 0u32;
+        let mut unknown_user_names = 0u32;
+        let mut unsupported_sec_levels = 0u32;
+        let mut wrong_digests = 0u32;
+        let mut decryption_errors = 0u32;
+        let result = process_snmpv3_request(
+            &frame,
+            &mut DispatchContext {
+                engine_id: test_engine_id(),
+                engine_boots: 1,
+                engine_time: 0,
+                unknown_engine_ids_counter: &mut unknown_engine_ids,
+                unknown_user_names_counter: &mut unknown_user_names,
+                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
+                wrong_digests_counter: &mut wrong_digests,
+                decryption_errors_counter: &mut decryption_errors,
+                usm_user: Some(&alice),
+            },
+            &mib,
+        );
+        assert!(
+            result.is_none(),
+            "security-level mismatch without reportableFlag must be silently discarded"
+        );
+        assert_eq!(
+            unsupported_sec_levels, 1,
+            "counter must still be incremented even when no Report is sent"
+        );
+    }
+
+    #[test]
+    fn given_no_usm_user_when_process_then_security_level_check_skipped() {
+        // Verifies: REQ-0079 (None user → backward-compat skip)
+        let mib = crate::mib::Store::new();
+        // authNoPriv flags, but no configured user → no check
+        let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
+            test_engine_id(),
+            b"",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+            0x05,
+        );
+        let mut unknown_engine_ids = 0u32;
+        let mut unknown_user_names = 0u32;
+        let mut unsupported_sec_levels = 0u32;
+        let mut wrong_digests = 0u32;
+        let mut decryption_errors = 0u32;
+        let result = process_snmpv3_request(
+            &frame,
+            &mut DispatchContext {
+                engine_id: test_engine_id(),
+                engine_boots: 1,
+                engine_time: 0,
+                unknown_engine_ids_counter: &mut unknown_engine_ids,
+                unknown_user_names_counter: &mut unknown_user_names,
+                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
+                wrong_digests_counter: &mut wrong_digests,
+                decryption_errors_counter: &mut decryption_errors,
+                usm_user: None,
+            },
+            &mib,
+        );
+        assert!(
+            result.is_some(),
+            "request must pass through when no USM user is configured"
+        );
+        assert_eq!(unsupported_sec_levels, 0, "counter must not be incremented");
+    }
+
+    #[test]
+    fn given_counter_at_max_when_mismatched_security_level_then_counter_does_not_overflow() {
+        // Verifies: REQ-0079 — saturating_add prevents overflow
+        let mib = crate::mib::Store::new();
+        let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
+        let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
+            test_engine_id(),
+            b"alice",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+            0x05,
+        );
+        let mut unknown_engine_ids = 0u32;
+        let mut unknown_user_names = 0u32;
+        let mut unsupported_sec_levels = u32::MAX;
+        let mut wrong_digests = 0u32;
+        let mut decryption_errors = 0u32;
+        let _ = process_snmpv3_request(
+            &frame,
+            &mut DispatchContext {
+                engine_id: test_engine_id(),
+                engine_boots: 1,
+                engine_time: 0,
+                unknown_engine_ids_counter: &mut unknown_engine_ids,
+                unknown_user_names_counter: &mut unknown_user_names,
+                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
+                wrong_digests_counter: &mut wrong_digests,
+                decryption_errors_counter: &mut decryption_errors,
+                usm_user: Some(&alice),
+            },
+            &mib,
+        );
+        assert_eq!(
+            unsupported_sec_levels,
+            u32::MAX,
+            "counter must not overflow"
+        );
+    }
+
+    #[test]
+    fn given_invalid_priv_without_auth_flags_when_process_then_returns_report_and_increments_counter()
+     {
+        // Verifies: REQ-0079 — privFlag=1, authFlag=0 (0x06) is invalid and treated as a mismatch
+        let mib = crate::mib::Store::new();
+        let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
+        // flags 0x06 = privFlag set, reportableFlag set, authFlag clear → invalid combination
+        let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
+            test_engine_id(),
+            b"alice",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+            0x06,
+        );
+        let mut unknown_engine_ids = 0u32;
+        let mut unknown_user_names = 0u32;
+        let mut unsupported_sec_levels = 0u32;
+        let mut wrong_digests = 0u32;
+        let mut decryption_errors = 0u32;
+        let result = process_snmpv3_request(
+            &frame,
+            &mut DispatchContext {
+                engine_id: test_engine_id(),
+                engine_boots: 1,
+                engine_time: 0,
+                unknown_engine_ids_counter: &mut unknown_engine_ids,
+                unknown_user_names_counter: &mut unknown_user_names,
+                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
+                wrong_digests_counter: &mut wrong_digests,
+                decryption_errors_counter: &mut decryption_errors,
+                usm_user: Some(&alice),
+            },
+            &mib,
+        );
+        assert!(
+            result.is_some(),
+            "invalid msgFlags combination must produce a Report response"
+        );
+        assert_eq!(
+            unsupported_sec_levels, 1,
+            "counter must be incremented for invalid msgFlags"
+        );
     }
 }
