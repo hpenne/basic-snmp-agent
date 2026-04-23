@@ -55,11 +55,20 @@ fuzz_target!(|data: &[u8]| {
     // non-matching cases by varying the bytes that map to the engine ID field.
     let engine_id = b"\x80\x00\x1f\x88\x80test";
     let mut unknown_engine_ids_counter = 0u32;
+    let mut unknown_user_names_counter = 0u32;
+    let mut unsupported_sec_levels_counter = 0u32;
+    let mut wrong_digests_counter = 0u32;
+    let mut decryption_errors_counter = 0u32;
     let mut ctx = DispatchContext {
         engine_id,
         engine_boots: 1,
         engine_time: 0,
         unknown_engine_ids_counter: &mut unknown_engine_ids_counter,
+        unknown_user_names_counter: &mut unknown_user_names_counter,
+        unsupported_sec_levels_counter: &mut unsupported_sec_levels_counter,
+        wrong_digests_counter: &mut wrong_digests_counter,
+        decryption_errors_counter: &mut decryption_errors_counter,
+        usm_user: None,
     };
     let _ = process_snmpv3_request(data, &mut ctx, mib());
 });

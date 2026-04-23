@@ -252,10 +252,20 @@ pub struct EventLoop {
     /// Counter for `usmStatsUnknownEngineIDs`; incremented for each discovery probe.
     // Implements: REQ-0093
     unknown_engine_ids_counter: u32,
-    /// Configured USM user; `None` if the agent runs without USM.
+    /// Counter for `usmStatsUnknownUserNames`; incremented when user-name lookup fails.
+    // Implements: REQ-0078
+    unknown_user_names_counter: u32,
+    /// Counter for `usmStatsUnsupportedSecLevels`; incremented when security-level check fails.
+    // Implements: REQ-0079
+    unsupported_sec_levels_counter: u32,
+    /// Counter for `usmStatsWrongDigests`; incremented when HMAC verification fails.
+    // Implements: REQ-0100
+    wrong_digests_counter: u32,
+    /// Counter for `usmStatsDecryptionErrors`; incremented when decryption fails.
+    // Implements: REQ-0101
+    decryption_errors_counter: u32,
+    /// Configured USM user; `None` when no USM user is configured.
     // Implements: REQ-0076
-    // Consumed by inbound USM message processing (Steps 9–11); not yet used.
-    #[allow(dead_code)]
     usm_user: Option<std::sync::Arc<crate::usm::user::UsmUser>>,
 }
 
@@ -333,6 +343,10 @@ impl EventLoop {
             engine_boots,
             engine_start: std::time::Instant::now(),
             unknown_engine_ids_counter: 0,
+            unknown_user_names_counter: 0,
+            unsupported_sec_levels_counter: 0,
+            wrong_digests_counter: 0,
+            decryption_errors_counter: 0,
             usm_user,
         };
         let sender = CommandSender { tx, pipe_write_fd };
@@ -573,6 +587,11 @@ impl EventLoop {
                     engine_boots,
                     engine_time,
                     unknown_engine_ids_counter: &mut self.unknown_engine_ids_counter,
+                    unknown_user_names_counter: &mut self.unknown_user_names_counter,
+                    unsupported_sec_levels_counter: &mut self.unsupported_sec_levels_counter,
+                    wrong_digests_counter: &mut self.wrong_digests_counter,
+                    decryption_errors_counter: &mut self.decryption_errors_counter,
+                    usm_user: self.usm_user.as_deref(),
                 },
                 &self.store,
             ) else {
@@ -969,6 +988,10 @@ mod tests {
             engine_boots: 1,
             engine_start: std::time::Instant::now(),
             unknown_engine_ids_counter: 0,
+            unknown_user_names_counter: 0,
+            unsupported_sec_levels_counter: 0,
+            wrong_digests_counter: 0,
+            decryption_errors_counter: 0,
             usm_user: None,
         };
 

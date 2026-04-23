@@ -17,11 +17,8 @@ static UNKNOWN_ENGINE_IDS_OID: std::sync::LazyLock<crate::codec::Oid> =
 
 /// Engine state and statistics passed to each inbound frame dispatch.
 ///
-/// Groups fields that grow as more USM steps land (Steps 9–11 will add
-/// `usm_user` and a `not_in_time_windows` counter).
-///
 /// # Requirements
-/// Implements: REQ-0093, REQ-0094
+/// Implements: REQ-0093, REQ-0094, REQ-0078, REQ-0079, REQ-0100, REQ-0101
 pub struct DispatchContext<'a> {
     /// The agent's authoritative engine ID.
     pub engine_id: &'a [u8],
@@ -31,6 +28,21 @@ pub struct DispatchContext<'a> {
     pub engine_time: u32,
     /// Counter for `usmStatsUnknownEngineIDs` (REQ-0093).
     pub unknown_engine_ids_counter: &'a mut u32,
+    /// Counter for `usmStatsUnknownUserNames` (REQ-0078).
+    // Implements: REQ-0078
+    pub unknown_user_names_counter: &'a mut u32,
+    /// Counter for `usmStatsUnsupportedSecLevels` (REQ-0079).
+    // Implements: REQ-0079
+    pub unsupported_sec_levels_counter: &'a mut u32,
+    /// Counter for `usmStatsWrongDigests` (REQ-0100).
+    // Implements: REQ-0100
+    pub wrong_digests_counter: &'a mut u32,
+    /// Counter for `usmStatsDecryptionErrors` (REQ-0101).
+    // Implements: REQ-0101
+    pub decryption_errors_counter: &'a mut u32,
+    /// Optional configured USM user; `None` when no USM user is configured (REQ-0078, REQ-0079).
+    // Implements: REQ-0078, REQ-0079
+    pub usm_user: Option<&'a crate::usm::user::UsmUser>,
 }
 
 /// Decode, validate, and dispatch a single RFC 3430 BER frame, returning
@@ -58,11 +70,20 @@ pub struct DispatchContext<'a> {
 /// let mib = Store::new();
 /// let engine_id = b"\x80\x00\x1f\x88\x80test";
 /// let mut counter = 0u32;
+/// let mut unknown_user_names = 0u32;
+/// let mut unsupported_sec_levels = 0u32;
+/// let mut wrong_digests = 0u32;
+/// let mut decryption_errors = 0u32;
 /// let mut ctx = DispatchContext {
 ///     engine_id,
 ///     engine_boots: 1,
 ///     engine_time: 0,
 ///     unknown_engine_ids_counter: &mut counter,
+///     unknown_user_names_counter: &mut unknown_user_names,
+///     unsupported_sec_levels_counter: &mut unsupported_sec_levels,
+///     wrong_digests_counter: &mut wrong_digests,
+///     decryption_errors_counter: &mut decryption_errors,
+///     usm_user: None,
 /// };
 /// // Garbage bytes produce no response (silently discarded).
 /// let result = process_snmpv3_request(b"\x00\x01\x02", &mut ctx, &mib);
@@ -138,15 +159,6 @@ mod tests {
         b"\x80\x00\x1f\x88\x04test"
     }
 
-    fn make_ctx(counter: &mut u32) -> DispatchContext<'_> {
-        DispatchContext {
-            engine_id: test_engine_id(),
-            engine_boots: 3,
-            engine_time: 100,
-            unknown_engine_ids_counter: counter,
-        }
-    }
-
     // ── Discovery probe (REQ-0093) ────────────────────────────────────────────
 
     #[test]
@@ -155,8 +167,22 @@ mod tests {
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe();
         let mut counter = 0u32;
+        let mut unknown_user_names = 0u32;
+        let mut unsupported_sec_levels = 0u32;
+        let mut wrong_digests = 0u32;
+        let mut decryption_errors = 0u32;
         let result = {
-            let mut ctx = make_ctx(&mut counter);
+            let mut ctx = DispatchContext {
+                engine_id: test_engine_id(),
+                engine_boots: 3,
+                engine_time: 100,
+                unknown_engine_ids_counter: &mut counter,
+                unknown_user_names_counter: &mut unknown_user_names,
+                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
+                wrong_digests_counter: &mut wrong_digests,
+                decryption_errors_counter: &mut decryption_errors,
+                usm_user: None,
+            };
             let r = process_snmpv3_request(&probe_frame, &mut ctx, &mib);
             assert_eq!(
                 *ctx.unknown_engine_ids_counter, 1,
@@ -198,6 +224,10 @@ mod tests {
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe();
         let mut counter = 5u32;
+        let mut unknown_user_names = 0u32;
+        let mut unsupported_sec_levels = 0u32;
+        let mut wrong_digests = 0u32;
+        let mut decryption_errors = 0u32;
         let _ = process_snmpv3_request(
             &probe_frame,
             &mut DispatchContext {
@@ -205,6 +235,11 @@ mod tests {
                 engine_boots: 3,
                 engine_time: 100,
                 unknown_engine_ids_counter: &mut counter,
+                unknown_user_names_counter: &mut unknown_user_names,
+                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
+                wrong_digests_counter: &mut wrong_digests,
+                decryption_errors_counter: &mut decryption_errors,
+                usm_user: None,
             },
             &mib,
         );
@@ -215,6 +250,11 @@ mod tests {
                 engine_boots: 3,
                 engine_time: 100,
                 unknown_engine_ids_counter: &mut counter,
+                unknown_user_names_counter: &mut unknown_user_names,
+                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
+                wrong_digests_counter: &mut wrong_digests,
+                decryption_errors_counter: &mut decryption_errors,
+                usm_user: None,
             },
             &mib,
         );
@@ -228,6 +268,10 @@ mod tests {
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
         let frame = snmpv3_frames::encode_get_request(test_engine_id(), b"", 1, 2, oid.as_slice());
         let mut counter = 0u32;
+        let mut unknown_user_names = 0u32;
+        let mut unsupported_sec_levels = 0u32;
+        let mut wrong_digests = 0u32;
+        let mut decryption_errors = 0u32;
         let _ = process_snmpv3_request(
             &frame,
             &mut DispatchContext {
@@ -235,6 +279,11 @@ mod tests {
                 engine_boots: 1,
                 engine_time: 0,
                 unknown_engine_ids_counter: &mut counter,
+                unknown_user_names_counter: &mut unknown_user_names,
+                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
+                wrong_digests_counter: &mut wrong_digests,
+                decryption_errors_counter: &mut decryption_errors,
+                usm_user: None,
             },
             &mib,
         );
@@ -247,6 +296,10 @@ mod tests {
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe();
         let mut counter = u32::MAX;
+        let mut unknown_user_names = 0u32;
+        let mut unsupported_sec_levels = 0u32;
+        let mut wrong_digests = 0u32;
+        let mut decryption_errors = 0u32;
         let _ = process_snmpv3_request(
             &probe_frame,
             &mut DispatchContext {
@@ -254,6 +307,11 @@ mod tests {
                 engine_boots: 1,
                 engine_time: 0,
                 unknown_engine_ids_counter: &mut counter,
+                unknown_user_names_counter: &mut unknown_user_names,
+                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
+                wrong_digests_counter: &mut wrong_digests,
+                decryption_errors_counter: &mut decryption_errors,
+                usm_user: None,
             },
             &mib,
         );
@@ -266,6 +324,10 @@ mod tests {
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe_no_report();
         let mut counter = 0u32;
+        let mut unknown_user_names = 0u32;
+        let mut unsupported_sec_levels = 0u32;
+        let mut wrong_digests = 0u32;
+        let mut decryption_errors = 0u32;
         let result = process_snmpv3_request(
             &probe_frame,
             &mut DispatchContext {
@@ -273,6 +335,11 @@ mod tests {
                 engine_boots: 3,
                 engine_time: 100,
                 unknown_engine_ids_counter: &mut counter,
+                unknown_user_names_counter: &mut unknown_user_names,
+                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
+                wrong_digests_counter: &mut wrong_digests,
+                decryption_errors_counter: &mut decryption_errors,
+                usm_user: None,
             },
             &mib,
         );

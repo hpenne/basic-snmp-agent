@@ -115,7 +115,7 @@ category = "chore"
 
 [[content.acceptance_criteria]]
 text = "DispatchContext extended with USM user and counter fields; all call sites updated (step 10b)"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]

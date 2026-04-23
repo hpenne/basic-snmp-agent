@@ -48,11 +48,20 @@ fn main() {
     for (name, encoded) in seeds {
         // Verify the seed actually reaches the dispatch path before writing.
         let mut unknown_engine_ids_counter = 0u32;
+        let mut unknown_user_names_counter = 0u32;
+        let mut unsupported_sec_levels_counter = 0u32;
+        let mut wrong_digests_counter = 0u32;
+        let mut decryption_errors_counter = 0u32;
         let mut ctx = basic_snmp_agent::transport::dispatch::DispatchContext {
             engine_id: ENGINE_ID,
             engine_boots: 1,
             engine_time: 0,
             unknown_engine_ids_counter: &mut unknown_engine_ids_counter,
+            unknown_user_names_counter: &mut unknown_user_names_counter,
+            unsupported_sec_levels_counter: &mut unsupported_sec_levels_counter,
+            wrong_digests_counter: &mut wrong_digests_counter,
+            decryption_errors_counter: &mut decryption_errors_counter,
+            usm_user: None,
         };
         let response =
             basic_snmp_agent::process_snmpv3_request(encoded, &mut ctx, &empty_mib());
