@@ -4,6 +4,8 @@
 //! # Requirements
 //! Implements: REQ-0075, REQ-0076, REQ-0077, REQ-0079, REQ-0090, REQ-0091, REQ-0092
 
+use std::fmt;
+
 use crate::usm::auth::AuthProtocol;
 use crate::usm::keys::SecretKey;
 use crate::usm::privacy::PrivProtocol;
@@ -32,34 +34,57 @@ pub enum SecurityLevel {
     AuthPriv,
 }
 
+/// Error returned by [`SecurityLevel::from_msg_flags`] when the `msgFlags`
+/// byte contains `privFlag` set without `authFlag`, which RFC 3412 §7.1.2a
+/// forbids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidMsgFlags(u8);
+
+impl fmt::Display for InvalidMsgFlags {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid msgFlags 0x{:02x}: privFlag set without authFlag (RFC 3412 §7.1.2a)",
+            self.0,
+        )
+    }
+}
+
+impl std::error::Error for InvalidMsgFlags {}
+
 impl SecurityLevel {
     /// Derive the security level from the `msgFlags` byte (RFC 3412 §7.2.4).
     ///
-    /// Returns `None` for the invalid combination where `privFlag` is set without
-    /// `authFlag` (RFC 3412 §7.1.2a forbids this combination).
+    /// Returns an error for the invalid combination where `privFlag` is set without
+    /// `authFlag` (RFC 3412 §7.1.2a forbids this combination). The raw `msgFlags`
+    /// byte is preserved in the error for diagnostic purposes.
     ///
     /// # Requirements
     /// Implements: REQ-0079
     ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidMsgFlags`] when `flags & 0x03 == 0x02` (privFlag set, authFlag clear).
+    ///
     /// # Examples
     ///
     /// ```
-    /// use basic_snmp_agent::usm::user::SecurityLevel;
+    /// use basic_snmp_agent::usm::user::{SecurityLevel, InvalidMsgFlags};
     ///
-    /// assert_eq!(SecurityLevel::from_msg_flags(0x00), Some(SecurityLevel::NoAuthNoPriv));
-    /// assert_eq!(SecurityLevel::from_msg_flags(0x01), Some(SecurityLevel::AuthNoPriv));
-    /// assert_eq!(SecurityLevel::from_msg_flags(0x03), Some(SecurityLevel::AuthPriv));
-    /// assert_eq!(SecurityLevel::from_msg_flags(0x02), None); // privFlag without authFlag
+    /// assert_eq!(SecurityLevel::from_msg_flags(0x00), Ok(SecurityLevel::NoAuthNoPriv));
+    /// assert_eq!(SecurityLevel::from_msg_flags(0x01), Ok(SecurityLevel::AuthNoPriv));
+    /// assert_eq!(SecurityLevel::from_msg_flags(0x03), Ok(SecurityLevel::AuthPriv));
+    /// assert!(SecurityLevel::from_msg_flags(0x02).is_err()); // privFlag without authFlag
     /// // The reportableFlag (bit 2) is ignored:
-    /// assert_eq!(SecurityLevel::from_msg_flags(0x04), Some(SecurityLevel::NoAuthNoPriv));
+    /// assert_eq!(SecurityLevel::from_msg_flags(0x04), Ok(SecurityLevel::NoAuthNoPriv));
     /// ```
     #[must_use]
-    pub fn from_msg_flags(flags: u8) -> Option<Self> {
+    pub fn from_msg_flags(flags: u8) -> Result<Self, InvalidMsgFlags> {
         match flags & 0x03 {
-            0x00 => Some(SecurityLevel::NoAuthNoPriv),
-            0x01 => Some(SecurityLevel::AuthNoPriv),
-            0x03 => Some(SecurityLevel::AuthPriv),
-            _ => None, // 0x02: privFlag without authFlag — invalid per RFC 3412 §7.1.2a
+            0x00 => Ok(SecurityLevel::NoAuthNoPriv),
+            0x01 => Ok(SecurityLevel::AuthNoPriv),
+            0x03 => Ok(SecurityLevel::AuthPriv),
+            _ => Err(InvalidMsgFlags(flags)), // 0x02: privFlag without authFlag — invalid per RFC 3412 §7.1.2a
         }
     }
 }
@@ -452,17 +477,17 @@ mod tests {
         // Verifies: REQ-0079
         assert_eq!(
             SecurityLevel::from_msg_flags(0x00),
-            Some(SecurityLevel::NoAuthNoPriv)
+            Ok(SecurityLevel::NoAuthNoPriv)
         );
         assert_eq!(
             SecurityLevel::from_msg_flags(0x01),
-            Some(SecurityLevel::AuthNoPriv)
+            Ok(SecurityLevel::AuthNoPriv)
         );
         assert_eq!(
             SecurityLevel::from_msg_flags(0x03),
-            Some(SecurityLevel::AuthPriv)
+            Ok(SecurityLevel::AuthPriv)
         );
-        assert_eq!(SecurityLevel::from_msg_flags(0x02), None);
+        assert_eq!(SecurityLevel::from_msg_flags(0x02), Err(InvalidMsgFlags(0x02)));
     }
 
     #[test]
@@ -471,15 +496,15 @@ mod tests {
         // Bit 2 (0x04) is the reportableFlag, which must not affect the security level.
         assert_eq!(
             SecurityLevel::from_msg_flags(0x04),
-            Some(SecurityLevel::NoAuthNoPriv)
+            Ok(SecurityLevel::NoAuthNoPriv)
         );
         assert_eq!(
             SecurityLevel::from_msg_flags(0x05),
-            Some(SecurityLevel::AuthNoPriv)
+            Ok(SecurityLevel::AuthNoPriv)
         );
         assert_eq!(
             SecurityLevel::from_msg_flags(0x07),
-            Some(SecurityLevel::AuthPriv)
+            Ok(SecurityLevel::AuthPriv)
         );
     }
 
@@ -488,15 +513,27 @@ mod tests {
         // Verifies: REQ-0079 — bits 3-7 of msgFlags are reserved and must be masked out
         assert_eq!(
             SecurityLevel::from_msg_flags(0xF8), // 0xF8 & 0x03 == 0x00 → NoAuthNoPriv
-            Some(SecurityLevel::NoAuthNoPriv)
+            Ok(SecurityLevel::NoAuthNoPriv)
         );
         assert_eq!(
             SecurityLevel::from_msg_flags(0xF9), // 0xF9 & 0x03 == 0x01 → AuthNoPriv
-            Some(SecurityLevel::AuthNoPriv)
+            Ok(SecurityLevel::AuthNoPriv)
         );
         assert_eq!(
             SecurityLevel::from_msg_flags(0xFF), // 0xFF & 0x03 == 0x03 → AuthPriv
-            Some(SecurityLevel::AuthPriv)
+            Ok(SecurityLevel::AuthPriv)
         );
+    }
+
+    #[test]
+    fn from_msg_flags_invalid_combination_preserves_raw_byte_in_error() {
+        // Verifies: REQ-0079 — the error carries the raw flags byte for diagnostics
+        let err = SecurityLevel::from_msg_flags(0x02).unwrap_err();
+        assert_eq!(err, InvalidMsgFlags(0x02));
+        // A flags byte with high bits set still produces an error with the full raw value
+        let err = SecurityLevel::from_msg_flags(0xFE).unwrap_err(); // 0xFE & 0x03 == 0x02
+        assert_eq!(err, InvalidMsgFlags(0xFE));
+        // Display includes the raw byte in hex
+        assert!(err.to_string().contains("0xfe"), "error message must include the raw flags byte");
     }
 }

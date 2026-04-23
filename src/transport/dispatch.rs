@@ -171,7 +171,7 @@ pub fn process_snmpv3_request(
     // check, authentication and decryption are skipped naturally (REQ-0103).
     if let Some(user) = ctx.usm_user {
         let msg_level = crate::usm::user::SecurityLevel::from_msg_flags(v3_msg.usm.security_flags);
-        if msg_level != Some(user.security_level()) {
+        if msg_level.ok() != Some(user.security_level()) {
             *ctx.unsupported_sec_levels_counter =
                 ctx.unsupported_sec_levels_counter.saturating_add(1);
             if v3_msg.usm.security_flags & 0x04 == 0 {
@@ -226,6 +226,70 @@ mod tests {
         &[1, 3, 6, 1, 2, 1, 1, 1, 0]
     }
 
+    /// Test helper that owns counter storage and produces a [`DispatchContext`],
+    /// eliminating the repeated boilerplate of five local `u32` declarations.
+    struct TestCtx {
+        unknown_engine_ids: u32,
+        unknown_user_names: u32,
+        unsupported_sec_levels: u32,
+        wrong_digests: u32,
+        decryption_errors: u32,
+        engine_boots: u32,
+        engine_time: u32,
+    }
+
+    impl TestCtx {
+        fn new() -> Self {
+            Self {
+                unknown_engine_ids: 0,
+                unknown_user_names: 0,
+                unsupported_sec_levels: 0,
+                wrong_digests: 0,
+                decryption_errors: 0,
+                engine_boots: 1,
+                engine_time: 0,
+            }
+        }
+
+        fn with_unknown_engine_ids(mut self, n: u32) -> Self {
+            self.unknown_engine_ids = n;
+            self
+        }
+
+        fn with_unknown_user_names(mut self, n: u32) -> Self {
+            self.unknown_user_names = n;
+            self
+        }
+
+        fn with_unsupported_sec_levels(mut self, n: u32) -> Self {
+            self.unsupported_sec_levels = n;
+            self
+        }
+
+        fn with_boots_time(mut self, boots: u32, time: u32) -> Self {
+            self.engine_boots = boots;
+            self.engine_time = time;
+            self
+        }
+
+        fn ctx<'a>(
+            &'a mut self,
+            usm_user: Option<&'a crate::usm::user::UsmUser>,
+        ) -> DispatchContext<'a> {
+            DispatchContext {
+                engine_id: test_engine_id(),
+                engine_boots: self.engine_boots,
+                engine_time: self.engine_time,
+                unknown_engine_ids_counter: &mut self.unknown_engine_ids,
+                unknown_user_names_counter: &mut self.unknown_user_names,
+                unsupported_sec_levels_counter: &mut self.unsupported_sec_levels,
+                wrong_digests_counter: &mut self.wrong_digests,
+                decryption_errors_counter: &mut self.decryption_errors,
+                usm_user,
+            }
+        }
+    }
+
     // ── Discovery probe (REQ-0093) ────────────────────────────────────────────
 
     #[test]
@@ -233,34 +297,13 @@ mod tests {
         // Verifies: REQ-0093
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe();
-        let mut counter = 0u32;
-        let mut unknown_user_names = 0u32;
-        let mut unsupported_sec_levels = 0u32;
-        let mut wrong_digests = 0u32;
-        let mut decryption_errors = 0u32;
+        let mut tc = TestCtx::new().with_boots_time(3, 100);
         let result = {
-            let mut ctx = DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 3,
-                engine_time: 100,
-                unknown_engine_ids_counter: &mut counter,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: None,
-            };
-            let r = process_snmpv3_request(&probe_frame, &mut ctx, &mib);
-            assert_eq!(
-                *ctx.unknown_engine_ids_counter, 1,
-                "counter must be incremented for discovery probe"
-            );
-            r
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&probe_frame, &mut ctx, &mib)
         };
-        assert!(
-            result.is_some(),
-            "discovery probe must produce a Report response"
-        );
+        assert_eq!(tc.unknown_engine_ids, 1, "counter must be incremented for discovery probe");
+        assert!(result.is_some(), "discovery probe must produce a Report response");
 
         let response_bytes = result.unwrap();
         let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
@@ -290,42 +333,16 @@ mod tests {
         // Verifies: REQ-0093 — counter accumulates across calls
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe();
-        let mut counter = 5u32;
-        let mut unknown_user_names = 0u32;
-        let mut unsupported_sec_levels = 0u32;
-        let mut wrong_digests = 0u32;
-        let mut decryption_errors = 0u32;
-        let _ = process_snmpv3_request(
-            &probe_frame,
-            &mut DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 3,
-                engine_time: 100,
-                unknown_engine_ids_counter: &mut counter,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: None,
-            },
-            &mib,
-        );
-        let _ = process_snmpv3_request(
-            &probe_frame,
-            &mut DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 3,
-                engine_time: 100,
-                unknown_engine_ids_counter: &mut counter,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: None,
-            },
-            &mib,
-        );
-        assert_eq!(counter, 7);
+        let mut tc = TestCtx::new().with_unknown_engine_ids(5).with_boots_time(3, 100);
+        {
+            let mut ctx = tc.ctx(None);
+            let _ = process_snmpv3_request(&probe_frame, &mut ctx, &mib);
+        }
+        {
+            let mut ctx = tc.ctx(None);
+            let _ = process_snmpv3_request(&probe_frame, &mut ctx, &mib);
+        }
+        assert_eq!(tc.unknown_engine_ids, 7);
     }
 
     #[test]
@@ -334,27 +351,12 @@ mod tests {
         let mib = crate::mib::Store::new();
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
         let frame = snmpv3_frames::encode_get_request(test_engine_id(), b"", 1, 2, oid.as_slice());
-        let mut counter = 0u32;
-        let mut unknown_user_names = 0u32;
-        let mut unsupported_sec_levels = 0u32;
-        let mut wrong_digests = 0u32;
-        let mut decryption_errors = 0u32;
-        let _ = process_snmpv3_request(
-            &frame,
-            &mut DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 1,
-                engine_time: 0,
-                unknown_engine_ids_counter: &mut counter,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: None,
-            },
-            &mib,
-        );
-        assert_eq!(counter, 0);
+        let mut tc = TestCtx::new();
+        let _ = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(tc.unknown_engine_ids, 0);
     }
 
     #[test]
@@ -362,27 +364,12 @@ mod tests {
         // Verifies: REQ-0093 — saturating_add prevents overflow
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe();
-        let mut counter = u32::MAX;
-        let mut unknown_user_names = 0u32;
-        let mut unsupported_sec_levels = 0u32;
-        let mut wrong_digests = 0u32;
-        let mut decryption_errors = 0u32;
-        let _ = process_snmpv3_request(
-            &probe_frame,
-            &mut DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 1,
-                engine_time: 0,
-                unknown_engine_ids_counter: &mut counter,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: None,
-            },
-            &mib,
-        );
-        assert_eq!(counter, u32::MAX);
+        let mut tc = TestCtx::new().with_unknown_engine_ids(u32::MAX);
+        {
+            let mut ctx = tc.ctx(None);
+            let _ = process_snmpv3_request(&probe_frame, &mut ctx, &mib);
+        }
+        assert_eq!(tc.unknown_engine_ids, u32::MAX);
     }
 
     #[test]
@@ -390,34 +377,13 @@ mod tests {
         // Verifies: REQ-0093 — non-reportable probes are silently discarded
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe_no_report();
-        let mut counter = 0u32;
-        let mut unknown_user_names = 0u32;
-        let mut unsupported_sec_levels = 0u32;
-        let mut wrong_digests = 0u32;
-        let mut decryption_errors = 0u32;
-        let result = process_snmpv3_request(
-            &probe_frame,
-            &mut DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 3,
-                engine_time: 100,
-                unknown_engine_ids_counter: &mut counter,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: None,
-            },
-            &mib,
-        );
-        assert!(
-            result.is_none(),
-            "probe without reportableFlag must be silently discarded"
-        );
-        assert_eq!(
-            counter, 0,
-            "counter must not be incremented for non-reportable probe"
-        );
+        let mut tc = TestCtx::new().with_boots_time(3, 100);
+        let result = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&probe_frame, &mut ctx, &mib)
+        };
+        assert!(result.is_none(), "probe without reportableFlag must be silently discarded");
+        assert_eq!(tc.unknown_engine_ids, 0, "counter must not be incremented for non-reportable probe");
     }
 
     // ── User-name lookup (REQ-0078, REQ-0080) ────────────────────────────────
@@ -428,31 +394,13 @@ mod tests {
         let mib = crate::mib::Store::new();
         // Frame with empty user name; usm_user: None means no check is performed.
         let frame = snmpv3_frames::encode_get_request(test_engine_id(), b"", 1, 2, test_oid_arcs());
-        let mut unknown_engine_ids = 0u32;
-        let mut unknown_user_names = 0u32;
-        let mut unsupported_sec_levels = 0u32;
-        let mut wrong_digests = 0u32;
-        let mut decryption_errors = 0u32;
-        let result = process_snmpv3_request(
-            &frame,
-            &mut DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 1,
-                engine_time: 0,
-                unknown_engine_ids_counter: &mut unknown_engine_ids,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: None,
-            },
-            &mib,
-        );
-        assert!(
-            result.is_some(),
-            "request must pass through when no USM user is configured"
-        );
-        assert_eq!(unknown_user_names, 0, "counter must not be incremented");
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(result.is_some(), "request must pass through when no USM user is configured");
+        assert_eq!(tc.unknown_user_names, 0, "counter must not be incremented");
     }
 
     #[test]
@@ -468,34 +416,13 @@ mod tests {
             2,
             test_oid_arcs(),
         );
-        let mut unknown_engine_ids = 0u32;
-        let mut unknown_user_names = 0u32;
-        let mut unsupported_sec_levels = 0u32;
-        let mut wrong_digests = 0u32;
-        let mut decryption_errors = 0u32;
-        let result = process_snmpv3_request(
-            &frame,
-            &mut DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 1,
-                engine_time: 0,
-                unknown_engine_ids_counter: &mut unknown_engine_ids,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: Some(&alice),
-            },
-            &mib,
-        );
-        assert!(
-            result.is_some(),
-            "matching user name must produce a response"
-        );
-        assert_eq!(
-            unknown_user_names, 0,
-            "counter must not be incremented on match"
-        );
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(result.is_some(), "matching user name must produce a response");
+        assert_eq!(tc.unknown_user_names, 0, "counter must not be incremented on match");
 
         // Verify the response is a normal GetResponse (Pdus::Response), not a Report.
         let response_bytes = result.unwrap();
@@ -525,34 +452,13 @@ mod tests {
             2,
             test_oid_arcs(),
         );
-        let mut unknown_engine_ids = 0u32;
-        let mut unknown_user_names = 0u32;
-        let mut unsupported_sec_levels = 0u32;
-        let mut wrong_digests = 0u32;
-        let mut decryption_errors = 0u32;
-        let result = process_snmpv3_request(
-            &frame,
-            &mut DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 1,
-                engine_time: 0,
-                unknown_engine_ids_counter: &mut unknown_engine_ids,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: Some(&alice),
-            },
-            &mib,
-        );
-        assert!(
-            result.is_some(),
-            "mismatched user name must produce a Report response"
-        );
-        assert_eq!(
-            unknown_user_names, 1,
-            "counter must be incremented on mismatch"
-        );
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(result.is_some(), "mismatched user name must produce a Report response");
+        assert_eq!(tc.unknown_user_names, 1, "counter must be incremented on mismatch");
 
         let response_bytes = result.unwrap();
         let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
@@ -579,7 +485,7 @@ mod tests {
 
     #[test]
     fn given_mismatched_user_name_without_reportable_flag_when_process_then_discarded_but_counter_incremented()
-     {
+    {
         // Verifies: REQ-0078 — no Report when reportableFlag is not set, but counter still increments
         let mib = crate::mib::Store::new();
         let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
@@ -592,34 +498,13 @@ mod tests {
             2,
             test_oid_arcs(),
         );
-        let mut unknown_engine_ids = 0u32;
-        let mut unknown_user_names = 0u32;
-        let mut unsupported_sec_levels = 0u32;
-        let mut wrong_digests = 0u32;
-        let mut decryption_errors = 0u32;
-        let result = process_snmpv3_request(
-            &frame,
-            &mut DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 1,
-                engine_time: 0,
-                unknown_engine_ids_counter: &mut unknown_engine_ids,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: Some(&alice),
-            },
-            &mib,
-        );
-        assert!(
-            result.is_none(),
-            "user-name mismatch without reportableFlag must be silently discarded"
-        );
-        assert_eq!(
-            unknown_user_names, 1,
-            "counter must still be incremented even when no Report is sent"
-        );
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(result.is_none(), "user-name mismatch without reportableFlag must be silently discarded");
+        assert_eq!(tc.unknown_user_names, 1, "counter must still be incremented even when no Report is sent");
     }
 
     #[test]
@@ -635,27 +520,12 @@ mod tests {
             2,
             test_oid_arcs(),
         );
-        let mut unknown_engine_ids = 0u32;
-        let mut unknown_user_names = u32::MAX;
-        let mut unsupported_sec_levels = 0u32;
-        let mut wrong_digests = 0u32;
-        let mut decryption_errors = 0u32;
-        let _ = process_snmpv3_request(
-            &frame,
-            &mut DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 1,
-                engine_time: 0,
-                unknown_engine_ids_counter: &mut unknown_engine_ids,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: Some(&alice),
-            },
-            &mib,
-        );
-        assert_eq!(unknown_user_names, u32::MAX, "counter must not overflow");
+        let mut tc = TestCtx::new().with_unknown_user_names(u32::MAX);
+        {
+            let mut ctx = tc.ctx(Some(&alice));
+            let _ = process_snmpv3_request(&frame, &mut ctx, &mib);
+        }
+        assert_eq!(tc.unknown_user_names, u32::MAX, "counter must not overflow");
     }
 
     // ── Security-level enforcement (REQ-0079, REQ-0103) ──────────────────────
@@ -674,34 +544,13 @@ mod tests {
             2,
             test_oid_arcs(),
         );
-        let mut unknown_engine_ids = 0u32;
-        let mut unknown_user_names = 0u32;
-        let mut unsupported_sec_levels = 0u32;
-        let mut wrong_digests = 0u32;
-        let mut decryption_errors = 0u32;
-        let result = process_snmpv3_request(
-            &frame,
-            &mut DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 1,
-                engine_time: 0,
-                unknown_engine_ids_counter: &mut unknown_engine_ids,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: Some(&alice),
-            },
-            &mib,
-        );
-        assert!(
-            result.is_some(),
-            "matching security level must produce a response"
-        );
-        assert_eq!(
-            unsupported_sec_levels, 0,
-            "counter must not be incremented on match"
-        );
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(result.is_some(), "matching security level must produce a response");
+        assert_eq!(tc.unsupported_sec_levels, 0, "counter must not be incremented on match");
         let response_bytes = result.unwrap();
         let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
             .expect("response must be a valid SNMPv3 message");
@@ -729,34 +578,13 @@ mod tests {
             test_oid_arcs(),
             0x05, // authFlag set, reportableFlag set → authNoPriv, reportable
         );
-        let mut unknown_engine_ids = 0u32;
-        let mut unknown_user_names = 0u32;
-        let mut unsupported_sec_levels = 0u32;
-        let mut wrong_digests = 0u32;
-        let mut decryption_errors = 0u32;
-        let result = process_snmpv3_request(
-            &frame,
-            &mut DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 1,
-                engine_time: 0,
-                unknown_engine_ids_counter: &mut unknown_engine_ids,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: Some(&alice),
-            },
-            &mib,
-        );
-        assert!(
-            result.is_some(),
-            "security-level mismatch must produce a Report response"
-        );
-        assert_eq!(
-            unsupported_sec_levels, 1,
-            "counter must be incremented on mismatch"
-        );
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(result.is_some(), "security-level mismatch must produce a Report response");
+        assert_eq!(tc.unsupported_sec_levels, 1, "counter must be incremented on mismatch");
         let response_bytes = result.unwrap();
         let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
             .expect("response must be a valid SNMPv3 message");
@@ -768,14 +596,8 @@ mod tests {
             test_engine_id(),
             "Report response must carry the agent's engine ID"
         );
-        assert_eq!(
-            u32::try_from(usm_params.authoritative_engine_boots).unwrap(),
-            1u32,
-        );
-        assert_eq!(
-            u32::try_from(usm_params.authoritative_engine_time).unwrap(),
-            0u32,
-        );
+        assert_eq!(u32::try_from(usm_params.authoritative_engine_boots).unwrap(), 1u32);
+        assert_eq!(u32::try_from(usm_params.authoritative_engine_time).unwrap(), 0u32);
 
         // Verify the Report PDU contains the correct varbind (usmStatsUnsupportedSecLevels).
         let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
@@ -784,16 +606,10 @@ mod tests {
         let rasn_snmp::v2::Pdus::Report(report_pdu) = scoped_pdu.data else {
             panic!("response must be a Report PDU, not a GetResponse");
         };
-        assert_eq!(
-            report_pdu.0.variable_bindings.len(),
-            1,
-            "Report PDU must contain exactly one varbind"
-        );
+        assert_eq!(report_pdu.0.variable_bindings.len(), 1, "Report PDU must contain exactly one varbind");
         let varbind = &report_pdu.0.variable_bindings[0];
         let expected_oid: crate::codec::Oid =
-            crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS
-                .parse()
-                .unwrap();
+            crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS.parse().unwrap();
         assert_eq!(
             varbind.name.as_ref(),
             expected_oid.as_slice(),
@@ -811,7 +627,7 @@ mod tests {
 
     #[test]
     fn given_mismatched_security_level_without_reportable_flag_when_process_then_discarded_but_counter_incremented()
-     {
+    {
         // Verifies: REQ-0079
         let mib = crate::mib::Store::new();
         let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
@@ -825,34 +641,13 @@ mod tests {
             test_oid_arcs(),
             0x01,
         );
-        let mut unknown_engine_ids = 0u32;
-        let mut unknown_user_names = 0u32;
-        let mut unsupported_sec_levels = 0u32;
-        let mut wrong_digests = 0u32;
-        let mut decryption_errors = 0u32;
-        let result = process_snmpv3_request(
-            &frame,
-            &mut DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 1,
-                engine_time: 0,
-                unknown_engine_ids_counter: &mut unknown_engine_ids,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: Some(&alice),
-            },
-            &mib,
-        );
-        assert!(
-            result.is_none(),
-            "security-level mismatch without reportableFlag must be silently discarded"
-        );
-        assert_eq!(
-            unsupported_sec_levels, 1,
-            "counter must still be incremented even when no Report is sent"
-        );
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(result.is_none(), "security-level mismatch without reportableFlag must be silently discarded");
+        assert_eq!(tc.unsupported_sec_levels, 1, "counter must still be incremented even when no Report is sent");
     }
 
     #[test]
@@ -869,31 +664,13 @@ mod tests {
             test_oid_arcs(),
             0x05,
         );
-        let mut unknown_engine_ids = 0u32;
-        let mut unknown_user_names = 0u32;
-        let mut unsupported_sec_levels = 0u32;
-        let mut wrong_digests = 0u32;
-        let mut decryption_errors = 0u32;
-        let result = process_snmpv3_request(
-            &frame,
-            &mut DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 1,
-                engine_time: 0,
-                unknown_engine_ids_counter: &mut unknown_engine_ids,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: None,
-            },
-            &mib,
-        );
-        assert!(
-            result.is_some(),
-            "request must pass through when no USM user is configured"
-        );
-        assert_eq!(unsupported_sec_levels, 0, "counter must not be incremented");
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(result.is_some(), "request must pass through when no USM user is configured");
+        assert_eq!(tc.unsupported_sec_levels, 0, "counter must not be incremented");
     }
 
     #[test]
@@ -910,36 +687,17 @@ mod tests {
             test_oid_arcs(),
             0x05,
         );
-        let mut unknown_engine_ids = 0u32;
-        let mut unknown_user_names = 0u32;
-        let mut unsupported_sec_levels = u32::MAX;
-        let mut wrong_digests = 0u32;
-        let mut decryption_errors = 0u32;
-        let _ = process_snmpv3_request(
-            &frame,
-            &mut DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 1,
-                engine_time: 0,
-                unknown_engine_ids_counter: &mut unknown_engine_ids,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: Some(&alice),
-            },
-            &mib,
-        );
-        assert_eq!(
-            unsupported_sec_levels,
-            u32::MAX,
-            "counter must not overflow"
-        );
+        let mut tc = TestCtx::new().with_unsupported_sec_levels(u32::MAX);
+        {
+            let mut ctx = tc.ctx(Some(&alice));
+            let _ = process_snmpv3_request(&frame, &mut ctx, &mib);
+        }
+        assert_eq!(tc.unsupported_sec_levels, u32::MAX, "counter must not overflow");
     }
 
     #[test]
     fn given_invalid_priv_without_auth_flags_when_process_then_returns_report_and_increments_counter()
-     {
+    {
         // Verifies: REQ-0079 — privFlag=1, authFlag=0 (0x06) is invalid and treated as a mismatch
         let mib = crate::mib::Store::new();
         let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
@@ -953,33 +711,12 @@ mod tests {
             test_oid_arcs(),
             0x06,
         );
-        let mut unknown_engine_ids = 0u32;
-        let mut unknown_user_names = 0u32;
-        let mut unsupported_sec_levels = 0u32;
-        let mut wrong_digests = 0u32;
-        let mut decryption_errors = 0u32;
-        let result = process_snmpv3_request(
-            &frame,
-            &mut DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: 1,
-                engine_time: 0,
-                unknown_engine_ids_counter: &mut unknown_engine_ids,
-                unknown_user_names_counter: &mut unknown_user_names,
-                unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-                wrong_digests_counter: &mut wrong_digests,
-                decryption_errors_counter: &mut decryption_errors,
-                usm_user: Some(&alice),
-            },
-            &mib,
-        );
-        assert!(
-            result.is_some(),
-            "invalid msgFlags combination must produce a Report response"
-        );
-        assert_eq!(
-            unsupported_sec_levels, 1,
-            "counter must be incremented for invalid msgFlags"
-        );
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(result.is_some(), "invalid msgFlags combination must produce a Report response");
+        assert_eq!(tc.unsupported_sec_levels, 1, "counter must be incremented for invalid msgFlags");
     }
 }
