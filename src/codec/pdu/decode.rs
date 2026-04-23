@@ -20,6 +20,7 @@ fn oid_from_rasn(oid: &rasn::types::ObjectIdentifier) -> Result<Oid, DecodeError
 }
 
 /// Converts a rasn-snmp wire type `ObjectSyntax` into our public [`Value`].
+// pub(super) rather than private: used by the cross-module round-trip test in mod.rs.
 pub(super) fn value_from_object_syntax(syntax: ObjectSyntax) -> Result<Value, DecodeError> {
     match syntax {
         ObjectSyntax::Simple(SimpleSyntax::Integer(raw_integer)) => {

@@ -7,6 +7,7 @@
 //! - [`decode_v3_message`]: BER-decode an inbound `SNMPv3` message into a [`V3InboundMessage`].
 //! - [`encode_response`]: BER-encode a [`GetResponse`] for sending.
 //! - [`encode_v3_response`]: BER-encode a [`GetResponse`] inside an `SNMPv3` message envelope.
+//! - [`encode_v3_report`]: BER-encode an `SNMPv3` Report PDU for engine-ID discovery.
 //! - [`encode_trap`]: BER-encode a [`WireTrapPdu`] for sending.
 
 mod decode;
@@ -21,6 +22,7 @@ pub use types::{
     VarbindValue, WireTrapPdu,
 };
 
+// Cross-module round-trip tests that exercise both encode and decode.
 #[cfg(test)]
 mod tests {
     use super::decode::value_from_object_syntax;

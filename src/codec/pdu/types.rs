@@ -287,7 +287,7 @@ pub struct DecodeError {
 }
 
 impl DecodeError {
-    pub(crate) fn new(kind: DecodeErrorKind, msg: impl Into<String>) -> Self {
+    pub(super) fn new(kind: DecodeErrorKind, msg: impl Into<String>) -> Self {
         Self {
             kind,
             message: msg.into(),
@@ -349,7 +349,7 @@ pub struct EncodeError {
 }
 
 impl EncodeError {
-    pub(crate) fn new(msg: impl Into<String>) -> Self {
+    pub(super) fn new(msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
         }
