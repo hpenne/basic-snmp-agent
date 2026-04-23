@@ -176,7 +176,7 @@ pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
 /// - An OID or value in a varbind cannot be decoded.
 ///
 /// # Requirements
-/// Implements: REQ-0068, REQ-0069, REQ-0071, REQ-0073
+/// Implements: REQ-0068, REQ-0069, REQ-0071, REQ-0073, REQ-0100
 ///
 /// # Examples
 ///
@@ -227,12 +227,14 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> 
     // - user_name is echoed in the response (RFC 3414 §8.2.4).
     // - auth_engine_id is empty for engine-ID discovery probes (REQ-0093).
     // - auth_engine_boots / auth_engine_time are used for time-window validation (REQ-0098, REQ-0099).
+    // - auth_params carries the received MAC for HMAC verification (REQ-0100).
     // Failure to decode the security parameters is treated as a BER error.
     let usm_params: USMSecurityParameters =
         rasn::ber::decode(v3_message.security_parameters.as_ref()).map_err(|e| {
             DecodeError::new(DecodeErrorKind::Ber, format!("USM decode failed: {e}"))
         })?;
     let user_name = usm_params.user_name.to_vec();
+    let auth_params = usm_params.authentication_parameters.to_vec();
     // Values outside the u32 range are clamped to u32::MAX; they will fail
     // time-window validation and trigger a Report PDU rather than causing a panic.
     let usm = UsmSecurityFields {
@@ -241,6 +243,7 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> 
             .unwrap_or(u32::MAX),
         auth_engine_time: u32::try_from(&usm_params.authoritative_engine_time).unwrap_or(u32::MAX),
         security_flags: v3_message.global_data.flags.first().copied().unwrap_or(0),
+        auth_params,
     };
 
     let engine_id = scoped_pdu.engine_id.to_vec();
@@ -254,6 +257,7 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> 
         user_name,
         pdu,
         usm,
+        raw_message: bytes.to_vec(),
     })
 }
 
@@ -662,5 +666,72 @@ mod tests {
         assert_eq!(msg.usm.auth_engine_boots, 0);
         assert_eq!(msg.usm.auth_engine_time, 0);
         assert_eq!(msg.usm.security_flags, 0x04); // reportableFlag set by encode_get_request
+    }
+
+    #[test]
+    fn given_v3_message_with_auth_params_when_decode_then_auth_params_preserved() {
+        // Verifies: REQ-0100 — auth params are preserved for HMAC verification
+        use rasn_snmp::v3::{HeaderData, ScopedPdu, ScopedPduData as V3ScopedPduData};
+        use rasn_snmp::v2::{GetRequest as RasnGetRequest2, Pdu, Pdus as V2Pdus, VarBind, VarBindValue};
+        use std::borrow::Cow;
+
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let expected_auth_params: Vec<u8> = vec![0xABu8; 24]; // 24 bytes as for SHA-256
+
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(vec![1, 3, 6, 1, 2, 1, 1, 1, 0]));
+        let get_request = RasnGetRequest2(Pdu {
+            request_id: 1,
+            error_status: 0,
+            error_index: 0,
+            variable_bindings: vec![VarBind { name: rasn_oid, value: VarBindValue::Unspecified }],
+        });
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: engine_id.to_vec().into(),
+            authoritative_engine_boots: 1.into(),
+            authoritative_engine_time: 0.into(),
+            user_name: rasn::types::OctetString::from(b"alice".to_vec()),
+            authentication_parameters: rasn::types::OctetString::from(expected_auth_params.clone()),
+            privacy_parameters: rasn::types::OctetString::from(vec![]),
+        };
+        let security_params = rasn::ber::encode(&usm_params).unwrap();
+        let scoped_pdu = ScopedPdu {
+            engine_id: engine_id.to_vec().into(),
+            name: vec![].into(),
+            data: V2Pdus::GetRequest(get_request),
+        };
+        let v3_msg = V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 42.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x05u8]), // authNoPriv + reportable
+                security_model: 3.into(),
+            },
+            security_parameters: security_params.into(),
+            scoped_data: V3ScopedPduData::CleartextPdu(scoped_pdu),
+        };
+        let encoded = rasn::ber::encode(&v3_msg).unwrap();
+
+        let msg = decode_v3_message(&encoded).unwrap();
+
+        assert_eq!(
+            msg.usm.auth_params, expected_auth_params,
+            "auth_params must be preserved from msgAuthenticationParameters"
+        );
+    }
+
+    #[test]
+    fn given_v3_message_when_decode_then_raw_message_matches_input_bytes() {
+        // Verifies: REQ-0100 — raw_message is preserved for HMAC verification
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        let encoded = snmpv3_frames::encode_get_request(engine_id, b"", 1, 2, oid.as_slice());
+
+        let msg = decode_v3_message(&encoded).unwrap();
+
+        assert_eq!(
+            msg.raw_message, encoded,
+            "raw_message must be a copy of the input bytes"
+        );
     }
 }

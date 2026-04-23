@@ -211,7 +211,7 @@ pub enum InboundPdu {
 /// USM security parameters extracted from the inbound message header.
 ///
 /// # Requirements
-/// Implements: REQ-0093, REQ-0098, REQ-0099
+/// Implements: REQ-0093, REQ-0098, REQ-0099, REQ-0100
 #[derive(Debug)]
 pub struct UsmSecurityFields {
     /// `msgAuthoritativeEngineID` from USM security parameters.
@@ -223,6 +223,11 @@ pub struct UsmSecurityFields {
     pub auth_engine_time: u32,
     /// Message flags byte: bit 0 = authFlag, bit 1 = privFlag, bit 2 = reportableFlag.
     pub security_flags: u8,
+    /// `msgAuthenticationParameters` from the USM security parameters.
+    /// For authenticated messages, this is the received MAC (24 bytes for SHA-256,
+    /// 48 bytes for SHA-512). Empty for `noAuthNoPriv` messages.
+    /// Preserved here for HMAC verification in dispatch.
+    pub auth_params: Vec<u8>,
 }
 
 /// A decoded inbound `SNMPv3` message, containing the message-level fields
@@ -230,7 +235,7 @@ pub struct UsmSecurityFields {
 /// PDU ready for dispatch.
 ///
 /// # Requirements
-/// Implements: REQ-0068, REQ-0069, REQ-0070, REQ-0093, REQ-0098, REQ-0099
+/// Implements: REQ-0068, REQ-0069, REQ-0070, REQ-0093, REQ-0098, REQ-0099, REQ-0100
 #[derive(Debug)]
 pub struct V3InboundMessage {
     /// Message ID from `HeaderData`; echoed in the `SNMPv3` response.
@@ -246,6 +251,12 @@ pub struct V3InboundMessage {
     pub pdu: InboundPdu,
     /// USM security parameters extracted from the message header.
     pub usm: UsmSecurityFields,
+    /// The raw BER bytes of the complete `SNMPv3` message as received.
+    ///
+    /// Required for HMAC verification: to recompute the MAC, the
+    /// `msgAuthenticationParameters` field in these bytes must be zeroed
+    /// before passing the buffer to the HMAC function.
+    pub raw_message: Vec<u8>,
 }
 
 // ── Outbound PDU structs ──────────────────────────────────────────────────────
