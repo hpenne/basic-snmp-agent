@@ -110,7 +110,7 @@ category = "chore"
 
 [[content.acceptance_criteria]]
 text = "codec/pdu.rs split into types.rs, decode.rs, encode.rs sub-modules under codec/ (step 10a)"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
