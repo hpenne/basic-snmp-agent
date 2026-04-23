@@ -212,7 +212,7 @@ pub enum InboundPdu {
 ///
 /// # Requirements
 /// Implements: REQ-0093, REQ-0098, REQ-0099, REQ-0100
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UsmSecurityFields {
     /// `msgAuthoritativeEngineID` from USM security parameters.
     /// Empty for engine-ID discovery probes (REQ-0093).
@@ -236,7 +236,7 @@ pub struct UsmSecurityFields {
 ///
 /// # Requirements
 /// Implements: REQ-0068, REQ-0069, REQ-0070, REQ-0093, REQ-0098, REQ-0099, REQ-0100
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct V3InboundMessage {
     /// Message ID from `HeaderData`; echoed in the `SNMPv3` response.
     pub msg_id: i32,

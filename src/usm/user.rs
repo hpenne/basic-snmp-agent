@@ -38,7 +38,7 @@ pub enum SecurityLevel {
 /// byte contains `privFlag` set without `authFlag`, which RFC 3412 §7.1.2a
 /// forbids.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InvalidMsgFlags(u8);
+pub struct InvalidMsgFlags(pub u8);
 
 impl fmt::Display for InvalidMsgFlags {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -78,7 +78,6 @@ impl SecurityLevel {
     /// // The reportableFlag (bit 2) is ignored:
     /// assert_eq!(SecurityLevel::from_msg_flags(0x04), Ok(SecurityLevel::NoAuthNoPriv));
     /// ```
-    #[must_use]
     pub fn from_msg_flags(flags: u8) -> Result<Self, InvalidMsgFlags> {
         match flags & 0x03 {
             0x00 => Ok(SecurityLevel::NoAuthNoPriv),

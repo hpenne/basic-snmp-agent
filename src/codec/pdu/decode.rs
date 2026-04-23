@@ -159,9 +159,9 @@ pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
 
 /// BER-decode an inbound `SNMPv3` message into a [`V3InboundMessage`].
 ///
-/// Accepts only cleartext (noAuthNoPriv or authNoPriv) `SNMPv3` messages; encrypted
-/// PDUs (`ScopedPduData::EncryptedPdu`) are rejected because this agent implements
-/// USM noAuthNoPriv only.
+/// Accepts only cleartext `SNMPv3` messages (noAuthNoPriv and authNoPriv); encrypted
+/// PDUs (`ScopedPduData::EncryptedPdu`) are rejected because privacy (authPriv)
+/// decryption is not yet implemented in the decode layer.
 ///
 /// The inner `Pdus` variant must be an inbound request type; response and trap
 /// PDUs are rejected.
@@ -257,6 +257,8 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage, DecodeError> 
         user_name,
         pdu,
         usm,
+        // Copied unconditionally to keep the decode path simple; dispatch skips
+        // HMAC verification for noAuthNoPriv messages (REQ-0103).
         raw_message: bytes.to_vec(),
     })
 }
