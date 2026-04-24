@@ -6,8 +6,8 @@ the real project files.
 
 from __future__ import annotations
 
-import json
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -56,18 +56,30 @@ def make_rfc_dir(
 
     clause_paths: list[str] = []
     for clause_content in clauses:
-        clause_filename = f"{clause_content['clause_id']}.json"
-        (clauses_dir / clause_filename).write_text(
-            json.dumps(clause_content), encoding="utf-8"
+        clause_filename = f"{clause_content['clause_id']}.toml"
+        # Clause IDs and text must not contain TOML-special characters
+        # (triple-quotes, backslash sequences) as this TOML is hand-rolled.
+        toml_content = (
+            f'[govctl]\nid = "{clause_content["clause_id"]}"\n\n'
+            f'[content]\ntext = """\n{clause_content["text"]}\n"""\n'
         )
+        (clauses_dir / clause_filename).write_text(toml_content, encoding="utf-8")
         clause_paths.append(f"clauses/{clause_filename}")
 
-    rfc_record = {
-        "rfc_id": rfc_id,
-        "phase": phase,
-        "sections": [{"title": "Spec", "clauses": clause_paths}],
-    }
-    (rfc_dir / "rfc.json").write_text(json.dumps(rfc_record), encoding="utf-8")
+    # RFC IDs and phase strings must not contain TOML-special characters
+    # (triple-quotes, backslash sequences) as this TOML is hand-rolled.
+    lines = [
+        "[govctl]\n",
+        f'id = "{rfc_id}"\n',
+        f'phase = "{phase}"\n',
+        "\n",
+        "[[sections]]\n",
+        'title = "Spec"\n',
+        "clauses = [",
+        ", ".join(f'"{p}"' for p in clause_paths),
+        "]\n",
+    ]
+    (rfc_dir / "rfc.toml").write_text("".join(lines), encoding="utf-8")
     return rfc_dir
 
 
@@ -85,6 +97,12 @@ def make_gap_toml(tmp_path: Path, entries: list[dict]) -> Path:
         lines.append("")
     (gov_dir / "req-coverage-gaps.toml").write_text("\n".join(lines), encoding="utf-8")
     return gov_dir / "req-coverage-gaps.toml"
+
+
+def _load_toml(path: Path) -> dict:
+    """Open *path* in binary mode and return the parsed TOML document."""
+    with path.open("rb") as toml_file:
+        return tomllib.load(toml_file)
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +421,7 @@ class TestLoadImplementedRfcs:
 
         implemented_rfcs = load_implemented_rfcs(tmp_path / "gov")
 
-        rfc_ids = [rfc.record["rfc_id"] for rfc in implemented_rfcs]
+        rfc_ids = [rfc.record["govctl"]["id"] for rfc in implemented_rfcs]
         assert "RFC-0001" in rfc_ids
 
     def test_loads_rfc_in_stable_phase(self, tmp_path: Path) -> None:
@@ -411,7 +429,7 @@ class TestLoadImplementedRfcs:
 
         implemented_rfcs = load_implemented_rfcs(tmp_path / "gov")
 
-        rfc_ids = [rfc.record["rfc_id"] for rfc in implemented_rfcs]
+        rfc_ids = [rfc.record["govctl"]["id"] for rfc in implemented_rfcs]
         assert "RFC-0001" in rfc_ids
 
     def test_ignores_rfc_in_impl_phase(self, tmp_path: Path) -> None:
@@ -420,7 +438,7 @@ class TestLoadImplementedRfcs:
 
         implemented_rfcs = load_implemented_rfcs(tmp_path / "gov")
 
-        rfc_ids = [rfc.record["rfc_id"] for rfc in implemented_rfcs]
+        rfc_ids = [rfc.record["govctl"]["id"] for rfc in implemented_rfcs]
         assert "RFC-0002" not in rfc_ids
 
     def test_ignores_rfc_in_spec_and_draft_phases(self, tmp_path: Path) -> None:
@@ -429,7 +447,7 @@ class TestLoadImplementedRfcs:
 
         implemented_rfcs = load_implemented_rfcs(tmp_path / "gov")
 
-        rfc_ids = [rfc.record["rfc_id"] for rfc in implemented_rfcs]
+        rfc_ids = [rfc.record["govctl"]["id"] for rfc in implemented_rfcs]
         assert "RFC-0003" not in rfc_ids
         assert "RFC-0004" not in rfc_ids
 
@@ -457,7 +475,7 @@ class TestCollectRequirementsFromRfc:
         ]
         rfc_dir = make_rfc_dir(tmp_path, "RFC-0001", "test", clauses)
 
-        rfc_record = json.loads((rfc_dir / "rfc.json").read_text(encoding="utf-8"))
+        rfc_record = _load_toml(rfc_dir / "rfc.toml")
         rfc = ImplementedRfc(rfc_dir=rfc_dir, record=rfc_record)
 
         req_ids = collect_requirements_from_rfc(rfc)
@@ -471,7 +489,7 @@ class TestCollectRequirementsFromRfc:
             {"clause_id": "C-SUMMARY", "text": "This is an informative summary."},
         ]
         rfc_dir = make_rfc_dir(tmp_path, "RFC-0001", "test", clauses)
-        rfc_record = json.loads((rfc_dir / "rfc.json").read_text(encoding="utf-8"))
+        rfc_record = _load_toml(rfc_dir / "rfc.toml")
         rfc = ImplementedRfc(rfc_dir=rfc_dir, record=rfc_record)
 
         req_ids = collect_requirements_from_rfc(rfc)

@@ -48,7 +48,7 @@ CoverageMap = dict[str, set[str]]
 
 
 class ImplementedRfc(NamedTuple):
-    """Pairs an RFC's filesystem directory with its parsed JSON record."""
+    """Pairs an RFC's filesystem directory with its parsed TOML record."""
 
     rfc_dir: Path
     record: dict
