@@ -3,7 +3,7 @@
 # Run the full test suite: lint, Rust unit/doc tests, Python unit tests, and Behave system tests.
 test: clippy rust-test python-test behave-test
 
-pre-commit: test fuzz-gen-seeds fuzz-1m trace check-format
+pre-commit: clippy rust-test python-test fuzz-gen-seeds fuzz-1s trace check-format
 
 # Lint with pedantic Clippy warnings.
 clippy:
@@ -29,6 +29,10 @@ trace:
 # Generate seed corpus files for the snmpv3_request fuzz target.
 fuzz-gen-seeds:
 	cargo run --manifest-path fuzz/Cargo.toml --bin generate_seeds
+
+# Run the fuzzer locally for 1 second.
+fuzz-1s:
+	cargo +nightly fuzz run snmpv3_request -- -max_total_time=1
 
 # Run the fuzzer locally for 1 minute.
 fuzz-1m:
