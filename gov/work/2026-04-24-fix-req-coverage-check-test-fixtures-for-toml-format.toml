@@ -1,0 +1,23 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-04-24-001"
+title = "Fix req_coverage_check test fixtures for TOML format"
+status = "active"
+created = "2026-04-24"
+started = "2026-04-24"
+
+[content]
+description = """
+Describe the work to be done.
+What is the goal? What are the acceptance criteria?"""
+
+[[content.acceptance_criteria]]
+text = "make_rfc_dir creates rfc.toml and clause .toml fixtures matching current tool format"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "make pre-commit passes with no failures"
+status = "pending"
+category = "chore"
