@@ -8,7 +8,7 @@ use rasn_snmp::v3::{Message as V3Message, ScopedPduData, USMSecurityParameters};
 
 use super::types::{
     DecodeError, DecodeErrorKind, GetBulkRequest, GetNextRequest, GetRequest, InboundPdu,
-    SetRequest, UsmSecurityFields, V3InboundMessage, Varbind, VarbindValue,
+    SetRequest, UsmSecurityFields, V3InboundMessage, V3ScopedData, Varbind, VarbindValue,
 };
 use crate::codec::{Oid, Value};
 
@@ -159,12 +159,12 @@ pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
 
 /// BER-decode an inbound `SNMPv3` message into a [`V3InboundMessage`].
 ///
-/// Accepts only cleartext `SNMPv3` messages (noAuthNoPriv and authNoPriv); encrypted
-/// PDUs (`ScopedPduData::EncryptedPdu`) are rejected because privacy (authPriv)
-/// decryption is not yet implemented in the decode layer.
+/// Accepts both cleartext (noAuthNoPriv and authNoPriv) and encrypted (authPriv)
+/// `SNMPv3` messages. Encrypted PDUs are preserved as raw ciphertext in
+/// [`V3ScopedData::Encrypted`]; decryption is performed by the dispatch layer before PDU processing.
 ///
-/// The inner `Pdus` variant must be an inbound request type; response and trap
-/// PDUs are rejected.
+/// The inner `Pdus` variant for cleartext messages must be an inbound request type;
+/// response and trap PDUs are rejected.
 ///
 /// The `raw_message` field of the returned struct is a reference to the input
 /// `bytes` slice, so the returned value borrows from `bytes`.
@@ -174,7 +174,6 @@ pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
 /// Returns a [`DecodeError`] if:
 /// - The bytes are not valid BER.
 /// - The message version is not 3 ([`DecodeErrorKind::WrongVersion`]).
-/// - The scoped PDU is encrypted ([`DecodeErrorKind::EncryptedPdu`]).
 /// - The inner PDU type is not a recognised inbound type.
 /// - An OID or value in a varbind cannot be decoded.
 ///
@@ -185,16 +184,19 @@ pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
 /// invariant violation: if the BER decode succeeded, the bytes must be present.
 ///
 /// # Requirements
-/// Implements: REQ-0068, REQ-0069, REQ-0071, REQ-0073, REQ-0100
+/// Implements: REQ-0068, REQ-0069, REQ-0071, REQ-0073, REQ-0100, REQ-0101
 ///
 /// # Examples
 ///
 /// ```no_run
-/// use basic_snmp_agent::codec::decode_v3_message;
+/// use basic_snmp_agent::codec::{decode_v3_message, V3ScopedData};
 ///
 /// let bytes: &[u8] = &[/* raw BER SNMPv3 message bytes */];
 /// match decode_v3_message(bytes) {
-///     Ok(msg) => println!("engine_id={:?} pdu={:?}", msg.engine_id, msg.pdu),
+///     Ok(msg) => match msg.scoped_data {
+///         V3ScopedData::Plaintext(pdu) => println!("cleartext pdu={pdu:?}"),
+///         V3ScopedData::Encrypted(_) => println!("encrypted PDU, needs decryption"),
+///     },
 ///     Err(e) => eprintln!("decode failed: {e}"),
 /// }
 /// ```
@@ -221,22 +223,12 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
             DecodeError::new(DecodeErrorKind::Ber, "msgID field does not fit in i32")
         })?;
 
-    let scoped_pdu = match v3_message.scoped_data {
-        ScopedPduData::CleartextPdu(pdu) => pdu,
-        // Encrypted PDUs require privacy support that this agent does not implement.
-        ScopedPduData::EncryptedPdu(_) => {
-            return Err(DecodeError::new(
-                DecodeErrorKind::EncryptedPdu,
-                "encrypted (privacy-protected) PDUs are not supported",
-            ));
-        }
-    };
-
     // Extract the USM security parameters:
     // - user_name is echoed in the response (RFC 3414 §8.2.4).
     // - auth_engine_id is empty for engine-ID discovery probes (REQ-0093).
     // - auth_engine_boots / auth_engine_time are used for time-window validation (REQ-0098, REQ-0099).
     // - auth_params carries the received MAC for HMAC verification (REQ-0100).
+    // - priv_params carries the AES salt/IV for authPriv decryption (REQ-0101).
     // Failure to decode the security parameters is treated as a BER error.
     let usm_params: USMSecurityParameters =
         rasn::ber::decode(v3_message.security_parameters.as_ref()).map_err(|e| {
@@ -244,6 +236,7 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
         })?;
     let user_name = usm_params.user_name.to_vec();
     let auth_params = usm_params.authentication_parameters.to_vec();
+    let priv_params = usm_params.privacy_parameters.to_vec();
     // Values outside the u32 range are clamped to u32::MAX; they will fail
     // time-window validation and trigger a Report PDU rather than causing a panic.
     let usm = UsmSecurityFields {
@@ -253,11 +246,27 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
         auth_engine_time: u32::try_from(&usm_params.authoritative_engine_time).unwrap_or(u32::MAX),
         security_flags: v3_message.global_data.flags.first().copied().unwrap_or(0),
         auth_params,
+        priv_params,
     };
 
-    let engine_id = scoped_pdu.engine_id.to_vec();
-    let context_name = scoped_pdu.name.to_vec();
-    let pdu = pdus_to_inbound_pdu(scoped_pdu.data)?;
+    let (engine_id, context_name, scoped_data) = match v3_message.scoped_data {
+        ScopedPduData::CleartextPdu(scoped_pdu) => {
+            let engine_id = scoped_pdu.engine_id.to_vec();
+            let context_name = scoped_pdu.name.to_vec();
+            let pdu = pdus_to_inbound_pdu(scoped_pdu.data)?;
+            (engine_id, context_name, V3ScopedData::Plaintext(pdu))
+        }
+        ScopedPduData::EncryptedPdu(ciphertext) => {
+            // contextEngineID is inside the encrypted blob; use authoritativeEngineID from the
+            // USM header as a proxy — they identify the same authoritative engine (RFC 3414 §3.1).
+            // context_name is empty; it is extracted after AES decryption in dispatch.
+            (
+                usm.auth_engine_id.clone(),
+                vec![],
+                V3ScopedData::Encrypted(ciphertext.to_vec()),
+            )
+        }
+    };
 
     // Find auth_params_offset using a two-step restricted search.
     // Step 1: locate the USM security parameters bytes within raw_message.
@@ -289,7 +298,7 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
         engine_id,
         context_name,
         user_name,
-        pdu,
+        scoped_data,
         usm,
         raw_message: bytes,
         auth_params_offset,
@@ -299,7 +308,7 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::pdu::{DecodeErrorKind, InboundPdu, VarbindValue};
+    use crate::codec::pdu::{DecodeErrorKind, InboundPdu, V3ScopedData, VarbindValue};
     use crate::codec::{Oid, Value};
 
     #[test]
@@ -461,7 +470,12 @@ mod tests {
         assert_eq!(msg.msg_id, 42);
         assert_eq!(msg.engine_id, engine_id);
         assert_eq!(msg.context_name, b"");
-        assert!(matches!(msg.pdu, InboundPdu::GetRequest(ref req) if req.request_id == 7));
+        match &msg.scoped_data {
+            V3ScopedData::Plaintext(InboundPdu::GetRequest(req)) => {
+                assert_eq!(req.request_id, 7);
+            }
+            other => panic!("expected Plaintext(GetRequest), got {other:?}"),
+        }
     }
 
     #[test]
@@ -511,8 +525,9 @@ mod tests {
     }
 
     #[test]
-    fn given_encrypted_scoped_pdu_when_decode_v3_then_encrypted_pdu_error() {
-        // Verifies: REQ-0073
+    fn given_encrypted_pdu_when_decode_v3_then_ciphertext_preserved() {
+        // Verifies: REQ-0101
+        let ciphertext = b"fake-encrypted-payload".to_vec();
         let usm_params = USMSecurityParameters {
             authoritative_engine_id: rasn::types::OctetString::from(vec![]),
             authoritative_engine_boots: 0.into(),
@@ -532,17 +547,88 @@ mod tests {
             },
             security_parameters: security_params.into(),
             scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(
-                b"fake-encrypted".to_vec(),
+                ciphertext.clone(),
             )),
         };
         let encoded = rasn::ber::encode(&v3_msg).unwrap();
 
         let decode_result = decode_v3_message(&encoded);
 
-        assert!(decode_result.is_err());
+        assert!(
+            decode_result.is_ok(),
+            "encrypted PDU must decode without error"
+        );
+        let msg = decode_result.unwrap();
         assert_eq!(
-            decode_result.unwrap_err().kind(),
-            &DecodeErrorKind::EncryptedPdu
+            msg.scoped_data,
+            V3ScopedData::Encrypted(ciphertext),
+            "ciphertext must be preserved in scoped_data"
+        );
+        // authoritative_engine_id is empty in this test message, so engine_id must also be empty.
+        assert_eq!(
+            msg.engine_id,
+            Vec::<u8>::new(),
+            "engine_id must match auth_engine_id for encrypted messages"
+        );
+        assert!(
+            msg.context_name.is_empty(),
+            "context_name must be empty for encrypted messages pending decryption"
+        );
+    }
+
+    #[test]
+    fn given_authpriv_message_when_decode_v3_then_priv_params_preserved() {
+        // Verifies: REQ-0101
+        let expected_priv_params: Vec<u8> = vec![0xABu8; 8];
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: rasn::types::OctetString::from(vec![]),
+            authoritative_engine_boots: 0.into(),
+            authoritative_engine_time: 0.into(),
+            user_name: rasn::types::OctetString::from(vec![]),
+            authentication_parameters: rasn::types::OctetString::from(vec![]),
+            privacy_parameters: rasn::types::OctetString::from(expected_priv_params.clone()),
+        };
+        let security_params = rasn::ber::encode(&usm_params).unwrap();
+        let v3_msg = V3Message {
+            version: 3.into(),
+            global_data: rasn_snmp::v3::HeaderData {
+                message_id: 2.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x03]),
+                security_model: 3.into(),
+            },
+            security_parameters: security_params.into(),
+            scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(
+                b"some-ciphertext".to_vec(),
+            )),
+        };
+        let encoded = rasn::ber::encode(&v3_msg).unwrap();
+
+        let msg = decode_v3_message(&encoded).expect("must decode");
+
+        assert_eq!(
+            msg.msg_id, 2,
+            "msg_id must be decoded correctly from the header"
+        );
+        assert_eq!(
+            msg.usm.priv_params, expected_priv_params,
+            "priv_params must be preserved from msgPrivacyParameters"
+        );
+    }
+
+    #[test]
+    fn given_noauthnopriv_message_when_decode_v3_then_priv_params_empty() {
+        // Verifies: REQ-0101
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        // encode_get_request produces a noAuthNoPriv cleartext message with empty privacy_parameters.
+        let encoded = snmpv3_frames::encode_get_request(engine_id, b"", 1, 2, oid.as_slice());
+
+        let msg = decode_v3_message(&encoded).expect("must decode");
+
+        assert!(
+            msg.usm.priv_params.is_empty(),
+            "noAuthNoPriv messages must have empty priv_params"
         );
     }
 
@@ -571,14 +657,14 @@ mod tests {
             &[1, 3, 6, 1, 2, 1, 1, 1, 0],
         );
         let result = decode_v3_message(&encoded).expect("message must decode");
-        match result.pdu {
-            InboundPdu::GetBulkRequest(bulk) => {
+        match result.scoped_data {
+            V3ScopedData::Plaintext(InboundPdu::GetBulkRequest(bulk)) => {
                 assert_eq!(
                     bulk.max_repetitions, 0,
                     "out-of-range max_repetitions must be clamped to 0"
                 );
             }
-            other => panic!("expected GetBulkRequest, got {other:?}"),
+            other => panic!("expected Plaintext(GetBulkRequest), got {other:?}"),
         }
     }
 
@@ -597,15 +683,15 @@ mod tests {
             &[1, 3, 6, 1, 2, 1, 1, 1, 0],
         );
         let result = decode_v3_message(&encoded).expect("message must decode");
-        match result.pdu {
-            InboundPdu::GetBulkRequest(bulk) => {
+        match result.scoped_data {
+            V3ScopedData::Plaintext(InboundPdu::GetBulkRequest(bulk)) => {
                 assert_eq!(
                     bulk.max_repetitions,
                     i32::MAX as u32,
                     "max_repetitions at i32::MAX must not be clamped"
                 );
             }
-            other => panic!("expected GetBulkRequest, got {other:?}"),
+            other => panic!("expected Plaintext(GetBulkRequest), got {other:?}"),
         }
     }
 
@@ -625,14 +711,14 @@ mod tests {
             &[1, 3, 6, 1, 2, 1, 1, 1, 0],
         );
         let result = decode_v3_message(&encoded).expect("message must decode");
-        match result.pdu {
-            InboundPdu::GetBulkRequest(bulk) => {
+        match result.scoped_data {
+            V3ScopedData::Plaintext(InboundPdu::GetBulkRequest(bulk)) => {
                 assert_eq!(
                     bulk.non_repeaters, 0,
                     "out-of-range non_repeaters must be clamped to 0"
                 );
             }
-            other => panic!("expected GetBulkRequest, got {other:?}"),
+            other => panic!("expected Plaintext(GetBulkRequest), got {other:?}"),
         }
     }
 
@@ -651,15 +737,15 @@ mod tests {
             &[1, 3, 6, 1, 2, 1, 1, 1, 0],
         );
         let result = decode_v3_message(&encoded).expect("message must decode");
-        match result.pdu {
-            InboundPdu::GetBulkRequest(bulk) => {
+        match result.scoped_data {
+            V3ScopedData::Plaintext(InboundPdu::GetBulkRequest(bulk)) => {
                 assert_eq!(
                     bulk.non_repeaters,
                     i32::MAX as u32,
                     "non_repeaters at i32::MAX must not be clamped"
                 );
             }
-            other => panic!("expected GetBulkRequest, got {other:?}"),
+            other => panic!("expected Plaintext(GetBulkRequest), got {other:?}"),
         }
     }
 
@@ -677,13 +763,13 @@ mod tests {
         assert_eq!(msg.msg_id, 100);
         assert_eq!(msg.engine_id, engine_id);
         assert_eq!(msg.context_name, b"ctx");
-        match &msg.pdu {
-            InboundPdu::GetRequest(req) => {
+        match &msg.scoped_data {
+            V3ScopedData::Plaintext(InboundPdu::GetRequest(req)) => {
                 assert_eq!(req.request_id, 200);
                 assert_eq!(req.varbinds.len(), 1);
                 assert_eq!(req.varbinds[0].oid, oid);
             }
-            other => panic!("expected GetRequest, got {other:?}"),
+            other => panic!("expected Plaintext(GetRequest), got {other:?}"),
         }
     }
 

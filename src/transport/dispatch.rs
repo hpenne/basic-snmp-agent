@@ -300,12 +300,21 @@ pub fn process_snmpv3_request(
         .ok();
     }
 
+    // For encrypted (authPriv) messages, context_name is empty until decryption (REQ-0101);
+    // the actual context name is validated after decrypt in dispatch.
     // Only the default (empty) context name is supported per REQ-0058.
     if !v3_msg.context_name.is_empty() {
         return None;
     }
 
-    let response = match v3_msg.pdu {
+    let inbound_pdu = match v3_msg.scoped_data {
+        crate::codec::V3ScopedData::Plaintext(pdu) => pdu,
+        crate::codec::V3ScopedData::Encrypted(_) => {
+            // Decryption not yet implemented; dropped until AES decrypt is wired into dispatch (REQ-0101).
+            return None;
+        }
+    };
+    let response = match inbound_pdu {
         crate::codec::InboundPdu::GetRequest(req) => request::handle_get(&req, mib),
         crate::codec::InboundPdu::GetNextRequest(req) => request::handle_get_next(&req, mib),
         crate::codec::InboundPdu::GetBulkRequest(req) => {
@@ -1496,5 +1505,64 @@ mod tests {
         let rasn_snmp::v2::Pdus::Report(_) = scoped_pdu.data else {
             panic!("response must be a Report PDU, not a GetResponse");
         };
+    }
+
+    // ── Encrypted PDU path (REQ-0101) ─────────────────────────────────────────
+
+    #[test]
+    fn given_encrypted_v3_message_when_process_then_silently_dropped() {
+        // Verifies: REQ-0101
+        // An authPriv message with no configured user passes all preceding security checks
+        // (all are gated on usm_user.is_some()) and reaches the Encrypted arm, which
+        // silently drops it until AES decryption is wired in (REQ-0101). This test
+        // confirms that the dispatch path does not panic or crash on encrypted frames.
+        use rasn_snmp::v3::{
+            HeaderData, Message as V3Message, ScopedPduData, USMSecurityParameters,
+        };
+
+        let mib = crate::mib::Store::new();
+        let fake_ciphertext = b"fake-ciphertext-bytes".to_vec();
+
+        // Build an authPriv V3 message addressed to test_engine_id(). With usm_user: None,
+        // the HMAC-verification block is skipped entirely (gated on usm_user.is_some()),
+        // so the message reaches the Encrypted arm which returns None.
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: test_engine_id().to_vec().into(),
+            authoritative_engine_boots: 1.into(),
+            authoritative_engine_time: 0.into(),
+            user_name: rasn::types::OctetString::from(vec![]),
+            authentication_parameters: rasn::types::OctetString::from(vec![]),
+            privacy_parameters: rasn::types::OctetString::from(vec![0xAAu8; 8]),
+        };
+        let security_params = rasn::ber::encode(&usm_params).unwrap();
+        let v3_msg = V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 5.into(),
+                max_size: 65535.into(),
+                // authPriv + reportable: 0x03 | 0x04 = 0x07
+                flags: rasn::types::OctetString::from(vec![0x07u8]),
+                security_model: 3.into(),
+            },
+            security_parameters: security_params.into(),
+            scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(
+                fake_ciphertext,
+            )),
+        };
+        let encoded_frame = rasn::ber::encode(&v3_msg).unwrap();
+
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&encoded_frame, &mut ctx, &mib)
+        };
+
+        // No configured user means the user-name and security-level checks are skipped.
+        // The empty auth_params with no user also means HMAC verification is skipped.
+        // The Encrypted arm is reached and returns None (decryption not yet implemented).
+        assert!(
+            result.is_none(),
+            "encrypted PDU with no configured user must be dropped (decryption not yet implemented)"
+        );
     }
 }

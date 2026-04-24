@@ -64,7 +64,7 @@ pub enum ErrorStatus {
     WrongValue = 10,
     /// The specified variable does not exist and cannot be created.
     NoCreation = 11,
-    /// The variable binding value is inconsistent with the current state.
+    /// The variable binding is inconsistent with the current state.
     InconsistentValue = 12,
     /// Required resources are unavailable.
     ResourceUnavailable = 13,
@@ -206,12 +206,27 @@ pub enum InboundPdu {
     SetRequest(SetRequest),
 }
 
+// ── V3ScopedData ─────────────────────────────────────────────────────────────
+
+/// The inner PDU content of an `SNMPv3` message.
+///
+/// # Requirements
+/// Implements: REQ-0101
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum V3ScopedData {
+    /// A decoded cleartext PDU ready for dispatch (noAuthNoPriv or authNoPriv).
+    Plaintext(InboundPdu),
+    /// Raw AES ciphertext from an authPriv message; requires decryption before dispatch.
+    /// The 8-byte privacy salt is in `UsmSecurityFields::priv_params`.
+    Encrypted(Vec<u8>),
+}
+
 // ── UsmSecurityFields / V3InboundMessage ─────────────────────────────────────
 
 /// USM security parameters extracted from the inbound message header.
 ///
 /// # Requirements
-/// Implements: REQ-0093, REQ-0098, REQ-0099, REQ-0100
+/// Implements: REQ-0093, REQ-0098, REQ-0099, REQ-0100, REQ-0101
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UsmSecurityFields {
     /// `msgAuthoritativeEngineID` from USM security parameters.
@@ -228,27 +243,31 @@ pub struct UsmSecurityFields {
     /// 48 bytes for SHA-512). Empty for `noAuthNoPriv` messages.
     /// Preserved here for HMAC verification in dispatch.
     pub auth_params: Vec<u8>,
+    /// `msgPrivacyParameters` from the USM security parameters.
+    /// For authPriv messages this is the 8-byte AES salt/IV material needed for decryption.
+    /// Empty for noAuthNoPriv and authNoPriv messages.
+    pub priv_params: Vec<u8>,
 }
 
 /// A decoded inbound `SNMPv3` message, containing the message-level fields
 /// extracted from the `HeaderData` and `ScopedPdu` envelope, plus the inner
-/// PDU ready for dispatch.
+/// PDU or encrypted payload.
 ///
 /// # Requirements
-/// Implements: REQ-0068, REQ-0069, REQ-0070, REQ-0093, REQ-0098, REQ-0099, REQ-0100
+/// Implements: REQ-0068, REQ-0069, REQ-0070, REQ-0093, REQ-0098, REQ-0099, REQ-0100, REQ-0101
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct V3InboundMessage<'a> {
     /// Message ID from `HeaderData`; echoed in the `SNMPv3` response.
     pub msg_id: i32,
-    /// Engine ID from the `ScopedPdu`; used to verify the request targets this agent.
+    /// Engine ID from the `ScopedPdu`; empty for authPriv messages pending decryption.
     pub engine_id: Vec<u8>,
-    /// Context name from the `ScopedPdu`; should be empty for the default context.
+    /// Context name from the `ScopedPdu`; empty for authPriv messages pending decryption.
     pub context_name: Vec<u8>,
     /// Security name (user name) from USM security parameters; echoed in the response
     /// per RFC 3414 §8.2.4 so the command generator can match the response to its request.
     pub user_name: Vec<u8>,
-    /// The inner PDU ready for dispatch to request handlers.
-    pub pdu: InboundPdu,
+    /// The inner PDU or encrypted payload; use [`V3ScopedData`] variants to distinguish.
+    pub scoped_data: V3ScopedData,
     /// USM security parameters extracted from the message header.
     pub usm: UsmSecurityFields,
     /// A reference to the raw BER bytes of the complete `SNMPv3` message as received.
@@ -339,8 +358,6 @@ pub enum DecodeErrorKind {
     InvalidOid,
     /// The SNMP message version is not the expected value.
     WrongVersion,
-    /// The scoped PDU is encrypted; privacy is not supported.
-    EncryptedPdu,
 }
 
 impl fmt::Display for DecodeErrorKind {
@@ -350,7 +367,6 @@ impl fmt::Display for DecodeErrorKind {
             Self::UnsupportedPduType => write!(f, "unsupported PDU type"),
             Self::InvalidOid => write!(f, "invalid OID"),
             Self::WrongVersion => write!(f, "wrong SNMP version"),
-            Self::EncryptedPdu => write!(f, "encrypted PDU not supported"),
         }
     }
 }
