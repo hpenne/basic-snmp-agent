@@ -7,8 +7,9 @@ use rasn_snmp::v2::{
 use rasn_snmp::v3::{Message as V3Message, ScopedPduData, USMSecurityParameters};
 
 use super::types::{
-    DecodeError, DecodeErrorKind, GetBulkRequest, GetNextRequest, GetRequest, InboundPdu,
-    SetRequest, UsmSecurityFields, V3InboundMessage, V3ScopedData, Varbind, VarbindValue,
+    DecodeError, DecodeErrorKind, DecodedScopedPdu, GetBulkRequest, GetNextRequest, GetRequest,
+    InboundPdu, SetRequest, UsmSecurityFields, V3InboundMessage, V3ScopedData, Varbind,
+    VarbindValue,
 };
 use crate::codec::{Oid, Value};
 
@@ -305,6 +306,34 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
     })
 }
 
+/// BER-decode raw bytes as a `ScopedPdu` and return a [`DecodedScopedPdu`].
+///
+/// Used by the dispatch layer after AES decryption of authPriv messages.
+///
+/// # Errors
+///
+/// Returns a [`DecodeError`] if the bytes are not a valid BER-encoded `ScopedPDU` or
+/// the inner PDU type is not a recognised inbound type.
+///
+/// # Requirements
+/// Implements: REQ-0101
+pub fn decode_scoped_pdu(bytes: &[u8]) -> Result<DecodedScopedPdu, DecodeError> {
+    let scoped_pdu: rasn_snmp::v3::ScopedPdu = rasn::ber::decode(bytes).map_err(|e| {
+        DecodeError::new(
+            DecodeErrorKind::Ber,
+            format!("ScopedPDU decode failed: {e}"),
+        )
+    })?;
+    let context_engine_id = scoped_pdu.engine_id.to_vec();
+    let context_name = scoped_pdu.name.to_vec();
+    let pdu = pdus_to_inbound_pdu(scoped_pdu.data)?;
+    Ok(DecodedScopedPdu {
+        context_engine_id,
+        context_name,
+        pdu,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,6 +484,107 @@ mod tests {
         assert_eq!(
             decode_result.unwrap_err().kind(),
             &DecodeErrorKind::UnsupportedPduType
+        );
+    }
+
+    // ── decode_scoped_pdu tests (REQ-0101) ────────────────────────────────────
+
+    /// Build BER-encoded `ScopedPdu` bytes for use in `decode_scoped_pdu` tests.
+    fn encode_scoped_pdu_get_request(
+        engine_id: &[u8],
+        context_name: &[u8],
+        request_id: i32,
+        oid_arcs: &[u32],
+    ) -> Vec<u8> {
+        use rasn_snmp::v2::{GetRequest as RasnGetRequest2, Pdu, VarBind, VarBindValue};
+        use rasn_snmp::v3::ScopedPdu;
+        use std::borrow::Cow;
+
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(oid_arcs.to_vec()));
+        let get_request = RasnGetRequest2(Pdu {
+            request_id,
+            error_status: 0,
+            error_index: 0,
+            variable_bindings: vec![VarBind {
+                name: rasn_oid,
+                value: VarBindValue::Unspecified,
+            }],
+        });
+        let scoped_pdu = ScopedPdu {
+            engine_id: engine_id.to_vec().into(),
+            name: context_name.to_vec().into(),
+            data: Pdus::GetRequest(get_request),
+        };
+        rasn::ber::encode(&scoped_pdu).unwrap()
+    }
+
+    #[test]
+    fn given_valid_scoped_pdu_bytes_when_decode_then_fields_extracted() {
+        // Verifies: REQ-0101
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let context_name = b"";
+        let oid_arcs = [1u32, 3, 6, 1, 2, 1, 1, 1, 0];
+        let encoded = encode_scoped_pdu_get_request(engine_id, context_name, 42, &oid_arcs);
+
+        let decoded = decode_scoped_pdu(&encoded).expect("must decode valid ScopedPdu");
+
+        assert_eq!(
+            decoded.context_engine_id, engine_id,
+            "context_engine_id must match ScopedPdu engine_id"
+        );
+        assert!(
+            decoded.context_name.is_empty(),
+            "context_name must be empty"
+        );
+        match decoded.pdu {
+            InboundPdu::GetRequest(req) => {
+                assert_eq!(req.request_id, 42, "request_id must be preserved");
+                assert_eq!(req.varbinds.len(), 1);
+                assert_eq!(req.varbinds[0].oid.as_slice(), &oid_arcs);
+            }
+            other => panic!("expected GetRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn given_invalid_ber_bytes_when_decode_scoped_pdu_then_ber_error() {
+        // Verifies: REQ-0101
+        let decode_result = decode_scoped_pdu(&[0xDE, 0xAD, 0xBE, 0xEF]);
+
+        assert!(decode_result.is_err());
+        assert_eq!(
+            decode_result.unwrap_err().kind(),
+            &DecodeErrorKind::Ber,
+            "garbage bytes must yield a Ber error"
+        );
+    }
+
+    #[test]
+    fn given_outbound_pdu_type_when_decode_scoped_pdu_then_unsupported_pdu_type() {
+        // Verifies: REQ-0101 — outbound PDU types inside a ScopedPdu are rejected
+        use rasn_snmp::v2::{Pdu as RasnPdu, Pdus as V2Pdus, Response};
+        use rasn_snmp::v3::ScopedPdu;
+
+        let response_pdu = Response(RasnPdu {
+            request_id: 1,
+            error_status: 0,
+            error_index: 0,
+            variable_bindings: vec![],
+        });
+        let scoped_pdu = ScopedPdu {
+            engine_id: vec![].into(),
+            name: vec![].into(),
+            data: V2Pdus::Response(response_pdu),
+        };
+        let encoded = rasn::ber::encode(&scoped_pdu).unwrap();
+
+        let decode_result = decode_scoped_pdu(&encoded);
+
+        assert!(decode_result.is_err());
+        assert_eq!(
+            decode_result.unwrap_err().kind(),
+            &DecodeErrorKind::UnsupportedPduType,
+            "outbound PDU type must yield UnsupportedPduType error"
         );
     }
 

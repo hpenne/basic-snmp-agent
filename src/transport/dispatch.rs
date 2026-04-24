@@ -46,6 +46,14 @@ static NOT_IN_TIME_WINDOWS_OID: std::sync::LazyLock<crate::codec::Oid> =
             .expect("USM_STATS_NOT_IN_TIME_WINDOWS is a valid OID constant")
     });
 
+// Implements: REQ-0101
+static DECRYPTION_ERRORS_OID: std::sync::LazyLock<crate::codec::Oid> =
+    std::sync::LazyLock::new(|| {
+        crate::usm::counters::USM_STATS_DECRYPTION_ERRORS
+            .parse()
+            .expect("USM_STATS_DECRYPTION_ERRORS is a valid OID constant")
+    });
+
 /// Bit mask for the `reportableFlag` in `msgFlags` (RFC 3412 §7.1.3a).
 const REPORTABLE_FLAG: u8 = 0x04;
 
@@ -106,6 +114,31 @@ fn zero_auth_params_in_message(
     zeroed
 }
 
+/// Increment `decryption_errors_counter` and, if `reportableFlag` is set, return a
+/// `usmStatsDecryptionErrors` Report PDU; otherwise return `None` (silent discard).
+///
+/// # Requirements
+/// Implements: REQ-0101
+fn emit_decryption_error_response(
+    ctx: &mut DispatchContext<'_>,
+    msg_id: i32,
+    security_flags: u8,
+) -> Option<Vec<u8>> {
+    *ctx.decryption_errors_counter = ctx.decryption_errors_counter.saturating_add(1);
+    if security_flags & REPORTABLE_FLAG == 0 {
+        return None;
+    }
+    crate::codec::encode_v3_report(
+        msg_id,
+        ctx.engine_id,
+        ctx.engine_boots,
+        ctx.engine_time,
+        &DECRYPTION_ERRORS_OID,
+        *ctx.decryption_errors_counter,
+    )
+    .ok()
+}
+
 /// Decode, validate, and dispatch a single RFC 3430 BER frame, returning
 /// the encoded response bytes on success.
 ///
@@ -120,7 +153,7 @@ fn zero_auth_params_in_message(
 /// the flag set are silently discarded per RFC 3412 §7.1.3a.
 ///
 /// # Requirements
-/// Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0102, REQ-0103
+/// Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0102, REQ-0103
 ///
 /// # Examples
 ///
@@ -300,18 +333,72 @@ pub fn process_snmpv3_request(
         .ok();
     }
 
-    // For encrypted (authPriv) messages, context_name is empty until decryption (REQ-0101);
-    // the actual context name is validated after decrypt in dispatch.
     // Only the default (empty) context name is supported per REQ-0058.
+    // For authPriv messages the context_name is inside the encrypted blob and is validated
+    // after decryption below. For cleartext messages it is already decoded.
     if !v3_msg.context_name.is_empty() {
         return None;
     }
 
-    let inbound_pdu = match v3_msg.scoped_data {
-        crate::codec::V3ScopedData::Plaintext(pdu) => pdu,
-        crate::codec::V3ScopedData::Encrypted(_) => {
-            // Decryption not yet implemented; dropped until AES decrypt is wired into dispatch (REQ-0101).
-            return None;
+    // REQ-0101, REQ-0102: decrypt authPriv ScopedPDU ciphertext after HMAC and
+    // time-window validation pass (processing order mandated by REQ-0102).
+    // Returns (inbound_pdu, effective_context_name) so the correct context name
+    // flows to the response encoder regardless of whether it came from the outer
+    // message envelope (cleartext) or the decrypted ScopedPdu (authPriv).
+    let (inbound_pdu, response_context_name) = match v3_msg.scoped_data {
+        crate::codec::V3ScopedData::Plaintext(pdu) => (pdu, v3_msg.context_name),
+        crate::codec::V3ScopedData::Encrypted(ciphertext) => {
+            // Security-level enforcement (REQ-0079) already verified the configured user
+            // is authPriv, so priv_protocol/priv_key must be Some here.
+            let Some((priv_protocol, priv_key)) = ctx
+                .usm_user
+                .and_then(|user| user.priv_protocol().zip(user.priv_key()))
+            else {
+                // No configured user or no privacy credentials — can't decrypt, discard.
+                return None;
+            };
+
+            // msgPrivacyParameters must be exactly 8 bytes (the AES salt per RFC 3826 §2.2).
+            let priv_params = &v3_msg.usm.priv_params;
+            if priv_params.len() != 8 {
+                return emit_decryption_error_response(
+                    ctx,
+                    v3_msg.msg_id,
+                    v3_msg.usm.security_flags,
+                );
+            }
+
+            // IV = engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes) per RFC 3826 §2.2.
+            let mut aes_iv = [0u8; 16];
+            aes_iv[0..4].copy_from_slice(&v3_msg.usm.auth_engine_boots.to_be_bytes());
+            aes_iv[4..8].copy_from_slice(&v3_msg.usm.auth_engine_time.to_be_bytes());
+            aes_iv[8..16].copy_from_slice(priv_params);
+
+            let Ok(scoped_pdu_bytes) = priv_protocol.decrypt(priv_key, &aes_iv, &ciphertext) else {
+                return emit_decryption_error_response(
+                    ctx,
+                    v3_msg.msg_id,
+                    v3_msg.usm.security_flags,
+                );
+            };
+
+            let Ok(decoded) = crate::codec::decode_scoped_pdu(&scoped_pdu_bytes) else {
+                return emit_decryption_error_response(
+                    ctx,
+                    v3_msg.msg_id,
+                    v3_msg.usm.security_flags,
+                );
+            };
+
+            // context_engine_id validation (RFC 3412 §7.2 step 9d) is deferred to step 12 (REQ-0104).
+
+            // Context name validated after decryption. REQ-0104 (Report PDU on mismatch)
+            // is implemented in step 12; for now silently discard non-empty context names.
+            if !decoded.context_name.is_empty() {
+                return None;
+            }
+
+            (decoded.pdu, decoded.context_name)
         }
     };
     let response = match inbound_pdu {
@@ -323,7 +410,7 @@ pub fn process_snmpv3_request(
         crate::codec::InboundPdu::SetRequest(req) => request::handle_set(&req),
     };
 
-    // context_name is always empty here: non-empty values were rejected above.
+    // response_context_name is always empty here: non-empty values were rejected above.
     let response_auth = ctx
         .usm_user
         .and_then(|user| user.auth_protocol().zip(user.auth_key()));
@@ -331,7 +418,7 @@ pub fn process_snmpv3_request(
         v3_msg.msg_id,
         ctx.engine_id,
         &v3_msg.user_name,
-        &v3_msg.context_name,
+        &response_context_name,
         ctx.engine_boots,
         ctx.engine_time,
         response_auth,
@@ -401,6 +488,11 @@ mod tests {
 
         fn with_not_in_time_windows(mut self, initial_count: u32) -> Self {
             self.not_in_time_windows = initial_count;
+            self
+        }
+
+        fn with_decryption_errors(mut self, initial_count: u32) -> Self {
+            self.decryption_errors = initial_count;
             self
         }
 
@@ -1512,10 +1604,9 @@ mod tests {
     #[test]
     fn given_encrypted_v3_message_when_process_then_silently_dropped() {
         // Verifies: REQ-0101
-        // An authPriv message with no configured user passes all preceding security checks
-        // (all are gated on usm_user.is_some()) and reaches the Encrypted arm, which
-        // silently drops it until AES decryption is wired in (REQ-0101). This test
-        // confirms that the dispatch path does not panic or crash on encrypted frames.
+        // An authPriv message with usm_user: None reaches the Encrypted arm with no
+        // configured user — without privacy credentials, decryption cannot proceed
+        // and the message is silently discarded (REQ-0101).
         use rasn_snmp::v3::{
             HeaderData, Message as V3Message, ScopedPduData, USMSecurityParameters,
         };
@@ -1559,10 +1650,451 @@ mod tests {
 
         // No configured user means the user-name and security-level checks are skipped.
         // The empty auth_params with no user also means HMAC verification is skipped.
-        // The Encrypted arm is reached and returns None (decryption not yet implemented).
+        // The Encrypted arm is reached but decryption cannot proceed without credentials.
         assert!(
             result.is_none(),
-            "encrypted PDU with no configured user must be dropped (decryption not yet implemented)"
+            "encrypted PDU with no configured user must be silently discarded"
         );
+    }
+
+    // ── authPriv decryption (REQ-0101) ───────────────────────────────────────────
+
+    /// Build a complete authPriv `GetRequest` frame (authenticated + encrypted).
+    ///
+    /// Uses `engine_id` = `test_engine_id()`, `user_name` = "alice",
+    /// `msgFlags` = 0x07 (authPriv + reportable), auth protocol = `HmacSha256` (24-byte MAC).
+    /// IV = `boots_be(4)` || `time_be(4)` || `salt(8)` per RFC 3826 §2.2.
+    fn build_authpriv_frame(
+        auth_key_bytes: &[u8],
+        priv_key_bytes: &[u8],
+        priv_protocol: crate::usm::privacy::PrivProtocol,
+        boots: u32,
+        time: u32,
+        oid_arcs: &[u32],
+        salt: [u8; 8],
+    ) -> Vec<u8> {
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use rasn_snmp::v2::{GetRequest as RasnGetRequest, Pdu, VarBind, VarBindValue};
+        use rasn_snmp::v3::{
+            HeaderData, Message as V3Message, ScopedPdu, ScopedPduData, USMSecurityParameters,
+        };
+        use std::borrow::Cow;
+
+        let engine_id = test_engine_id();
+        let mac_len = AuthProtocol::HmacSha256.mac_len();
+
+        // Build and BER-encode the ScopedPdu.
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(oid_arcs.to_vec()));
+        let get_request = RasnGetRequest(Pdu {
+            request_id: 1,
+            error_status: 0,
+            error_index: 0,
+            variable_bindings: vec![VarBind {
+                name: rasn_oid,
+                value: VarBindValue::Unspecified,
+            }],
+        });
+        let scoped_pdu = ScopedPdu {
+            engine_id: engine_id.to_vec().into(),
+            name: vec![].into(),
+            data: rasn_snmp::v2::Pdus::GetRequest(get_request),
+        };
+        let scoped_pdu_ber = rasn::ber::encode(&scoped_pdu).unwrap();
+
+        // Construct IV and encrypt the ScopedPdu.
+        let mut aes_iv = [0u8; 16];
+        aes_iv[0..4].copy_from_slice(&boots.to_be_bytes());
+        aes_iv[4..8].copy_from_slice(&time.to_be_bytes());
+        aes_iv[8..16].copy_from_slice(&salt);
+        let priv_key = SecretKey::new(priv_key_bytes.to_vec());
+        let ciphertext = priv_protocol
+            .encrypt(&priv_key, &aes_iv, &scoped_pdu_ber)
+            .unwrap();
+
+        // Build the V3Message with zeroed auth_params.
+        let zeroed_auth_params = vec![0u8; mac_len];
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: engine_id.to_vec().into(),
+            authoritative_engine_boots: boots.into(),
+            authoritative_engine_time: time.into(),
+            user_name: b"alice".to_vec().into(),
+            authentication_parameters: zeroed_auth_params.clone().into(),
+            privacy_parameters: salt.to_vec().into(),
+        };
+        let security_params = rasn::ber::encode(&usm_params).unwrap();
+        let v3_msg = V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 1.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x07u8]), // authPriv + reportable
+                security_model: 3.into(),
+            },
+            security_parameters: security_params.into(),
+            scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(ciphertext)),
+        };
+        let frame_with_zeros = rasn::ber::encode(&v3_msg).unwrap();
+
+        // Compute HMAC over frame with zeroed auth_params and splice it in.
+        let auth_key = SecretKey::new(auth_key_bytes.to_vec());
+        let mac = AuthProtocol::HmacSha256
+            .compute_mac(&auth_key, &frame_with_zeros)
+            .unwrap();
+        let pos = frame_with_zeros
+            .windows(mac_len)
+            .position(|w| w == zeroed_auth_params.as_slice())
+            .expect("zeroed auth_params must appear in frame");
+        let mut frame = frame_with_zeros;
+        frame[pos..pos + mac_len].copy_from_slice(&mac);
+        frame
+    }
+
+    #[test]
+    fn given_correct_priv_key_when_process_authpriv_then_decrypts_and_responds() {
+        // Verifies: REQ-0101
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::privacy::PrivProtocol;
+
+        let mib = crate::mib::Store::new();
+        let auth_key_bytes = [0x42u8; 32];
+        let priv_key_bytes = [0xAAu8; 16];
+        let alice = crate::usm::user::UsmUser::auth_priv(
+            "alice",
+            AuthProtocol::HmacSha256,
+            SecretKey::new(auth_key_bytes.to_vec()),
+            PrivProtocol::Aes128,
+            SecretKey::new(priv_key_bytes.to_vec()),
+        );
+        let frame = build_authpriv_frame(
+            &auth_key_bytes,
+            &priv_key_bytes,
+            PrivProtocol::Aes128,
+            1,
+            0,
+            test_oid_arcs(),
+            [0x01u8; 8],
+        );
+        let mut tc = TestCtx::new().with_boots_time(1, 0);
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_some(),
+            "correct authPriv message must produce a response"
+        );
+        assert_eq!(
+            tc.decryption_errors, 0,
+            "counter must not be incremented on success"
+        );
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&result.unwrap())
+            .expect("response must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("response must contain a cleartext ScopedPDU");
+        };
+        let rasn_snmp::v2::Pdus::Response(response_pdu) = scoped_pdu.data else {
+            panic!("response must be a GetResponse, not a Report");
+        };
+        assert_eq!(
+            response_pdu.0.request_id, 1,
+            "response request_id must match the request (1)"
+        );
+        assert_eq!(
+            response_pdu.0.error_status, 0,
+            "error_status must be NoError (0)"
+        );
+        // The MIB is empty, so the OID from the request produces a NoSuchObject varbind.
+        assert_eq!(
+            response_pdu.0.variable_bindings.len(),
+            1,
+            "response must contain one varbind"
+        );
+        assert_eq!(
+            response_pdu.0.variable_bindings[0].name.as_ref(),
+            test_oid_arcs(),
+            "response varbind OID must match the request OID"
+        );
+    }
+
+    #[test]
+    fn given_wrong_priv_key_when_process_authpriv_then_returns_report_and_increments_counter() {
+        // Verifies: REQ-0101
+        // AES-CFB decryption with a wrong key produces garbage bytes. When we try to
+        // BER-decode those bytes as a ScopedPDU, it fails — the counter is incremented
+        // and a Report is returned.
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::privacy::PrivProtocol;
+
+        let mib = crate::mib::Store::new();
+        let auth_key_bytes = [0x42u8; 32];
+        let priv_key_bytes = [0xAAu8; 16];
+        let wrong_priv_key_bytes = [0xBBu8; 16];
+        let alice = crate::usm::user::UsmUser::auth_priv(
+            "alice",
+            AuthProtocol::HmacSha256,
+            SecretKey::new(auth_key_bytes.to_vec()),
+            PrivProtocol::Aes128,
+            SecretKey::new(wrong_priv_key_bytes.to_vec()),
+        );
+        let frame = build_authpriv_frame(
+            &auth_key_bytes,
+            &priv_key_bytes,
+            PrivProtocol::Aes128,
+            1,
+            0,
+            test_oid_arcs(),
+            [0x01u8; 8],
+        );
+        let mut tc = TestCtx::new().with_boots_time(1, 0);
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_some(),
+            "decryption failure must produce a Report response"
+        );
+        assert_eq!(
+            tc.decryption_errors, 1,
+            "counter must be incremented on decryption failure"
+        );
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&result.unwrap())
+            .expect("response must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("Report response must contain a cleartext ScopedPDU");
+        };
+        let rasn_snmp::v2::Pdus::Report(report_pdu) = scoped_pdu.data else {
+            panic!("response must be a Report PDU");
+        };
+        let varbind = &report_pdu.0.variable_bindings[0];
+        let expected_oid: crate::codec::Oid = crate::usm::counters::USM_STATS_DECRYPTION_ERRORS
+            .parse()
+            .unwrap();
+        assert_eq!(
+            varbind.name.as_ref(),
+            expected_oid.as_slice(),
+            "Report varbind OID must be usmStatsDecryptionErrors"
+        );
+    }
+
+    #[test]
+    fn given_invalid_priv_params_length_when_process_authpriv_then_returns_report_and_increments_counter()
+     {
+        // Verifies: REQ-0101 — msgPrivacyParameters of length != 8 must be rejected
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::privacy::PrivProtocol;
+        use rasn_snmp::v3::{
+            HeaderData, Message as V3Message, ScopedPduData, USMSecurityParameters,
+        };
+
+        let mib = crate::mib::Store::new();
+        let auth_key_bytes = [0x42u8; 32];
+        let priv_key_bytes = [0xAAu8; 16];
+        let mac_len = AuthProtocol::HmacSha256.mac_len();
+        let engine_id = test_engine_id();
+        let boots = 1u32;
+        let time = 0u32;
+
+        let alice = crate::usm::user::UsmUser::auth_priv(
+            "alice",
+            AuthProtocol::HmacSha256,
+            SecretKey::new(auth_key_bytes.to_vec()),
+            PrivProtocol::Aes128,
+            SecretKey::new(priv_key_bytes.to_vec()),
+        );
+
+        // Build a frame with privacy_parameters of length 4 (not 8) and fake ciphertext.
+        let zeroed_auth_params = vec![0u8; mac_len];
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: engine_id.to_vec().into(),
+            authoritative_engine_boots: boots.into(),
+            authoritative_engine_time: time.into(),
+            user_name: b"alice".to_vec().into(),
+            authentication_parameters: zeroed_auth_params.clone().into(),
+            // 4-byte salt (invalid — RFC 3826 §2.2 requires exactly 8 bytes)
+            privacy_parameters: vec![0x01u8; 4].into(),
+        };
+        let security_params = rasn::ber::encode(&usm_params).unwrap();
+        let v3_msg = V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 1.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x07u8]), // authPriv + reportable
+                security_model: 3.into(),
+            },
+            security_parameters: security_params.into(),
+            scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(
+                b"fake-ciphertext".to_vec(),
+            )),
+        };
+        let frame_with_zeros = rasn::ber::encode(&v3_msg).unwrap();
+
+        // Compute a valid HMAC so dispatch proceeds past authentication to the decryption arm.
+        let auth_key = SecretKey::new(auth_key_bytes.to_vec());
+        let mac = AuthProtocol::HmacSha256
+            .compute_mac(&auth_key, &frame_with_zeros)
+            .unwrap();
+        let pos = frame_with_zeros
+            .windows(mac_len)
+            .position(|w| w == zeroed_auth_params.as_slice())
+            .unwrap();
+        let mut frame = frame_with_zeros;
+        frame[pos..pos + mac_len].copy_from_slice(&mac);
+
+        let mut tc = TestCtx::new().with_boots_time(1, 0);
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_some(),
+            "invalid priv_params length must produce a Report response"
+        );
+        assert_eq!(
+            tc.decryption_errors, 1,
+            "decryption_errors counter must be incremented for invalid priv_params length"
+        );
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&result.unwrap())
+            .expect("response must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("Report response must contain a cleartext ScopedPDU");
+        };
+        let rasn_snmp::v2::Pdus::Report(report_pdu) = scoped_pdu.data else {
+            panic!("response must be a Report PDU");
+        };
+        let varbind = &report_pdu.0.variable_bindings[0];
+        let expected_oid: crate::codec::Oid = crate::usm::counters::USM_STATS_DECRYPTION_ERRORS
+            .parse()
+            .unwrap();
+        assert_eq!(
+            varbind.name.as_ref(),
+            expected_oid.as_slice(),
+            "Report varbind OID must be usmStatsDecryptionErrors"
+        );
+    }
+
+    #[test]
+    fn given_decryption_failure_without_reportable_flag_when_process_then_discarded_but_counter_incremented()
+     {
+        // Verifies: REQ-0101
+        // Builds an authPriv frame manually with flags = 0x03 (authPriv, no reportableFlag)
+        // and uses a wrong priv key so decryption produces garbage → ScopedPDU decode fails.
+        // Counter is incremented but no Report is sent.
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::privacy::PrivProtocol;
+        use rasn_snmp::v3::{
+            HeaderData, Message as V3Message, ScopedPduData, USMSecurityParameters,
+        };
+
+        let mib = crate::mib::Store::new();
+        let auth_key_bytes = [0x42u8; 32];
+        let wrong_priv_key_bytes = [0xBBu8; 16];
+        let mac_len = AuthProtocol::HmacSha256.mac_len();
+        let salt = [0x01u8; 8];
+        let engine_id = test_engine_id();
+        let boots = 1u32;
+        let time = 0u32;
+
+        let alice = crate::usm::user::UsmUser::auth_priv(
+            "alice",
+            AuthProtocol::HmacSha256,
+            SecretKey::new(auth_key_bytes.to_vec()),
+            PrivProtocol::Aes128,
+            SecretKey::new(wrong_priv_key_bytes.to_vec()),
+        );
+
+        // Build frame with flags = 0x03 (authPriv, no reportableFlag) and corrupted ciphertext.
+        let fake_ciphertext = b"corrupted-ciphertext-that-wont-decode-as-scoped-pdu".to_vec();
+        let zeroed_auth_params = vec![0u8; mac_len];
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: engine_id.to_vec().into(),
+            authoritative_engine_boots: boots.into(),
+            authoritative_engine_time: time.into(),
+            user_name: b"alice".to_vec().into(),
+            authentication_parameters: zeroed_auth_params.clone().into(),
+            privacy_parameters: salt.to_vec().into(),
+        };
+        let security_params = rasn::ber::encode(&usm_params).unwrap();
+        let v3_msg = V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 1.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x03u8]), // authPriv, no reportableFlag
+                security_model: 3.into(),
+            },
+            security_parameters: security_params.into(),
+            scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(
+                fake_ciphertext,
+            )),
+        };
+        let frame_with_zeros = rasn::ber::encode(&v3_msg).unwrap();
+        let auth_key = SecretKey::new(auth_key_bytes.to_vec());
+        let mac = AuthProtocol::HmacSha256
+            .compute_mac(&auth_key, &frame_with_zeros)
+            .unwrap();
+        let pos = frame_with_zeros
+            .windows(mac_len)
+            .position(|w| w == zeroed_auth_params.as_slice())
+            .unwrap();
+        let mut frame = frame_with_zeros;
+        frame[pos..pos + mac_len].copy_from_slice(&mac);
+
+        let mut tc = TestCtx::new().with_boots_time(1, 0);
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_none(),
+            "decryption failure without reportableFlag must be silently discarded"
+        );
+        assert_eq!(
+            tc.decryption_errors, 1,
+            "counter must still be incremented even when no Report is sent"
+        );
+    }
+
+    #[test]
+    fn given_counter_at_max_when_decryption_fails_then_counter_does_not_overflow() {
+        // Verifies: REQ-0101
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::privacy::PrivProtocol;
+
+        let mib = crate::mib::Store::new();
+        let auth_key_bytes = [0x42u8; 32];
+        let priv_key_bytes = [0xAAu8; 16];
+        let wrong_priv_key_bytes = [0xBBu8; 16];
+        let alice = crate::usm::user::UsmUser::auth_priv(
+            "alice",
+            AuthProtocol::HmacSha256,
+            SecretKey::new(auth_key_bytes.to_vec()),
+            PrivProtocol::Aes128,
+            SecretKey::new(wrong_priv_key_bytes.to_vec()),
+        );
+        let frame = build_authpriv_frame(
+            &auth_key_bytes,
+            &priv_key_bytes,
+            PrivProtocol::Aes128,
+            1,
+            0,
+            test_oid_arcs(),
+            [0x01u8; 8],
+        );
+        let mut tc = TestCtx::new()
+            .with_boots_time(1, 0)
+            .with_decryption_errors(u32::MAX);
+        {
+            let mut ctx = tc.ctx(Some(&alice));
+            let _ = process_snmpv3_request(&frame, &mut ctx, &mib);
+        }
+        assert_eq!(tc.decryption_errors, u32::MAX, "counter must not overflow");
     }
 }

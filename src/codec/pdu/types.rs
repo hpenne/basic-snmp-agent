@@ -221,6 +221,22 @@ pub enum V3ScopedData {
     Encrypted(Vec<u8>),
 }
 
+// ── DecodedScopedPdu ──────────────────────────────────────────────────────────
+
+/// The decoded contents of a BER-encoded `ScopedPdu`, produced by [`decode_scoped_pdu`].
+///
+/// # Requirements
+/// Implements: REQ-0101
+#[derive(Debug, PartialEq, Eq)]
+pub struct DecodedScopedPdu {
+    /// `contextEngineID` extracted from the `ScopedPdu`.
+    pub context_engine_id: Vec<u8>,
+    /// `contextName` extracted from the `ScopedPdu`.
+    pub context_name: Vec<u8>,
+    /// The decoded inbound PDU.
+    pub pdu: InboundPdu,
+}
+
 // ── UsmSecurityFields / V3InboundMessage ─────────────────────────────────────
 
 /// USM security parameters extracted from the inbound message header.
