@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tests/test-agent", "tests/test-agent-mib", "tests/test-agent-mib-auth", "tests/snmpv3-frames"]
+members = [".", "tests/test-agent", "tests/test-agent-mib", "tests/test-agent-mib-common", "tests/test-agent-mib-auth", "tests/test-agent-mib-auth-priv", "tests/snmpv3-frames"]
 exclude = ["fuzz"]
 resolver = "2"
 

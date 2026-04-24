@@ -51,6 +51,19 @@ services:
     profiles:
       - build-only
 
+  # test-agent-mib-auth-priv is run on-demand by behave (docker run --rm), not as a
+  # long-running service. This entry only declares the build so that
+  # `docker compose build` produces the image.
+  test-agent-mib-auth-priv:
+    build:
+      context: ../../
+      dockerfile: tests/system/docker/test-agent-mib-auth-priv/Dockerfile
+    image: test-agent-mib-auth-priv-test
+    networks:
+      - snmp-test
+    profiles:
+      - build-only
+
   # snmp-client is run on-demand by behave (docker run --rm) to issue
   # net-snmp CLI queries against test-agent-mib containers.
   snmp-client:

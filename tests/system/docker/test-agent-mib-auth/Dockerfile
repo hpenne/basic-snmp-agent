@@ -7,6 +7,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
 COPY tests/test-agent/ tests/test-agent/
 COPY tests/test-agent-mib/ tests/test-agent-mib/
+COPY tests/test-agent-mib-common/ tests/test-agent-mib-common/
 COPY tests/test-agent-mib-auth/ tests/test-agent-mib-auth/
 COPY tests/snmpv3-frames/ tests/snmpv3-frames/
 

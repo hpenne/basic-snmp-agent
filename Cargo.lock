@@ -771,10 +771,27 @@ name = "test-agent-mib"
 version = "0.1.0"
 dependencies = [
  "basic-snmp-agent",
+ "test-agent-mib-common",
 ]
 
 [[package]]
 name = "test-agent-mib-auth"
+version = "0.1.0"
+dependencies = [
+ "basic-snmp-agent",
+ "test-agent-mib-common",
+]
+
+[[package]]
+name = "test-agent-mib-auth-priv"
+version = "0.1.0"
+dependencies = [
+ "basic-snmp-agent",
+ "test-agent-mib-common",
+]
+
+[[package]]
+name = "test-agent-mib-common"
 version = "0.1.0"
 dependencies = [
  "basic-snmp-agent",

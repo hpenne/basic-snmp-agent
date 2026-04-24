@@ -6,3 +6,4 @@ publish = false
 
 [dependencies]
 basic-snmp-agent = { path = "../../" }
+test-agent-mib-common = { path = "../test-agent-mib-common" }

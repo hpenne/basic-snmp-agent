@@ -1,18 +1,21 @@
-//! Test agent binary for system-level authNoPriv MIB read tests.
+//! Test agent binary for system-level authPriv MIB read tests.
 //!
 //! Starts a `basic-snmp-agent` instance pre-seeded with a small set of known
 //! MIB values and configured with a USM user requiring HMAC-SHA-256
-//! authentication. Gherkin/Behave tests use this agent to exercise GET,
-//! GETNEXT, and GETBULK with authNoPriv security, and to verify that requests
-//! with wrong credentials are correctly rejected.
+//! authentication and AES-128-CFB privacy. Gherkin/Behave tests use this agent
+//! to exercise GET, GETNEXT, and GETBULK with authPriv security, and to verify
+//! that requests with wrong credentials or insufficient security level are
+//! correctly rejected.
 //!
 //! The agent listens on port 10161 (plain TCP) and parks the main thread
 //! forever once it has printed its ready message.
 
 use basic_snmp_agent::AgentBuilder;
 use basic_snmp_agent::usm::auth::AuthProtocol;
+use basic_snmp_agent::usm::keys::SecretKey;
+use basic_snmp_agent::usm::privacy::PrivProtocol;
 
-const ENGINE_ID: &[u8] = b"\x80\x00\x1f\x88\x04test-agent-auth";
+const ENGINE_ID: &[u8] = b"\x80\x00\x1f\x88\x04test-agent-priv";
 
 fn main() {
     let auth_key = basic_snmp_agent::usm::kdf::password_to_localised_key(
@@ -20,10 +23,19 @@ fn main() {
         ENGINE_ID,
         AuthProtocol::HmacSha256,
     );
-    let usm_user = basic_snmp_agent::usm::user::UsmUser::auth_no_priv(
-        "authuser",
+    let priv_key_full = basic_snmp_agent::usm::kdf::password_to_localised_key(
+        b"privpassword",
+        ENGINE_ID,
+        AuthProtocol::HmacSha256,
+    );
+    let priv_key =
+        SecretKey::new(priv_key_full.as_bytes()[..PrivProtocol::Aes128.key_len()].to_vec());
+    let usm_user = basic_snmp_agent::usm::user::UsmUser::auth_priv(
+        "privuser",
         AuthProtocol::HmacSha256,
         auth_key,
+        PrivProtocol::Aes128,
+        priv_key,
     );
 
     let agent = AgentBuilder::new()
@@ -38,10 +50,10 @@ fn main() {
 
     // Seed the MIB with a small, predictable set of OIDs that the system
     // tests can query by name without guessing their values.
-    test_agent_mib_common::seed_test_mib(&agent, "test-agent-mib-auth");
+    test_agent_mib_common::seed_test_mib(&agent, "test-agent-mib-auth-priv");
 
     // Signal to the test harness that the agent is ready to accept connections.
-    println!("test-agent-mib-auth ready");
+    println!("test-agent-mib-auth-priv ready");
 
     // Park the main thread indefinitely; the agent event loop runs on its own
     // thread and will continue serving requests until the process is killed.
