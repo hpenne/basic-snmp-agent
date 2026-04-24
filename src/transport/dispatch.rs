@@ -46,6 +46,9 @@ static NOT_IN_TIME_WINDOWS_OID: std::sync::LazyLock<crate::codec::Oid> =
             .expect("USM_STATS_NOT_IN_TIME_WINDOWS is a valid OID constant")
     });
 
+/// Bit mask for the `reportableFlag` in `msgFlags` (RFC 3412 §7.1.3a).
+const REPORTABLE_FLAG: u8 = 0x04;
+
 /// Engine state and statistics passed to each inbound frame dispatch.
 ///
 /// # Requirements
@@ -113,7 +116,7 @@ fn zero_auth_params_in_message(
 ///
 /// Engine-ID discovery probes (empty `msgAuthoritativeEngineID`) always produce
 /// a Report PDU response and increment `ctx.unknown_engine_ids_counter` (REQ-0093),
-/// provided the `reportableFlag` (`0x04`) is set in `msgFlags`. Probes without
+/// provided the `reportableFlag` ([`REPORTABLE_FLAG`]) is set in `msgFlags`. Probes without
 /// the flag set are silently discarded per RFC 3412 §7.1.3a.
 ///
 /// # Requirements
@@ -168,7 +171,7 @@ pub fn process_snmpv3_request(
     // so the manager can learn our engine ID, boots, and approximate time.
     if v3_msg.usm.auth_engine_id.is_empty() {
         // RFC 3412 §7.1.3a: if the reportableFlag is not set, discard without response.
-        if v3_msg.usm.security_flags & 0x04 == 0 {
+        if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
             return None;
         }
         *ctx.unknown_engine_ids_counter = ctx.unknown_engine_ids_counter.saturating_add(1);
@@ -197,7 +200,7 @@ pub fn process_snmpv3_request(
         && v3_msg.user_name != user.name().as_bytes()
     {
         *ctx.unknown_user_names_counter = ctx.unknown_user_names_counter.saturating_add(1);
-        if v3_msg.usm.security_flags & 0x04 == 0 {
+        if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
             return None;
         }
         return crate::codec::encode_v3_report(
@@ -221,7 +224,7 @@ pub fn process_snmpv3_request(
         if msg_level.ok() != Some(user.security_level()) {
             *ctx.unsupported_sec_levels_counter =
                 ctx.unsupported_sec_levels_counter.saturating_add(1);
-            if v3_msg.usm.security_flags & 0x04 == 0 {
+            if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
                 return None;
             }
             return crate::codec::encode_v3_report(
@@ -256,7 +259,7 @@ pub fn process_snmpv3_request(
         };
         if !hmac_ok {
             *ctx.wrong_digests_counter = ctx.wrong_digests_counter.saturating_add(1);
-            if v3_msg.usm.security_flags & 0x04 == 0 {
+            if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
                 return None;
             }
             return crate::codec::encode_v3_report(
@@ -283,7 +286,7 @@ pub fn process_snmpv3_request(
         )
     {
         *ctx.not_in_time_windows_counter = ctx.not_in_time_windows_counter.saturating_add(1);
-        if v3_msg.usm.security_flags & 0x04 == 0 {
+        if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
             return None;
         }
         return crate::codec::encode_v3_report(
@@ -1311,6 +1314,14 @@ mod tests {
         );
         let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&result.unwrap())
             .expect("response must be a valid SNMPv3 message");
+        assert_eq!(
+            i32::try_from(v3_response.global_data.message_id).unwrap(),
+            1i32,
+            "Report response must echo the request msg_id"
+        );
+        let usm_params: rasn_snmp::v3::USMSecurityParameters =
+            rasn::ber::decode(v3_response.security_parameters.as_ref())
+                .expect("security parameters must be valid USMSecurityParameters");
         let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
             panic!("Report response must contain a cleartext ScopedPDU");
         };
@@ -1338,6 +1349,16 @@ mod tests {
             panic!("Report varbind value must be a Counter32");
         };
         assert_eq!(counter.0, 1u32, "Report varbind must carry counter value 1");
+        assert_eq!(
+            u32::try_from(usm_params.authoritative_engine_boots).unwrap(),
+            1u32,
+            "Report response must carry the agent's engine boots"
+        );
+        assert_eq!(
+            u32::try_from(usm_params.authoritative_engine_time).unwrap(),
+            0u32,
+            "Report response must carry the agent's engine time"
+        );
     }
 
     #[test]
