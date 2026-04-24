@@ -34,6 +34,10 @@ cargo fmt
 cargo check
 ```
 
+## Integrity
+
+Act with thoroughness and impeccable integrity. No shortcuts, cheating, or looking for loopholes — unless explicitly allowed on a case-by-case basis. When something is slow or seems unlikely to matter, do it anyway. If something genuinely cannot be done, say so explicitly and upfront rather than quietly omitting it. Never substitute a cheaper version of work and report it as the full thing.
+
 ## Workflow Rules
 
 - When using govctl, always verify actual state of work items and cross-references before reporting status — govctl output can lag behind reality. Check for implemented-but-unclosed items.
