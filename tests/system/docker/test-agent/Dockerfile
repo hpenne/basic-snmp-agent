@@ -9,6 +9,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
 COPY tests/test-agent/ tests/test-agent/
 COPY tests/test-agent-mib/ tests/test-agent-mib/
+COPY tests/test-agent-mib-auth/ tests/test-agent-mib-auth/
 COPY tests/snmpv3-frames/ tests/snmpv3-frames/
 
 # Cache the cargo registry and compiled artifacts across builds so that only

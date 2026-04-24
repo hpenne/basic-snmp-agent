@@ -315,11 +315,17 @@ pub fn process_snmpv3_request(
     };
 
     // context_name is always empty here: non-empty values were rejected above.
+    let response_auth = ctx
+        .usm_user
+        .and_then(|user| user.auth_protocol().zip(user.auth_key()));
     crate::codec::encode_v3_response(
         v3_msg.msg_id,
         ctx.engine_id,
         &v3_msg.user_name,
         &v3_msg.context_name,
+        ctx.engine_boots,
+        ctx.engine_time,
+        response_auth,
         &response,
     )
     .ok()

@@ -155,17 +155,26 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
 /// BER-encode a [`GetResponse`] inside a full `SNMPv3` message envelope.
 ///
 /// Constructs a `ScopedPdu` from `engine_id` and `context_name`, wraps it in
-/// `ScopedPduData::CleartextPdu`, and builds an `SNMPv3` `Message` with
-/// `HeaderData` indicating USM noAuthNoPriv. The `USMSecurityParameters` include
-/// the authoritative engine ID and the original `user_name` echoed back, as
-/// required by RFC 3414 §8.2.4 so the command generator can match the response.
+/// `ScopedPduData::CleartextPdu`, and builds an `SNMPv3` `Message`. The
+/// `USMSecurityParameters` include the authoritative engine ID and the original
+/// `user_name` echoed back, as required by RFC 3414 §8.2.4 so the command
+/// generator can match the response.
+///
+/// `engine_boots` and `engine_time` are always set in the USM security
+/// parameters, regardless of security level, as required by RFC 3414 §7.1.4.
+///
+/// When `auth` is `Some((protocol, key))`, the response is signed with HMAC
+/// and the `msgFlags` `authFlag` (bit 0) is set. When `auth` is `None`, the
+/// message is sent noAuthNoPriv with flags `0x00`.
 ///
 /// # Errors
 ///
-/// Returns an [`EncodeError`] if `rasn` fails to BER-encode any part of the message.
+/// Returns an [`EncodeError`] if `rasn` fails to BER-encode any part of the
+/// message, if HMAC computation fails, or if the auth-params placeholder
+/// cannot be located within the encoded message.
 ///
 /// # Requirements
-/// Implements: REQ-0068, REQ-0070, REQ-0072
+/// Implements: REQ-0068, REQ-0070, REQ-0072, REQ-0100
 ///
 /// # Examples
 ///
@@ -178,14 +187,18 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
 ///     error_index: 0,
 ///     varbinds: vec![],
 /// };
-/// let bytes = encode_v3_response(1, b"engine", b"user", b"", &pdu).unwrap();
+/// let bytes = encode_v3_response(1, b"engine", b"user", b"", 0, 0, None, &pdu).unwrap();
 /// assert!(!bytes.is_empty());
 /// ```
+#[allow(clippy::too_many_arguments)]
 pub fn encode_v3_response(
     msg_id: i32,
     engine_id: &[u8],
     user_name: &[u8],
     context_name: &[u8],
+    engine_boots: u32,
+    engine_time: u32,
+    auth: Option<(crate::usm::auth::AuthProtocol, &crate::usm::keys::SecretKey)>,
     pdu: &GetResponse,
 ) -> Result<Vec<u8>, EncodeError> {
     let rasn_response = Response(RasnPdu {
@@ -201,16 +214,20 @@ pub fn encode_v3_response(
         data: Pdus::Response(rasn_response),
     };
 
-    // RFC 3414 §8.2.4: the response's USMSecurityParameters must include the
-    // authoritative engine ID and the original msgUserName so the command
-    // generator can match the response to its pending request.
-    // auth/priv parameters remain zero-length for noAuthNoPriv.
+    let auth_params: Vec<u8> = auth
+        .as_ref()
+        .map(|(proto, _)| vec![0u8; proto.mac_len()])
+        .unwrap_or_default();
+    let flags_byte = u8::from(auth.is_some());
+
+    // RFC 3414 §8.2.4: echo engine state and user name; placeholder is already
+    // all-zeros so no separate zeroing step is needed before HMAC computation.
     let usm_params = USMSecurityParameters {
         authoritative_engine_id: engine_id.to_vec().into(),
-        authoritative_engine_boots: 0.into(),
-        authoritative_engine_time: 0.into(),
+        authoritative_engine_boots: engine_boots.into(),
+        authoritative_engine_time: engine_time.into(),
         user_name: user_name.to_vec().into(),
-        authentication_parameters: rasn::types::OctetString::from(vec![]),
+        authentication_parameters: rasn::types::OctetString::from(auth_params.clone()),
         privacy_parameters: rasn::types::OctetString::from(vec![]),
     };
 
@@ -218,22 +235,58 @@ pub fn encode_v3_response(
         EncodeError::new(format!("BER encoding of USMSecurityParameters failed: {e}"))
     })?;
 
-    // flags byte 0x00: noAuthNoPriv, reportable bit clear (response).
     let v3_message = V3Message {
         version: 3.into(),
         global_data: HeaderData {
             message_id: msg_id.into(),
             max_size: 65535.into(),
-            flags: rasn::types::OctetString::from(vec![0x00]),
+            flags: rasn::types::OctetString::from(vec![flags_byte]),
             // Security model 3 = USM (RFC 3414).
             security_model: 3.into(),
         },
-        security_parameters: security_parameters_bytes.into(),
+        // Cloned because security_parameters_bytes is needed for the two-step
+        // auth_params offset search after the message is encoded.
+        security_parameters: security_parameters_bytes.clone().into(),
         scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
     };
 
-    rasn::ber::encode(&v3_message)
-        .map_err(|e| EncodeError::new(format!("BER encoding of SNMPv3 Message failed: {e}")))
+    let mut encoded_message = rasn::ber::encode(&v3_message)
+        .map_err(|e| EncodeError::new(format!("BER encoding of SNMPv3 Message failed: {e}")))?;
+
+    if let Some((auth_protocol, auth_key)) = auth {
+        let mac_len = auth_params.len();
+
+        // Locate the auth_params placeholder within the encoded message using
+        // the two-step search to avoid false positives from attacker-controlled
+        // varbind data coincidentally matching the placeholder.
+        let usm_pos = encoded_message
+            .windows(security_parameters_bytes.len())
+            .position(|w| w == security_parameters_bytes.as_slice())
+            .ok_or_else(|| {
+                EncodeError::new("USM security parameters not found in encoded message")
+            })?;
+        let auth_pos = encoded_message[usm_pos..usm_pos + security_parameters_bytes.len()]
+            .windows(mac_len)
+            .position(|w| w == auth_params.as_slice())
+            .ok_or_else(|| {
+                EncodeError::new(
+                    "auth params placeholder not found in USM security parameters region",
+                )
+            })?;
+        let auth_params_offset = usm_pos + auth_pos;
+
+        // The placeholder is already all-zeros so no zeroing step is needed
+        // before computing the HMAC.
+        let mac = auth_protocol
+            .compute_mac(auth_key, &encoded_message)
+            .map_err(|e| EncodeError::new(format!("HMAC computation failed: {e}")))?;
+
+        encoded_message[auth_params_offset..auth_params_offset + mac_len].copy_from_slice(&mac);
+
+        Ok(encoded_message)
+    } else {
+        Ok(encoded_message)
+    }
 }
 
 /// BER-encode an `SNMPv3` Report PDU in a full message envelope.
@@ -567,7 +620,7 @@ mod tests {
             }],
         };
 
-        let encoded = encode_v3_response(5, engine_id, b"testuser", b"", &pdu).unwrap();
+        let encoded = encode_v3_response(5, engine_id, b"testuser", b"", 0, 0, None, &pdu).unwrap();
 
         // Decode back as a V3Message to verify structural validity.
         let decoded: V3Message = rasn::ber::decode(&encoded).expect("must decode as V3Message");
@@ -596,6 +649,201 @@ mod tests {
             b"testuser",
             "user_name must be echoed in USM security parameters"
         );
+    }
+
+    #[test]
+    fn given_auth_no_priv_when_encode_v3_response_then_mac_is_embedded_and_valid() {
+        // Verifies: REQ-0100
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let auth_key = SecretKey::new(vec![0x42u8; 32]);
+        let auth_key_for_verify = SecretKey::new(vec![0x42u8; 32]);
+        let auth_protocol = AuthProtocol::HmacSha256;
+        let pdu = GetResponse {
+            request_id: 7,
+            error_status: ErrorStatus::NoError,
+            error_index: 0,
+            varbinds: vec![],
+        };
+
+        let encoded = encode_v3_response(
+            3,
+            engine_id,
+            b"authuser",
+            b"",
+            1,
+            100,
+            Some((auth_protocol, &auth_key)),
+            &pdu,
+        )
+        .unwrap();
+
+        // Decode and verify structure
+        let decoded: V3Message = rasn::ber::decode(&encoded).expect("must decode as V3Message");
+        let flags_byte = decoded.global_data.flags.first().copied().unwrap_or(0);
+        assert_eq!(flags_byte & 0x01, 0x01, "authFlag must be set in response");
+
+        let usm_params: USMSecurityParameters =
+            rasn::ber::decode(decoded.security_parameters.as_ref())
+                .expect("USM security parameters must decode");
+        assert_eq!(
+            usm_params.authentication_parameters.len(),
+            24,
+            "authentication_parameters must be 24 bytes for HMAC-SHA-256"
+        );
+        assert_eq!(
+            u32::try_from(&usm_params.authoritative_engine_boots).unwrap(),
+            1,
+            "engine_boots must be set in response"
+        );
+        assert_eq!(
+            u32::try_from(&usm_params.authoritative_engine_time).unwrap(),
+            100,
+            "engine_time must be set in response"
+        );
+
+        // Verify the embedded MAC using verify_mac for constant-time comparison.
+        let embedded_mac = usm_params.authentication_parameters.to_vec();
+        let usm_raw = decoded.security_parameters.as_ref();
+        let usm_pos = encoded
+            .windows(usm_raw.len())
+            .position(|w| w == usm_raw)
+            .expect("USM bytes must appear in encoded message");
+        let auth_pos = encoded[usm_pos..usm_pos + usm_raw.len()]
+            .windows(embedded_mac.len())
+            .position(|w| w == embedded_mac.as_slice())
+            .expect("MAC must appear within USM region");
+        let auth_params_offset = usm_pos + auth_pos;
+
+        let mut zeroed = encoded.clone();
+        zeroed[auth_params_offset..auth_params_offset + embedded_mac.len()].fill(0);
+
+        auth_protocol
+            .verify_mac(&auth_key_for_verify, &zeroed, &embedded_mac)
+            .expect("MAC must verify");
+    }
+
+    #[test]
+    fn given_auth_no_priv_sha512_when_encode_v3_response_then_mac_is_embedded_and_valid() {
+        // Verifies: REQ-0100
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let auth_key = SecretKey::new(vec![0x42u8; 64]);
+        let auth_key_for_verify = SecretKey::new(vec![0x42u8; 64]);
+        let auth_protocol = AuthProtocol::HmacSha512;
+        let pdu = GetResponse {
+            request_id: 8,
+            error_status: ErrorStatus::NoError,
+            error_index: 0,
+            varbinds: vec![],
+        };
+
+        let encoded = encode_v3_response(
+            4,
+            engine_id,
+            b"authuser512",
+            b"",
+            2,
+            200,
+            Some((auth_protocol, &auth_key)),
+            &pdu,
+        )
+        .unwrap();
+
+        let decoded: V3Message = rasn::ber::decode(&encoded).expect("must decode as V3Message");
+        let flags_byte = decoded.global_data.flags.first().copied().unwrap_or(0);
+        assert_eq!(flags_byte & 0x01, 0x01, "authFlag must be set in response");
+
+        let usm_params: USMSecurityParameters =
+            rasn::ber::decode(decoded.security_parameters.as_ref())
+                .expect("USM security parameters must decode");
+        assert_eq!(
+            usm_params.authentication_parameters.len(),
+            48,
+            "authentication_parameters must be 48 bytes for HMAC-SHA-512"
+        );
+
+        let embedded_mac = usm_params.authentication_parameters.to_vec();
+        let usm_raw = decoded.security_parameters.as_ref();
+        let usm_pos = encoded
+            .windows(usm_raw.len())
+            .position(|w| w == usm_raw)
+            .expect("USM bytes must appear in encoded message");
+        let auth_pos = encoded[usm_pos..usm_pos + usm_raw.len()]
+            .windows(embedded_mac.len())
+            .position(|w| w == embedded_mac.as_slice())
+            .expect("MAC must appear within USM region");
+        let auth_params_offset = usm_pos + auth_pos;
+
+        let mut zeroed = encoded.clone();
+        zeroed[auth_params_offset..auth_params_offset + embedded_mac.len()].fill(0);
+
+        auth_protocol
+            .verify_mac(&auth_key_for_verify, &zeroed, &embedded_mac)
+            .expect("MAC must verify");
+    }
+
+    #[test]
+    fn given_auth_no_priv_with_zero_varbind_when_encode_v3_response_then_correct_mac_offset() {
+        // Verifies: REQ-0100
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let auth_key = SecretKey::new(vec![0x42u8; 32]);
+        let auth_key_for_verify = SecretKey::new(vec![0x42u8; 32]);
+        let auth_protocol = AuthProtocol::HmacSha256;
+        // Varbind value is all-zeros with length 24, identical to the SHA-256 placeholder.
+        let pdu = GetResponse {
+            request_id: 1,
+            error_status: ErrorStatus::NoError,
+            error_index: 0,
+            varbinds: vec![Varbind {
+                oid: "1.3.6.1.2.1.1.1.0".parse().unwrap(),
+                value: VarbindValue::Value(Value::OctetString(vec![0u8; 24])),
+            }],
+        };
+
+        let encoded = encode_v3_response(
+            5,
+            engine_id,
+            b"authuser",
+            b"",
+            1,
+            100,
+            Some((auth_protocol, &auth_key)),
+            &pdu,
+        )
+        .unwrap();
+
+        let decoded: V3Message = rasn::ber::decode(&encoded).expect("must decode as V3Message");
+        let usm_params: USMSecurityParameters =
+            rasn::ber::decode(decoded.security_parameters.as_ref())
+                .expect("USM security parameters must decode");
+        let embedded_mac = usm_params.authentication_parameters.to_vec();
+
+        // Mirrors the production two-step search to independently verify the offset logic.
+        let usm_raw = decoded.security_parameters.as_ref();
+        let usm_pos = encoded
+            .windows(usm_raw.len())
+            .position(|w| w == usm_raw)
+            .expect("USM bytes must appear in encoded message");
+        let auth_pos = encoded[usm_pos..usm_pos + usm_raw.len()]
+            .windows(embedded_mac.len())
+            .position(|w| w == embedded_mac.as_slice())
+            .expect("MAC must appear within USM region");
+        let auth_params_offset = usm_pos + auth_pos;
+
+        let mut zeroed = encoded.clone();
+        zeroed[auth_params_offset..auth_params_offset + embedded_mac.len()].fill(0);
+
+        auth_protocol
+            .verify_mac(&auth_key_for_verify, &zeroed, &embedded_mac)
+            .expect("MAC must verify");
     }
 
     #[test]
