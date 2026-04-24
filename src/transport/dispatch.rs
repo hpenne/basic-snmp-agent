@@ -38,10 +38,18 @@ static WRONG_DIGESTS_OID: std::sync::LazyLock<crate::codec::Oid> = std::sync::La
         .expect("USM_STATS_WRONG_DIGESTS is a valid OID constant")
 });
 
+// Implements: REQ-0098
+static NOT_IN_TIME_WINDOWS_OID: std::sync::LazyLock<crate::codec::Oid> =
+    std::sync::LazyLock::new(|| {
+        crate::usm::counters::USM_STATS_NOT_IN_TIME_WINDOWS
+            .parse()
+            .expect("USM_STATS_NOT_IN_TIME_WINDOWS is a valid OID constant")
+    });
+
 /// Engine state and statistics passed to each inbound frame dispatch.
 ///
 /// # Requirements
-/// Implements: REQ-0093, REQ-0094, REQ-0078, REQ-0079, REQ-0100, REQ-0101
+/// Implements: REQ-0093, REQ-0094, REQ-0078, REQ-0079, REQ-0098, REQ-0100, REQ-0101
 pub struct DispatchContext<'a> {
     /// The agent's authoritative engine ID.
     pub engine_id: &'a [u8],
@@ -60,6 +68,9 @@ pub struct DispatchContext<'a> {
     /// Counter for `usmStatsWrongDigests` (REQ-0100).
     // Implements: REQ-0100
     pub wrong_digests_counter: &'a mut u32,
+    /// Counter for `usmStatsNotInTimeWindows` (REQ-0098).
+    // Implements: REQ-0098
+    pub not_in_time_windows_counter: &'a mut u32,
     /// Counter for `usmStatsDecryptionErrors` (REQ-0101).
     // Implements: REQ-0101
     pub decryption_errors_counter: &'a mut u32,
@@ -106,7 +117,7 @@ fn zero_auth_params_in_message(
 /// the flag set are silently discarded per RFC 3412 §7.1.3a.
 ///
 /// # Requirements
-/// Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0100, REQ-0102, REQ-0103
+/// Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0102, REQ-0103
 ///
 /// # Examples
 ///
@@ -120,6 +131,7 @@ fn zero_auth_params_in_message(
 /// let mut unknown_user_names = 0u32;
 /// let mut unsupported_sec_levels = 0u32;
 /// let mut wrong_digests = 0u32;
+/// let mut not_in_time_windows = 0u32;
 /// let mut decryption_errors = 0u32;
 /// let mut ctx = DispatchContext {
 ///     engine_id,
@@ -129,6 +141,7 @@ fn zero_auth_params_in_message(
 ///     unknown_user_names_counter: &mut unknown_user_names,
 ///     unsupported_sec_levels_counter: &mut unsupported_sec_levels,
 ///     wrong_digests_counter: &mut wrong_digests,
+///     not_in_time_windows_counter: &mut not_in_time_windows,
 ///     decryption_errors_counter: &mut decryption_errors,
 ///     usm_user: None,
 /// };
@@ -258,6 +271,32 @@ pub fn process_snmpv3_request(
         }
     }
 
+    // REQ-0098: time-window validation for authenticated messages.
+    // Runs after HMAC verification per REQ-0102 processing order.
+    if let Some(user) = ctx.usm_user
+        && user.auth_protocol().is_some()
+        && !crate::usm::time_window::is_in_time_window(
+            v3_msg.usm.auth_engine_boots,
+            v3_msg.usm.auth_engine_time,
+            ctx.engine_boots,
+            ctx.engine_time,
+        )
+    {
+        *ctx.not_in_time_windows_counter = ctx.not_in_time_windows_counter.saturating_add(1);
+        if v3_msg.usm.security_flags & 0x04 == 0 {
+            return None;
+        }
+        return crate::codec::encode_v3_report(
+            v3_msg.msg_id,
+            ctx.engine_id,
+            ctx.engine_boots,
+            ctx.engine_time,
+            &NOT_IN_TIME_WINDOWS_OID,
+            *ctx.not_in_time_windows_counter,
+        )
+        .ok();
+    }
+
     // Only the default (empty) context name is supported per REQ-0058.
     if !v3_msg.context_name.is_empty() {
         return None;
@@ -302,6 +341,7 @@ mod tests {
         unknown_user_names: u32,
         unsupported_sec_levels: u32,
         wrong_digests: u32,
+        not_in_time_windows: u32,
         decryption_errors: u32,
         engine_boots: u32,
         engine_time: u32,
@@ -314,6 +354,7 @@ mod tests {
                 unknown_user_names: 0,
                 unsupported_sec_levels: 0,
                 wrong_digests: 0,
+                not_in_time_windows: 0,
                 decryption_errors: 0,
                 engine_boots: 1,
                 engine_time: 0,
@@ -340,6 +381,11 @@ mod tests {
             self
         }
 
+        fn with_not_in_time_windows(mut self, initial_count: u32) -> Self {
+            self.not_in_time_windows = initial_count;
+            self
+        }
+
         fn with_boots_time(mut self, boots: u32, time: u32) -> Self {
             self.engine_boots = boots;
             self.engine_time = time;
@@ -358,6 +404,7 @@ mod tests {
                 unknown_user_names_counter: &mut self.unknown_user_names,
                 unsupported_sec_levels_counter: &mut self.unsupported_sec_levels,
                 wrong_digests_counter: &mut self.wrong_digests,
+                not_in_time_windows_counter: &mut self.not_in_time_windows,
                 decryption_errors_counter: &mut self.decryption_errors,
                 usm_user,
             }
@@ -878,43 +925,12 @@ mod tests {
     // ── HMAC verification (REQ-0100, REQ-0102) ───────────────────────────────
 
     /// Build a `GetRequest` frame authenticated with HMAC-SHA-256 using the given key bytes.
+    /// Uses boots=1 and time=0 to match the default `TestCtx::new()` engine state, ensuring
+    /// the time-window check passes for HMAC verification tests.
     /// The frame is addressed to `test_engine_id()` with user "alice", flags 0x05 (authNoPriv + reportable).
     fn build_authenticated_frame(auth_key_bytes: &[u8]) -> Vec<u8> {
-        use crate::usm::auth::AuthProtocol;
-        use crate::usm::keys::SecretKey;
-
-        let mac_len = AuthProtocol::HmacSha256.mac_len(); // 24 bytes
-        let engine_id = test_engine_id();
-        let oid = test_oid_arcs();
-
-        // Step 1: build with zeroed auth_params so we can compute the HMAC.
-        let zeroed_auth_params = vec![0u8; mac_len];
-        let frame_with_zeros = snmpv3_frames::encode_get_request_with_auth_params(
-            engine_id,
-            b"alice",
-            b"",
-            1,
-            2,
-            oid,
-            0x05,
-            &zeroed_auth_params,
-        );
-
-        // Step 2: compute the HMAC over the frame with zeroed auth_params.
-        let key = SecretKey::new(auth_key_bytes.to_vec());
-        let mac = AuthProtocol::HmacSha256
-            .compute_mac(&key, &frame_with_zeros)
-            .unwrap();
-
-        // Step 3: replace the zeroed auth_params with the real MAC.
-        // Safe here: [0u8; 24] only appears at the auth_params position in this test message.
-        let pos = frame_with_zeros
-            .windows(mac_len)
-            .position(|w| w == zeroed_auth_params.as_slice())
-            .unwrap();
-        let mut frame = frame_with_zeros;
-        frame[pos..pos + mac_len].copy_from_slice(&mac);
-        frame
+        // boots=1 matches TestCtx::new() engine_boots=1 so the time-window check passes.
+        build_authenticated_frame_with_time(auth_key_bytes, 1, 0)
     }
 
     #[test]
@@ -1168,5 +1184,290 @@ mod tests {
         let zeroed = zero_auth_params_in_message(message, 7, 3);
         assert_eq!(message, b"prefix MAC suffix", "original must be unchanged");
         assert_eq!(&zeroed[7..10], &[0u8; 3]);
+    }
+
+    // ── Time-window validation (REQ-0098) ──────────────────────────────────────
+
+    /// Build an authenticated `GetRequest` frame with explicit USM boots, time, and msgFlags.
+    /// The frame is addressed to `test_engine_id()` with user "alice".
+    fn build_authenticated_frame_with_time_and_flags(
+        auth_key_bytes: &[u8],
+        boots: u32,
+        time: u32,
+        msg_flags_byte: u8,
+    ) -> Vec<u8> {
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let mac_len = AuthProtocol::HmacSha256.mac_len();
+        let engine_id = test_engine_id();
+        let oid = test_oid_arcs();
+
+        let zeroed_auth_params = vec![0u8; mac_len];
+        let frame_with_zeros = snmpv3_frames::encode_get_request_with_auth_params_and_time(
+            engine_id,
+            b"alice",
+            b"",
+            1,
+            2,
+            oid,
+            msg_flags_byte,
+            &zeroed_auth_params,
+            boots,
+            time,
+        );
+
+        let key = SecretKey::new(auth_key_bytes.to_vec());
+        let mac = AuthProtocol::HmacSha256
+            .compute_mac(&key, &frame_with_zeros)
+            .unwrap();
+
+        let pos = frame_with_zeros
+            .windows(mac_len)
+            .position(|w| w == zeroed_auth_params.as_slice())
+            .unwrap();
+        let mut frame = frame_with_zeros;
+        frame[pos..pos + mac_len].copy_from_slice(&mac);
+        frame
+    }
+
+    /// Build an authenticated `GetRequest` frame with explicit USM boots and time parameters.
+    /// Uses flags 0x05 (authNoPriv + reportable).
+    /// The frame is addressed to `test_engine_id()` with user "alice".
+    fn build_authenticated_frame_with_time(
+        auth_key_bytes: &[u8],
+        boots: u32,
+        time: u32,
+    ) -> Vec<u8> {
+        build_authenticated_frame_with_time_and_flags(auth_key_bytes, boots, time, 0x05)
+    }
+
+    #[test]
+    fn given_in_time_window_when_process_then_proceeds() {
+        // Verifies: REQ-0098
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let mib = crate::mib::Store::new();
+        let auth_key_bytes = [0x42u8; 32];
+        let alice = crate::usm::user::UsmUser::auth_no_priv(
+            "alice",
+            AuthProtocol::HmacSha256,
+            SecretKey::new(auth_key_bytes.to_vec()),
+        );
+        // boots=1 matches engine_boots=1; time=0 matches engine_time=0 (within 150s window)
+        let frame = build_authenticated_frame_with_time(&auth_key_bytes, 1, 0);
+        let mut tc = TestCtx::new().with_boots_time(1, 0);
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_some(),
+            "in-window message must produce a normal response"
+        );
+        assert_eq!(
+            tc.not_in_time_windows, 0,
+            "counter must not be incremented for in-window message"
+        );
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&result.unwrap())
+            .expect("response must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("response must contain a cleartext ScopedPDU");
+        };
+        assert!(
+            matches!(scoped_pdu.data, rasn_snmp::v2::Pdus::Response(_)),
+            "response must be a GetResponse, not a Report"
+        );
+    }
+
+    #[test]
+    fn given_out_of_time_window_when_process_then_returns_report_and_increments_counter() {
+        // Verifies: REQ-0098
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let mib = crate::mib::Store::new();
+        let auth_key_bytes = [0x42u8; 32];
+        let alice = crate::usm::user::UsmUser::auth_no_priv(
+            "alice",
+            AuthProtocol::HmacSha256,
+            SecretKey::new(auth_key_bytes.to_vec()),
+        );
+        // boots=2 does not match engine_boots=1 → out of window
+        let frame = build_authenticated_frame_with_time(&auth_key_bytes, 2, 0);
+        let mut tc = TestCtx::new().with_boots_time(1, 0);
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_some(),
+            "out-of-window message must produce a Report response"
+        );
+        assert_eq!(
+            tc.not_in_time_windows, 1,
+            "counter must be incremented for out-of-window message"
+        );
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&result.unwrap())
+            .expect("response must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("Report response must contain a cleartext ScopedPDU");
+        };
+        let rasn_snmp::v2::Pdus::Report(report_pdu) = scoped_pdu.data else {
+            panic!("response must be a Report PDU, not a GetResponse");
+        };
+        assert_eq!(
+            report_pdu.0.variable_bindings.len(),
+            1,
+            "Report must contain exactly one varbind"
+        );
+        let varbind = &report_pdu.0.variable_bindings[0];
+        let expected_oid: crate::codec::Oid = crate::usm::counters::USM_STATS_NOT_IN_TIME_WINDOWS
+            .parse()
+            .unwrap();
+        assert_eq!(
+            varbind.name.as_ref(),
+            expected_oid.as_slice(),
+            "Report varbind OID must be usmStatsNotInTimeWindows"
+        );
+        let rasn_snmp::v2::VarBindValue::Value(rasn_smi::v2::ObjectSyntax::ApplicationWide(
+            rasn_smi::v2::ApplicationSyntax::Counter(ref counter),
+        )) = varbind.value
+        else {
+            panic!("Report varbind value must be a Counter32");
+        };
+        assert_eq!(counter.0, 1u32, "Report varbind must carry counter value 1");
+    }
+
+    #[test]
+    fn given_out_of_time_window_without_reportable_flag_when_process_then_discarded_but_counter_incremented()
+     {
+        // Verifies: REQ-0098
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let mib = crate::mib::Store::new();
+        let auth_key_bytes = [0x42u8; 32];
+        let alice = crate::usm::user::UsmUser::auth_no_priv(
+            "alice",
+            AuthProtocol::HmacSha256,
+            SecretKey::new(auth_key_bytes.to_vec()),
+        );
+
+        // boots=2 does not match engine_boots=1 → out of window; flags=0x01 = authFlag only,
+        // reportableFlag cleared, so agent must discard silently (no Report sent).
+        let frame = build_authenticated_frame_with_time_and_flags(&auth_key_bytes, 2, 0, 0x01);
+
+        let mut tc = TestCtx::new().with_boots_time(1, 0);
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_none(),
+            "out-of-window without reportableFlag must be silently discarded"
+        );
+        assert_eq!(
+            tc.not_in_time_windows, 1,
+            "counter must still be incremented even when no Report is sent"
+        );
+    }
+
+    #[test]
+    fn given_counter_at_max_when_out_of_time_window_then_counter_does_not_overflow() {
+        // Verifies: REQ-0098
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let mib = crate::mib::Store::new();
+        let auth_key_bytes = [0x42u8; 32];
+        let alice = crate::usm::user::UsmUser::auth_no_priv(
+            "alice",
+            AuthProtocol::HmacSha256,
+            SecretKey::new(auth_key_bytes.to_vec()),
+        );
+        let frame = build_authenticated_frame_with_time(&auth_key_bytes, 2, 0);
+        let mut tc = TestCtx::new()
+            .with_not_in_time_windows(u32::MAX)
+            .with_boots_time(1, 0);
+        {
+            let mut ctx = tc.ctx(Some(&alice));
+            let _ = process_snmpv3_request(&frame, &mut ctx, &mib);
+        }
+        assert_eq!(
+            tc.not_in_time_windows,
+            u32::MAX,
+            "counter must not overflow"
+        );
+    }
+
+    #[test]
+    fn given_no_auth_user_when_process_then_time_window_check_skipped() {
+        // Verifies: REQ-0098
+        let mib = crate::mib::Store::new();
+        let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
+        // noAuthNoPriv user: time-window check must be skipped regardless of boots/time
+        let frame = snmpv3_frames::encode_get_request_with_user(
+            test_engine_id(),
+            b"alice",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+        );
+        // engine_boots=5 but message has boots=0 (from encode_get_request_with_user default)
+        // If the check were applied, this would fail. It must be skipped.
+        let mut tc = TestCtx::new().with_boots_time(5, 100);
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_some(),
+            "noAuthNoPriv message must pass through regardless of boots/time"
+        );
+        assert_eq!(
+            tc.not_in_time_windows, 0,
+            "counter must not be incremented for noAuthNoPriv messages"
+        );
+    }
+
+    #[test]
+    fn given_time_difference_out_of_window_when_process_then_returns_report() {
+        // Verifies: REQ-0098 — time-based (not boots-based) out-of-window rejection
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let mib = crate::mib::Store::new();
+        let auth_key_bytes = [0x42u8; 32];
+        let alice = crate::usm::user::UsmUser::auth_no_priv(
+            "alice",
+            AuthProtocol::HmacSha256,
+            SecretKey::new(auth_key_bytes.to_vec()),
+        );
+        // boots=1 matches engine_boots=1, but msg_time=200, engine_time=0 → diff=200 > 150
+        let frame = build_authenticated_frame_with_time(&auth_key_bytes, 1, 200);
+        let mut tc = TestCtx::new().with_boots_time(1, 0);
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_some(),
+            "time-difference out-of-window message must produce a Report response"
+        );
+        assert_eq!(
+            tc.not_in_time_windows, 1,
+            "counter must be incremented for time-difference out-of-window message"
+        );
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&result.unwrap())
+            .expect("response must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("Report response must contain a cleartext ScopedPDU");
+        };
+        let rasn_snmp::v2::Pdus::Report(_) = scoped_pdu.data else {
+            panic!("response must be a Report PDU, not a GetResponse");
+        };
     }
 }

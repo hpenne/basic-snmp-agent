@@ -261,6 +261,9 @@ pub struct EventLoop {
     /// Counter for `usmStatsWrongDigests`; incremented when HMAC verification fails.
     // Implements: REQ-0100
     wrong_digests_counter: u32,
+    /// Counter for `usmStatsNotInTimeWindows`; incremented when time-window check fails.
+    // Implements: REQ-0098
+    not_in_time_windows_counter: u32,
     /// Counter for `usmStatsDecryptionErrors`; incremented when decryption fails.
     // Implements: REQ-0101
     decryption_errors_counter: u32,
@@ -346,6 +349,7 @@ impl EventLoop {
             unknown_user_names_counter: 0,
             unsupported_sec_levels_counter: 0,
             wrong_digests_counter: 0,
+            not_in_time_windows_counter: 0,
             decryption_errors_counter: 0,
             usm_user,
         };
@@ -590,6 +594,7 @@ impl EventLoop {
                     unknown_user_names_counter: &mut self.unknown_user_names_counter,
                     unsupported_sec_levels_counter: &mut self.unsupported_sec_levels_counter,
                     wrong_digests_counter: &mut self.wrong_digests_counter,
+                    not_in_time_windows_counter: &mut self.not_in_time_windows_counter,
                     decryption_errors_counter: &mut self.decryption_errors_counter,
                     usm_user: self.usm_user.as_deref(),
                 },
@@ -991,6 +996,7 @@ mod tests {
             unknown_user_names_counter: 0,
             unsupported_sec_levels_counter: 0,
             wrong_digests_counter: 0,
+            not_in_time_windows_counter: 0,
             decryption_errors_counter: 0,
             usm_user: None,
         };

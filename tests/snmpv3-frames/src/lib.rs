@@ -220,6 +220,59 @@ pub fn encode_get_request_with_auth_params(
     )
 }
 
+/// Encode a `SNMPv3` `GetRequest` frame with explicit `msgAuthenticationParameters`
+/// and explicit USM `authoritative_engine_boots` / `authoritative_engine_time` values.
+///
+/// Use this to build frames for time-window validation tests: supply the boots and
+/// time values that the manager claims in its USM security parameters, compute the
+/// HMAC over the frame with zeroed `auth_params`, then splice in the real MAC.
+///
+/// # Examples
+///
+/// ```
+/// // Build with boots=1, time=0, zeroed auth_params (placeholder for HMAC)
+/// let frame = snmpv3_frames::encode_get_request_with_auth_params_and_time(
+///     b"\x80\x00\x1f\x88\x04test",
+///     b"alice",
+///     b"",
+///     1,
+///     42,
+///     &[1, 3, 6, 1, 2, 1, 1, 1, 0],
+///     0x05, // authNoPriv + reportable
+///     &[0u8; 24],
+///     1,
+///     0,
+/// );
+/// assert!(!frame.is_empty());
+/// ```
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn encode_get_request_with_auth_params_and_time(
+    engine_id: &[u8],
+    user_name: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    request_id: i32,
+    oid_arcs: &[u32],
+    msg_flags_byte: u8,
+    auth_params: &[u8],
+    auth_engine_boots: u32,
+    auth_engine_time: u32,
+) -> Vec<u8> {
+    let rasn_pdu = RasnGetRequest(single_varbind_pdu(request_id, oid_arcs));
+    encode_v3_message_with_usm_params(
+        engine_id,
+        user_name,
+        context_name,
+        msg_id,
+        Pdus::GetRequest(rasn_pdu),
+        msg_flags_byte,
+        auth_params,
+        auth_engine_boots,
+        auth_engine_time,
+    )
+}
+
 /// Encode a minimal `SNMPv3` `GetNextRequest` frame (noAuthNoPriv, USM).
 ///
 /// # Examples
@@ -438,6 +491,7 @@ fn encode_v3_message(
 }
 
 // Like encode_v3_message but with explicit auth_params bytes in USMSecurityParameters.
+// Uses boots=0 and time=0 (the default for non-time-window tests).
 fn encode_v3_message_with_auth_params(
     engine_id: &[u8],
     user_name: &[u8],
@@ -447,6 +501,34 @@ fn encode_v3_message_with_auth_params(
     msg_flags_byte: u8,
     auth_params: &[u8],
 ) -> Vec<u8> {
+    encode_v3_message_with_usm_params(
+        engine_id,
+        user_name,
+        context_name,
+        msg_id,
+        pdus,
+        msg_flags_byte,
+        auth_params,
+        0,
+        0,
+    )
+}
+
+// Like encode_v3_message_with_auth_params but also accepts explicit boots and time values
+// for the USM authoritative engine parameters. Callers that need to test time-window
+// validation supply non-zero boots/time; all other callers pass 0 for both.
+#[allow(clippy::too_many_arguments)]
+fn encode_v3_message_with_usm_params(
+    engine_id: &[u8],
+    user_name: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    pdus: Pdus,
+    msg_flags_byte: u8,
+    auth_params: &[u8],
+    auth_engine_boots: u32,
+    auth_engine_time: u32,
+) -> Vec<u8> {
     let scoped_pdu = ScopedPdu {
         engine_id: engine_id.to_vec().into(),
         name: context_name.to_vec().into(),
@@ -454,8 +536,8 @@ fn encode_v3_message_with_auth_params(
     };
     let usm_params = USMSecurityParameters {
         authoritative_engine_id: engine_id.to_vec().into(),
-        authoritative_engine_boots: 0.into(),
-        authoritative_engine_time: 0.into(),
+        authoritative_engine_boots: auth_engine_boots.into(),
+        authoritative_engine_time: auth_engine_time.into(),
         user_name: rasn::types::OctetString::from(user_name.to_vec()),
         authentication_parameters: rasn::types::OctetString::from(auth_params.to_vec()),
         privacy_parameters: rasn::types::OctetString::from(vec![]),
