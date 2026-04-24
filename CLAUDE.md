@@ -41,7 +41,7 @@ cargo check
 - **Never create or modify ADRs without explicit user approval.** Always discuss the decision, alternatives, and rationale with the user before running `govctl adr new` or editing ADR content.
 - ADRs must not reference RFCs and cross-reference direction must be respected. Validate layering before writing any governance document.
 - **Never advance govctl phase or status without explicit user consent.** Do not run `govctl rfc advance`, `govctl rfc finalize`, or any equivalent mode/phase transition command unless the user explicitly asks.
-- **Always fix MUST FIX and SHOULD FIX review comments.** Fix SUGGESTIONS that improve code quality or test coverage. Only skip a suggestion if it requires a design decision or is explicitly out of scope — and state why. Never leave a MUST FIX or SHOULD FIX unresolved after a review cycle.
+- **Always fix MUST FIX and SHOULD FIX review comments.** Fix SUGGESTIONS that improve code quality or test coverage. Never rationalise skipping with "pre-existing code", "outside the diff", or "out of scope" — where the code lives is irrelevant. When in doubt, fix it — the cost of an unnecessary small fix is lower than the cost of accumulating ignored feedback. If a suggestion truly cannot or should not be addressed, state the concrete reason explicitly. Never leave a MUST FIX or SHOULD FIX unresolved after a review cycle.
 
 ## Architecture
 
