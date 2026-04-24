@@ -51,6 +51,7 @@ fn main() {
         let mut unknown_user_names_counter = 0u32;
         let mut unsupported_sec_levels_counter = 0u32;
         let mut wrong_digests_counter = 0u32;
+        let mut not_in_time_windows_counter = 0u32;
         let mut decryption_errors_counter = 0u32;
         let mut ctx = basic_snmp_agent::transport::dispatch::DispatchContext {
             engine_id: ENGINE_ID,
@@ -60,6 +61,7 @@ fn main() {
             unknown_user_names_counter: &mut unknown_user_names_counter,
             unsupported_sec_levels_counter: &mut unsupported_sec_levels_counter,
             wrong_digests_counter: &mut wrong_digests_counter,
+            not_in_time_windows_counter: &mut not_in_time_windows_counter,
             decryption_errors_counter: &mut decryption_errors_counter,
             usm_user: None,
         };
