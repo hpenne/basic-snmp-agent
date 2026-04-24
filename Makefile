@@ -3,6 +3,8 @@
 # Run the full test suite: lint, Rust unit/doc tests, Python unit tests, and Behave system tests.
 test: clippy rust-test python-test behave-test
 
+pre-commit: test fuzz-gen-seeds fuzz-1m trace check-format
+
 # Lint with pedantic Clippy warnings.
 clippy:
 	cargo clippy --workspace --all-targets -- -W clippy::pedantic -D warnings
@@ -35,3 +37,6 @@ fuzz-1m:
 # Run the fuzzer locally for 10 minutes.
 fuzz-10m:
 	cargo +nightly fuzz run snmpv3_request -- -max_total_time=600
+
+check-format:
+	cargo fmt --check
