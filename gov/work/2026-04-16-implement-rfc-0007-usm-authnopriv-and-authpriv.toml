@@ -102,12 +102,12 @@ category = "added"
 
 [[content.acceptance_criteria]]
 text = "All existing tests pass; no regressions"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "govctl check passes"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
@@ -147,7 +147,7 @@ category = "added"
 
 [[content.acceptance_criteria]]
 text = "Codec preserves msgPrivacyParameters and accepts EncryptedPdu variant (step 10i)"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
