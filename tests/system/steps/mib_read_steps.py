@@ -289,6 +289,20 @@ def step_snmpbulkget_auth_no_priv(context, user, password, non_repeaters, max_re
     context.last_snmp_returncode = result.returncode
 
 
+@when('snmpget at authNoPriv without explicit engine ID with user "{user}" and password "{password}" queries OID "{oid}" from the agent')
+def step_snmpget_auth_no_priv_no_engine_id(context, user, password, oid):
+    # Omitting -e forces net-snmp to perform engine-ID discovery (RFC 3414 §4)
+    # before sending the authenticated GET. This exercises REQ-0080: discovery
+    # must succeed regardless of the configured security level.
+    result = _snmp_client_run(
+        context,
+        ["snmpget", "-v3", "-l", "authNoPriv", "-u", user, "-a", "SHA-256", "-A", password,
+         "-On", "-t", "5", "-r", "1", _agent_addr(context), oid],
+    )
+    context.last_snmp_output = result.stdout + result.stderr
+    context.last_snmp_returncode = result.returncode
+
+
 @when('snmpget at noAuthNoPriv with user "{user}" queries OID "{oid}" from the agent')
 def step_snmpget_no_auth_no_priv(context, user, oid):
     # Short timeout with no retries: the agent rejects this request immediately,
