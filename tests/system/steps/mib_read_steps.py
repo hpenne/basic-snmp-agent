@@ -39,24 +39,24 @@ def _agent_addr(context) -> str:
     return f"tcp:{context.agent_container}:10161"
 
 
-@given('a test-agent-mib instance is running with engine ID "{engine_id}"')
-def step_start_test_agent_mib(context, engine_id):
-    container_name = f"test-agent-mib-{uuid.uuid4().hex[:8]}"
+def _start_agent_container(context, name_prefix: str, image: str, ready_sentinel: str) -> str:
+    """Start a test-agent container on the test network and wait for it to signal readiness.
+
+    Polls docker logs rather than using a fixed sleep so the step returns as
+    soon as the agent is ready. This is faster on fast machines and more
+    reliable on slow CI.
+    """
+    container_name = f"{name_prefix}-{uuid.uuid4().hex[:8]}"
     subprocess.run(
         [
             "docker", "run", "--rm", "-d",
             "--name", container_name,
             "--network", context.docker_network,
-            context.test_agent_mib_image,
+            image,
         ],
         check=True,
         capture_output=True,
     )
-    context.agent_container = container_name
-    context.agent_engine_id = engine_id
-
-    # Poll docker logs until the agent signals readiness, rather than using a
-    # fixed sleep. This is faster on fast machines and more reliable on slow CI.
     deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline:
         logs = subprocess.run(
@@ -64,13 +64,20 @@ def step_start_test_agent_mib(context, engine_id):
             capture_output=True,
             text=True,
         )
-        if "test-agent-mib ready" in logs.stdout + logs.stderr:
-            return
+        if ready_sentinel in logs.stdout + logs.stderr:
+            return container_name
         time.sleep(0.2)
     raise AssertionError(
-        f"test-agent-mib container {container_name!r} did not signal readiness "
-        "within 10 seconds"
+        f"container {container_name!r} did not signal readiness within 10 seconds"
     )
+
+
+@given('a test-agent-mib instance is running with engine ID "{engine_id}"')
+def step_start_test_agent_mib(context, engine_id):
+    context.agent_container = _start_agent_container(
+        context, "test-agent-mib", context.test_agent_mib_image, "test-agent-mib ready"
+    )
+    context.agent_engine_id = engine_id
 
 
 @when('snmpget queries OID "{oid}" from the agent')
@@ -217,3 +224,80 @@ def step_request_times_out_or_error(context):
         f"Expected timeout or non-zero exit code, but got returncode={returncode} "
         f"and output:\n{output}"
     )
+
+
+@given('a test-agent-mib-auth instance is running with engine ID "{engine_id}"')
+def step_start_test_agent_mib_auth(context, engine_id):
+    context.agent_container = _start_agent_container(
+        context, "test-agent-mib-auth", context.test_agent_mib_auth_image, "test-agent-mib-auth ready"
+    )
+    context.agent_engine_id = engine_id
+
+
+def _auth_no_priv_flags(user: str, password: str, engine_id: str) -> list[str]:
+    # SNMPv3 authNoPriv flags: HMAC-SHA-256 authentication, no privacy encryption.
+    # -u sets the security name, -a the auth protocol, -A the auth passphrase,
+    # -e the authoritative engine ID, -On prints OIDs in numeric form.
+    return [
+        "-v3", "-l", "authNoPriv",
+        "-u", user,
+        "-a", "SHA-256", "-A", password,
+        "-e", engine_id,
+        "-On",
+    ]
+
+
+@when('snmpget at authNoPriv with user "{user}" and password "{password}" queries OID "{oid}" from the agent')
+def step_snmpget_auth_no_priv(context, user, password, oid):
+    result = _snmp_client_run(
+        context,
+        ["snmpget"]
+        + _auth_no_priv_flags(user, password, context.agent_engine_id)
+        + ["-t", "5", "-r", "1", _agent_addr(context), oid],
+    )
+    context.last_snmp_output = result.stdout + result.stderr
+    context.last_snmp_returncode = result.returncode
+
+
+@when('snmpgetnext at authNoPriv with user "{user}" and password "{password}" queries OID "{oid}" from the agent')
+def step_snmpgetnext_auth_no_priv(context, user, password, oid):
+    result = _snmp_client_run(
+        context,
+        ["snmpgetnext"]
+        + _auth_no_priv_flags(user, password, context.agent_engine_id)
+        + ["-t", "5", "-r", "1", _agent_addr(context), oid],
+    )
+    context.last_snmp_output = result.stdout + result.stderr
+    context.last_snmp_returncode = result.returncode
+
+
+@when('snmpbulkget at authNoPriv with user "{user}" and password "{password}", non-repeaters={non_repeaters:d} and max-repetitions={max_repetitions:d} queries OID "{oid}" from the agent')
+def step_snmpbulkget_auth_no_priv(context, user, password, non_repeaters, max_repetitions, oid):
+    result = _snmp_client_run(
+        context,
+        ["snmpbulkget"]
+        + _auth_no_priv_flags(user, password, context.agent_engine_id)
+        + [
+            "-t", "5", "-r", "1",
+            f"-Cn{non_repeaters}",
+            f"-Cr{max_repetitions}",
+            _agent_addr(context),
+            oid,
+        ],
+    )
+    context.last_snmp_output = result.stdout + result.stderr
+    context.last_snmp_returncode = result.returncode
+
+
+@when('snmpget at noAuthNoPriv with user "{user}" queries OID "{oid}" from the agent')
+def step_snmpget_no_auth_no_priv(context, user, oid):
+    # Short timeout with no retries: the agent rejects this request immediately,
+    # so there is no need to wait for the default retry window.
+    result = _snmp_client_run(
+        context,
+        ["snmpget", "-v3", "-l", "noAuthNoPriv", "-u", user, "-On",
+         "-e", context.agent_engine_id, "-t", "2", "-r", "0",
+         _agent_addr(context), oid],
+    )
+    context.last_snmp_output = result.stdout + result.stderr
+    context.last_snmp_returncode = result.returncode

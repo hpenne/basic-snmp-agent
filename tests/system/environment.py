@@ -34,6 +34,7 @@ DOCKER_NETWORK = f"{PROJECT_NAME}_snmp-test"
 TEST_AGENT_IMAGE = "test-agent-test"
 SNMPTRAPD_IMAGE = "snmptrapd-test"
 TEST_AGENT_MIB_IMAGE = "test-agent-mib-test"
+TEST_AGENT_MIB_AUTH_IMAGE = "test-agent-mib-auth-test"
 SNMP_CLIENT_IMAGE = "snmp-client-test"
 
 
@@ -60,6 +61,7 @@ def before_all(context):
     context.test_agent_image = TEST_AGENT_IMAGE
     context.snmptrapd_image = SNMPTRAPD_IMAGE
     context.test_agent_mib_image = TEST_AGENT_MIB_IMAGE
+    context.test_agent_mib_auth_image = TEST_AGENT_MIB_AUTH_IMAGE
     context.snmp_client_image = SNMP_CLIENT_IMAGE
 
 
