@@ -162,5 +162,5 @@ category = "added"
 
 [[content.acceptance_criteria]]
 text = "Behave tests for authenticated GET requests at authPriv security level (REQ-0078, REQ-0079, REQ-0080, step 11)"
-status = "done"
+status = "pending"
 category = "added"
