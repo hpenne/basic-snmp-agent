@@ -241,7 +241,7 @@ pub struct EventLoop {
     /// MIB store; updated by `SetValue` commands from application threads.
     store: crate::mib::Store,
     /// This agent's `SNMPv3` engine ID; inbound messages with a different engine
-    /// ID are discarded (REQ-0057).
+    /// ID are rejected with a Report PDU (REQ-0104).
     engine_id: Vec<u8>,
     /// `snmpEngineBoots` counter, initialised at agent start-up.
     // Implements: REQ-0094
@@ -494,7 +494,7 @@ impl EventLoop {
     /// client must not bring down the entire event loop.
     ///
     /// # Requirements
-    /// Implements: REQ-0057, REQ-0058, REQ-0068, REQ-0071, REQ-0073
+    /// Implements: REQ-0058, REQ-0068, REQ-0071, REQ-0073, REQ-0104
     fn handle_connection_event(&mut self, token: Token) {
         // Extract engine state before borrowing the connection map.
         // `engine_time_seconds()` takes `&self`; calling it after `connections.get_mut()`
@@ -625,7 +625,7 @@ impl EventLoop {
     /// Decode, validate, and dispatch a single RFC 3430 BER frame.
     ///
     /// Thin wrapper around [`crate::transport::dispatch::process_snmpv3_request`].
-    // Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0093
+    // Implements: REQ-0056, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0093, REQ-0104
     fn dispatch_snmpv3_frame(
         ber_frame: &[u8],
         ctx: &mut crate::transport::dispatch::DispatchContext<'_>,
@@ -1422,8 +1422,8 @@ mod tests {
     }
 
     #[test]
-    fn given_wrong_engine_id_when_request_sent_then_discarded_silently() {
-        // Verifies: REQ-0057
+    fn given_wrong_engine_id_when_request_sent_then_report_pdu_returned() {
+        // Verifies: REQ-0104
         // Given: a running event loop with a known OID in the MIB.
         let (event_loop, bound_addr, sender) =
             EventLoop::new(any_loopback(), test_engine_id(), 1, None).unwrap();
@@ -1434,15 +1434,29 @@ mod tests {
 
         let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
 
-        // When: a request with the wrong engine ID is sent, it should be discarded.
+        // When: a request with the wrong engine ID is sent.
         let wrong_engine_id = b"\x80\x00\x1f\x88\x04wrong";
         let wrong_encoded = framed_get_request_custom(10, 10, &oid, wrong_engine_id, b"");
         client
             .write_all(&wrong_encoded)
             .expect("write must succeed");
 
-        // Then: immediately sending a correct request gets a response,
-        // confirming the wrong-engine request was silently discarded.
+        // Then: the agent responds with a Report PDU (usmStatsUnknownEngineIDs).
+        let report_frame = read_framed_response(&mut client);
+        let report_v3_msg: rasn_snmp::v3::Message =
+            rasn::ber::decode(&report_frame).expect("Report must decode as V3Message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(report_scoped_pdu) =
+            report_v3_msg.scoped_data
+        else {
+            panic!("Report response must contain a cleartext ScopedPDU");
+        };
+        assert!(
+            matches!(report_scoped_pdu.data, rasn_snmp::v2::Pdus::Report(_)),
+            "first response to wrong-engine request must be a Report PDU"
+        );
+
+        // And: a subsequent correct request on the same connection still succeeds,
+        // confirming the connection was not closed by the Report response.
         client
             .write_all(&framed_get_request(11, 11, &oid))
             .expect("valid request write must succeed");

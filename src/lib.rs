@@ -206,7 +206,7 @@ impl Agent {
 pub struct AgentBuilder {
     listen_addr: SocketAddr,
     /// `SNMPv3` engine ID for this agent instance. Inbound requests with a
-    /// different engine ID are silently discarded (REQ-0057).
+    /// different engine ID are rejected with a Report PDU (REQ-0104).
     engine_id: Vec<u8>,
     // USM user configured for this agent instance; `None` means no USM enforcement.
     // Implements: REQ-0074, REQ-0076, REQ-0081

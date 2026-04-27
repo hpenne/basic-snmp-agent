@@ -7,7 +7,7 @@
 use crate::transport::event_loop::MAX_BULK_REPETITIONS;
 use crate::transport::request;
 
-// Implements: REQ-0093
+// Implements: REQ-0093, REQ-0104
 static UNKNOWN_ENGINE_IDS_OID: std::sync::LazyLock<crate::codec::Oid> =
     std::sync::LazyLock::new(|| {
         crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS
@@ -60,7 +60,7 @@ const REPORTABLE_FLAG: u8 = 0x04;
 /// Engine state and statistics passed to each inbound frame dispatch.
 ///
 /// # Requirements
-/// Implements: REQ-0093, REQ-0094, REQ-0078, REQ-0079, REQ-0098, REQ-0100, REQ-0101
+/// Implements: REQ-0093, REQ-0094, REQ-0104, REQ-0078, REQ-0079, REQ-0098, REQ-0100, REQ-0101
 pub struct DispatchContext<'a> {
     /// The agent's authoritative engine ID.
     pub engine_id: &'a [u8],
@@ -139,13 +139,39 @@ fn emit_decryption_error_response(
     .ok()
 }
 
+/// Increment `unknown_engine_ids_counter` unconditionally (RFC 3414 §4.2.4) and, if
+/// `reportableFlag` is set, return a `usmStatsUnknownEngineIDs` Report PDU; otherwise
+/// return `None` (silent discard).
+///
+/// # Requirements
+/// Implements: REQ-0104
+fn emit_unknown_engine_id_response(
+    ctx: &mut DispatchContext<'_>,
+    msg_id: i32,
+    security_flags: u8,
+) -> Option<Vec<u8>> {
+    *ctx.unknown_engine_ids_counter = ctx.unknown_engine_ids_counter.saturating_add(1);
+    if security_flags & REPORTABLE_FLAG == 0 {
+        return None;
+    }
+    crate::codec::encode_v3_report(
+        msg_id,
+        ctx.engine_id,
+        ctx.engine_boots,
+        ctx.engine_time,
+        &UNKNOWN_ENGINE_IDS_OID,
+        *ctx.unknown_engine_ids_counter,
+    )
+    .ok()
+}
+
 /// Decode, validate, and dispatch a single RFC 3430 BER frame, returning
 /// the encoded response bytes on success.
 ///
 /// `frame` is the complete BER bytes (SEQUENCE tag + length + content).
 /// Returns `Some(encoded_response)` when the frame produces a response, or
-/// `None` when it should be silently discarded (invalid encoding, wrong
-/// engine ID, or unsupported context name).
+/// `None` when it should be silently discarded (invalid encoding, or
+/// unsupported context name).
 ///
 /// Engine-ID discovery probes (empty `msgAuthoritativeEngineID`) always produce
 /// a Report PDU response and increment `ctx.unknown_engine_ids_counter` (REQ-0093),
@@ -153,7 +179,7 @@ fn emit_decryption_error_response(
 /// the flag set are silently discarded per RFC 3412 §7.1.3a.
 ///
 /// # Requirements
-/// Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0102, REQ-0103, REQ-0107
+/// Implements: REQ-0056, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0102, REQ-0103, REQ-0104, REQ-0107
 ///
 /// # Examples
 ///
@@ -219,10 +245,11 @@ pub fn process_snmpv3_request(
         .ok();
     }
 
-    // Verify the engine ID matches ours. Requests for other engines are
-    // silently discarded per REQ-0057.
+    // REQ-0104: contextEngineID mismatch — the ScopedPDU's contextEngineID does not
+    // match the agent's snmpEngineID. Respond with a Report PDU carrying
+    // usmStatsUnknownEngineIDs.
     if v3_msg.engine_id != ctx.engine_id {
-        return None;
+        return emit_unknown_engine_id_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
     }
 
     // REQ-0078, REQ-0080: user-name lookup — discovery (above) runs before this check.
@@ -390,10 +417,17 @@ pub fn process_snmpv3_request(
                 );
             };
 
-            // context_engine_id validation (RFC 3412 §7.2 step 9d) is deferred to step 12 (REQ-0104).
+            // REQ-0104: contextEngineID validation — the decrypted ScopedPDU's contextEngineID
+            // must match the agent's snmpEngineID per RFC 3412 §7.2 step 9d.
+            if decoded.context_engine_id != ctx.engine_id {
+                return emit_unknown_engine_id_response(
+                    ctx,
+                    v3_msg.msg_id,
+                    v3_msg.usm.security_flags,
+                );
+            }
 
-            // Context name validated after decryption. REQ-0104 (Report PDU on mismatch)
-            // is implemented in step 12; for now silently discard non-empty context names.
+            // Context name validated after decryption; only the default (empty) context is supported.
             if !decoded.context_name.is_empty() {
                 return None;
             }
@@ -591,7 +625,7 @@ mod tests {
 
     #[test]
     fn given_normal_request_when_process_then_counter_unchanged() {
-        // Verifies: REQ-0093 — only discovery probes increment the counter
+        // Verifies: REQ-0093, REQ-0104 — counter unchanged for correct engine ID
         let mib = crate::mib::Store::new();
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
         let frame = snmpv3_frames::encode_get_request(test_engine_id(), b"", 1, 2, oid.as_slice());
@@ -633,6 +667,162 @@ mod tests {
         assert_eq!(
             tc.unknown_engine_ids, 0,
             "counter must not be incremented for non-reportable probe"
+        );
+    }
+
+    // ── contextEngineID mismatch (REQ-0104) ──────────────────────────────────
+
+    #[test]
+    fn given_wrong_context_engine_id_when_process_then_returns_report_and_increments_counter() {
+        // Verifies: REQ-0104
+        let mib = crate::mib::Store::new();
+        // A non-empty but wrong engine ID: not a discovery probe (auth_engine_id is non-empty),
+        // but the ScopedPDU's contextEngineID does not match the agent's engine ID.
+        let frame = snmpv3_frames::encode_get_request(
+            b"\x80\x00\x1f\x88\x04wrong",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+        );
+        let mut tc = TestCtx::new().with_boots_time(3, 100);
+        let result = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_some(),
+            "contextEngineID mismatch must produce a Report response"
+        );
+        assert_eq!(
+            tc.unknown_engine_ids, 1,
+            "counter must be incremented on contextEngineID mismatch"
+        );
+
+        let response_bytes = result.unwrap();
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
+            .expect("response must be a valid SNMPv3 message");
+        let usm_params: rasn_snmp::v3::USMSecurityParameters =
+            rasn::ber::decode(v3_response.security_parameters.as_ref())
+                .expect("security parameters must be valid USMSecurityParameters");
+        assert_eq!(
+            usm_params.authoritative_engine_id.as_ref(),
+            test_engine_id(),
+            "Report response must carry the agent's engine ID"
+        );
+        assert_eq!(
+            u32::try_from(usm_params.authoritative_engine_boots).unwrap(),
+            3u32,
+            "Report response must carry the agent's engine boots"
+        );
+        assert_eq!(
+            u32::try_from(usm_params.authoritative_engine_time).unwrap(),
+            100u32,
+            "Report response must carry the agent's engine time"
+        );
+
+        // Verify Report PDU carries usmStatsUnknownEngineIDs.
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("Report response must contain a cleartext ScopedPDU");
+        };
+        let rasn_snmp::v2::Pdus::Report(report_pdu) = scoped_pdu.data else {
+            panic!("response must be a Report PDU, not a GetResponse");
+        };
+        assert_eq!(
+            report_pdu.0.variable_bindings.len(),
+            1,
+            "Report must contain exactly one varbind"
+        );
+        let varbind = &report_pdu.0.variable_bindings[0];
+        let expected_oid: crate::codec::Oid = crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS
+            .parse()
+            .unwrap();
+        assert_eq!(
+            varbind.name.as_ref(),
+            expected_oid.as_slice(),
+            "Report varbind OID must be usmStatsUnknownEngineIDs"
+        );
+        let rasn_snmp::v2::VarBindValue::Value(rasn_smi::v2::ObjectSyntax::ApplicationWide(
+            rasn_smi::v2::ApplicationSyntax::Counter(ref counter),
+        )) = varbind.value
+        else {
+            panic!("Report varbind value must be a Counter32");
+        };
+        assert_eq!(counter.0, 1u32, "Report varbind must carry counter value 1");
+    }
+
+    #[test]
+    fn given_wrong_context_engine_id_without_reportable_flag_when_process_then_discarded_but_counter_incremented()
+     {
+        // Verifies: REQ-0104
+        let mib = crate::mib::Store::new();
+        // reportableFlag cleared (0x00) — agent must not send a Report, but counter still increments.
+        let frame = snmpv3_frames::encode_get_request_with_user_no_report(
+            b"\x80\x00\x1f\x88\x04wrong",
+            b"",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+        );
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_none(),
+            "contextEngineID mismatch without reportableFlag must be silently discarded"
+        );
+        assert_eq!(
+            tc.unknown_engine_ids, 1,
+            "counter must still be incremented even when no Report is sent"
+        );
+    }
+
+    #[test]
+    fn given_counter_at_max_when_wrong_context_engine_id_then_counter_does_not_overflow() {
+        // Verifies: REQ-0104 — saturating_add prevents overflow
+        let mib = crate::mib::Store::new();
+        let frame = snmpv3_frames::encode_get_request(
+            b"\x80\x00\x1f\x88\x04wrong",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+        );
+        let mut tc = TestCtx::new().with_unknown_engine_ids(u32::MAX);
+        {
+            let mut ctx = tc.ctx(None);
+            let _ = process_snmpv3_request(&frame, &mut ctx, &mib);
+        }
+        assert_eq!(tc.unknown_engine_ids, u32::MAX, "counter must not overflow");
+    }
+
+    #[test]
+    fn given_matching_usm_engine_id_but_wrong_context_engine_id_when_process_then_returns_report() {
+        // Verifies: REQ-0104 — checks contextEngineID specifically, not msgAuthoritativeEngineID
+        let mib = crate::mib::Store::new();
+        let frame = snmpv3_frames::encode_get_request_with_context_engine_id(
+            test_engine_id(),             // msgAuthoritativeEngineID matches agent
+            b"\x80\x00\x1f\x88\x04wrong", // contextEngineID does NOT match
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+        );
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_some(),
+            "contextEngineID mismatch must produce a Report response even when msgAuthoritativeEngineID matches"
+        );
+        assert_eq!(
+            tc.unknown_engine_ids, 1,
+            "counter must be incremented on contextEngineID mismatch"
         );
     }
 

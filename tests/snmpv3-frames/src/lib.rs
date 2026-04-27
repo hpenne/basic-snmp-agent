@@ -385,6 +385,67 @@ pub fn encode_set_request(
     )
 }
 
+/// Encode a `SNMPv3` `GetRequest` frame where the `contextEngineID` in the `ScopedPdu`
+/// differs from the `msgAuthoritativeEngineID` in the USM security parameters.
+///
+/// Use this to test contextEngineID validation independently of the USM engine ID check.
+///
+/// # Panics
+///
+/// Does not panic in practice; all internal BER encodings are of well-formed structures.
+///
+/// # Examples
+///
+/// ```
+/// let frame = snmpv3_frames::encode_get_request_with_context_engine_id(
+///     b"\x80\x00\x1f\x88\x04test",   // msgAuthoritativeEngineID (USM)
+///     b"\x80\x00\x1f\x88\x04wrong",  // contextEngineID (ScopedPdu)
+///     b"",
+///     1,
+///     42,
+///     &[1, 3, 6, 1, 2, 1, 1, 1, 0],
+/// );
+/// assert!(!frame.is_empty());
+/// ```
+#[must_use]
+pub fn encode_get_request_with_context_engine_id(
+    usm_engine_id: &[u8],
+    context_engine_id: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    request_id: i32,
+    oid_arcs: &[u32],
+) -> Vec<u8> {
+    let rasn_pdu = RasnGetRequest(single_varbind_pdu(request_id, oid_arcs));
+    let scoped_pdu = ScopedPdu {
+        engine_id: context_engine_id.to_vec().into(),
+        name: context_name.to_vec().into(),
+        data: Pdus::GetRequest(rasn_pdu),
+    };
+    let usm_params = USMSecurityParameters {
+        authoritative_engine_id: usm_engine_id.to_vec().into(),
+        authoritative_engine_boots: 0.into(),
+        authoritative_engine_time: 0.into(),
+        user_name: rasn::types::OctetString::from(vec![]),
+        authentication_parameters: rasn::types::OctetString::from(vec![]),
+        privacy_parameters: rasn::types::OctetString::from(vec![]),
+    };
+    let security_parameters_bytes =
+        rasn::ber::encode(&usm_params).expect("USMSecurityParameters must encode");
+    let v3_message = V3Message {
+        version: 3.into(),
+        global_data: HeaderData {
+            message_id: msg_id.into(),
+            max_size: 65535.into(),
+            flags: rasn::types::OctetString::from(vec![0x04]),
+            security_model: 3.into(),
+        },
+        security_parameters: security_parameters_bytes.into(),
+        scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
+    };
+    rasn::ber::encode(&v3_message).expect("V3Message must encode")
+}
+
 /// Encode an engine-ID discovery probe: a `GetRequest` with empty
 /// `msgAuthoritativeEngineID` in the USM security parameters and the
 /// `reportableFlag` (bit 2, `0x04`) set in `msgFlags`.
