@@ -65,7 +65,7 @@ impl PrivProtocol {
     /// use basic_snmp_agent::usm::privacy::PrivProtocol;
     /// use basic_snmp_agent::usm::keys::SecretKey;
     ///
-    /// let key = SecretKey::new(vec![0x42u8; 16]);
+    /// let key = SecretKey::new_from_exposed_slice(&[0x42u8; 16]);
     /// let iv = [0x24u8; 16];
     /// let ciphertext = PrivProtocol::Aes128.encrypt(&key, &iv, b"hello").unwrap();
     /// assert_eq!(ciphertext.len(), 5);
@@ -120,7 +120,7 @@ impl PrivProtocol {
     /// use basic_snmp_agent::usm::privacy::PrivProtocol;
     /// use basic_snmp_agent::usm::keys::SecretKey;
     ///
-    /// let key = SecretKey::new(vec![0x42u8; 16]);
+    /// let key = SecretKey::new_from_exposed_slice(&[0x42u8; 16]);
     /// let iv = [0x24u8; 16];
     /// let ciphertext = PrivProtocol::Aes128.encrypt(&key, &iv, b"hello").unwrap();
     /// let recovered = PrivProtocol::Aes128.decrypt(&key, &iv, &ciphertext).unwrap();
@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn given_correct_key_when_encrypt_aes128_then_returns_same_length() {
         // Verifies: REQ-0088
-        let key = SecretKey::new(vec![0x42u8; 16]);
+        let key = SecretKey::new_from_exposed_slice(&[0x42u8; 16]);
         let iv = [0x24u8; 16];
         let ciphertext = PrivProtocol::Aes128
             .encrypt(&key, &iv, b"hello world")
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn given_correct_key_when_encrypt_aes256_then_returns_same_length() {
         // Verifies: REQ-0089
-        let key = SecretKey::new(vec![0x42u8; 32]);
+        let key = SecretKey::new_from_exposed_slice(&[0x42u8; 32]);
         let iv = [0x24u8; 16];
         let ciphertext = PrivProtocol::Aes256
             .encrypt(&key, &iv, b"hello world")
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn given_wrong_key_length_when_encrypt_aes128_then_error() {
         // Verifies: REQ-0084, REQ-0088
-        let key = SecretKey::new(vec![0u8; 32]); // 32 bytes, not 16
+        let key = SecretKey::new_from_exposed_slice(&[0u8; 32]); // 32 bytes, not 16
         let iv = [0u8; 16];
         let result = PrivProtocol::Aes128.encrypt(&key, &iv, b"data");
         assert_eq!(
@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn given_wrong_key_length_when_encrypt_aes256_then_error() {
         // Verifies: REQ-0084, REQ-0089
-        let key = SecretKey::new(vec![0u8; 16]); // 16 bytes, not 32
+        let key = SecretKey::new_from_exposed_slice(&[0u8; 16]); // 16 bytes, not 32
         let iv = [0u8; 16];
         let result = PrivProtocol::Aes256.encrypt(&key, &iv, b"data");
         assert_eq!(
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn given_wrong_key_length_when_decrypt_aes128_then_error() {
         // Verifies: REQ-0084, REQ-0088
-        let key = SecretKey::new(vec![0u8; 32]); // 32 bytes, not 16
+        let key = SecretKey::new_from_exposed_slice(&[0u8; 32]); // 32 bytes, not 16
         let iv = [0u8; 16];
         let result = PrivProtocol::Aes128.decrypt(&key, &iv, b"data");
         assert_eq!(
@@ -278,7 +278,7 @@ mod tests {
     #[test]
     fn given_wrong_key_length_when_decrypt_aes256_then_error() {
         // Verifies: REQ-0084, REQ-0089
-        let key = SecretKey::new(vec![0u8; 16]); // 16 bytes, not 32
+        let key = SecretKey::new_from_exposed_slice(&[0u8; 16]); // 16 bytes, not 32
         let iv = [0u8; 16];
         let result = PrivProtocol::Aes256.decrypt(&key, &iv, b"data");
         assert_eq!(
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn given_correct_key_when_roundtrip_aes128_then_recovers_plaintext() {
         // Verifies: REQ-0088
-        let key = SecretKey::new(vec![0x11u8; 16]);
+        let key = SecretKey::new_from_exposed_slice(&[0x11u8; 16]);
         let iv = [0xFFu8; 16];
         let original = b"SNMP privacy roundtrip test";
         let ciphertext = PrivProtocol::Aes128.encrypt(&key, &iv, original).unwrap();
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn given_correct_key_when_roundtrip_aes256_then_recovers_plaintext() {
         // Verifies: REQ-0089
-        let key = SecretKey::new(vec![0x22u8; 32]);
+        let key = SecretKey::new_from_exposed_slice(&[0x22u8; 32]);
         let iv = [0xAAu8; 16];
         let original = b"SNMP privacy roundtrip test AES-256";
         let ciphertext = PrivProtocol::Aes256.encrypt(&key, &iv, original).unwrap();
@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn given_empty_plaintext_when_roundtrip_aes128_then_returns_empty() {
         // Verifies: REQ-0088
-        let key = SecretKey::new(vec![0x42u8; 16]);
+        let key = SecretKey::new_from_exposed_slice(&[0x42u8; 16]);
         let iv = [0x24u8; 16];
         let ciphertext = PrivProtocol::Aes128.encrypt(&key, &iv, b"").unwrap();
         assert!(ciphertext.is_empty());
@@ -338,7 +338,7 @@ mod tests {
     #[test]
     fn given_different_ivs_when_encrypt_same_plaintext_then_different_ciphertext() {
         // Verifies: REQ-0088 — IV is incorporated into the keystream
-        let key = SecretKey::new(vec![0x33u8; 16]);
+        let key = SecretKey::new_from_exposed_slice(&[0x33u8; 16]);
         let iv_a = [0x00u8; 16];
         let iv_b = [0x01u8; 16];
         let plaintext = b"identical plaintext";
@@ -358,7 +358,7 @@ mod tests {
         // Verifies: REQ-0088
         // NIST SP 800-38A, Section F.3.13: CFB128-AES128.Encrypt, Block #1.
         // Source: https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38a.pdf
-        let key = SecretKey::new(vec![
+        let key = SecretKey::new_from_exposed_slice(&[
             0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
             0x4f, 0x3c,
         ]);

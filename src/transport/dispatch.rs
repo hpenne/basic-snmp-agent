@@ -1059,7 +1059,7 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             "alice",
             AuthProtocol::HmacSha256,
-            SecretKey::new(auth_key_bytes.to_vec()),
+            SecretKey::new_from_exposed_slice(&auth_key_bytes),
         );
         let authenticated_frame = build_authenticated_frame(&auth_key_bytes);
         let mut tc = TestCtx::new();
@@ -1097,7 +1097,7 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             "alice",
             AuthProtocol::HmacSha256,
-            SecretKey::new(vec![0x42u8; 32]),
+            SecretKey::new_from_exposed_slice(&[0x42u8; 32]),
         );
         // Build frame with an incorrect MAC (all-0xBB bytes)
         let frame_with_wrong_mac = snmpv3_frames::encode_get_request_with_auth_params(
@@ -1165,7 +1165,7 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             "alice",
             AuthProtocol::HmacSha256,
-            SecretKey::new(vec![0x42u8; 32]),
+            SecretKey::new_from_exposed_slice(&[0x42u8; 32]),
         );
         // Build frame with authFlag but empty auth_params (malformed)
         let frame = snmpv3_frames::encode_get_request_with_auth_params(
@@ -1204,7 +1204,7 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             "alice",
             AuthProtocol::HmacSha256,
-            SecretKey::new(vec![0x42u8; 32]),
+            SecretKey::new_from_exposed_slice(&[0x42u8; 32]),
         );
         // flags 0x01 = authFlag only (no reportableFlag)
         let frame = snmpv3_frames::encode_get_request_with_auth_params(
@@ -1242,7 +1242,7 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             "alice",
             AuthProtocol::HmacSha256,
-            SecretKey::new(vec![0x42u8; 32]),
+            SecretKey::new_from_exposed_slice(&[0x42u8; 32]),
         );
         let frame = snmpv3_frames::encode_get_request_with_auth_params(
             test_engine_id(),
@@ -1332,7 +1332,7 @@ mod tests {
             time,
         );
 
-        let key = SecretKey::new(auth_key_bytes.to_vec());
+        let key = SecretKey::new_from_exposed_slice(auth_key_bytes);
         let mac = AuthProtocol::HmacSha256
             .compute_mac(&key, &frame_with_zeros)
             .unwrap();
@@ -1368,7 +1368,7 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             "alice",
             AuthProtocol::HmacSha256,
-            SecretKey::new(auth_key_bytes.to_vec()),
+            SecretKey::new_from_exposed_slice(&auth_key_bytes),
         );
         // boots=1 matches engine_boots=1; time=0 matches engine_time=0 (within 150s window)
         let frame = build_authenticated_frame_with_time(&auth_key_bytes, 1, 0);
@@ -1407,7 +1407,7 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             "alice",
             AuthProtocol::HmacSha256,
-            SecretKey::new(auth_key_bytes.to_vec()),
+            SecretKey::new_from_exposed_slice(&auth_key_bytes),
         );
         // boots=2 does not match engine_boots=1 → out of window
         let frame = build_authenticated_frame_with_time(&auth_key_bytes, 2, 0);
@@ -1485,7 +1485,7 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             "alice",
             AuthProtocol::HmacSha256,
-            SecretKey::new(auth_key_bytes.to_vec()),
+            SecretKey::new_from_exposed_slice(&auth_key_bytes),
         );
 
         // boots=2 does not match engine_boots=1 → out of window; flags=0x01 = authFlag only,
@@ -1518,7 +1518,7 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             "alice",
             AuthProtocol::HmacSha256,
-            SecretKey::new(auth_key_bytes.to_vec()),
+            SecretKey::new_from_exposed_slice(&auth_key_bytes),
         );
         let frame = build_authenticated_frame_with_time(&auth_key_bytes, 2, 0);
         let mut tc = TestCtx::new()
@@ -1577,7 +1577,7 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             "alice",
             AuthProtocol::HmacSha256,
-            SecretKey::new(auth_key_bytes.to_vec()),
+            SecretKey::new_from_exposed_slice(&auth_key_bytes),
         );
         // boots=1 matches engine_boots=1, but msg_time=200, engine_time=0 → diff=200 > 150
         let frame = build_authenticated_frame_with_time(&auth_key_bytes, 1, 200);
@@ -1712,7 +1712,7 @@ mod tests {
         aes_iv[0..4].copy_from_slice(&boots.to_be_bytes());
         aes_iv[4..8].copy_from_slice(&time.to_be_bytes());
         aes_iv[8..16].copy_from_slice(&salt);
-        let priv_key = SecretKey::new(priv_key_bytes.to_vec());
+        let priv_key = SecretKey::new_from_exposed_slice(priv_key_bytes);
         let ciphertext = priv_protocol
             .encrypt(&priv_key, &aes_iv, &scoped_pdu_ber)
             .unwrap();
@@ -1742,7 +1742,7 @@ mod tests {
         let frame_with_zeros = rasn::ber::encode(&v3_msg).unwrap();
 
         // Compute HMAC over frame with zeroed auth_params and splice it in.
-        let auth_key = SecretKey::new(auth_key_bytes.to_vec());
+        let auth_key = SecretKey::new_from_exposed_slice(auth_key_bytes);
         let mac = AuthProtocol::HmacSha256
             .compute_mac(&auth_key, &frame_with_zeros)
             .unwrap();
@@ -1769,9 +1769,9 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_priv(
             "alice",
             AuthProtocol::HmacSha256,
-            SecretKey::new(auth_key_bytes.to_vec()),
+            SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
-            SecretKey::new(priv_key_bytes.to_vec()),
+            SecretKey::new_from_exposed_slice(&priv_key_bytes),
         );
         let frame = build_authpriv_frame(
             &auth_key_bytes,
@@ -1823,7 +1823,7 @@ mod tests {
         aes_iv[0..4].copy_from_slice(&1u32.to_be_bytes()); // engine_boots = 1
         aes_iv[4..8].copy_from_slice(&0u32.to_be_bytes()); // engine_time = 0
         aes_iv[8..16].copy_from_slice(usm_params.privacy_parameters.as_ref());
-        let priv_key = SecretKey::new(priv_key_bytes.to_vec());
+        let priv_key = SecretKey::new_from_exposed_slice(&priv_key_bytes);
         let plaintext = PrivProtocol::Aes128
             .decrypt(&priv_key, &aes_iv, ciphertext.as_ref())
             .expect("response decryption must succeed");
@@ -1861,7 +1861,7 @@ mod tests {
         );
 
         // Verify the HMAC over the encrypted response is valid.
-        let auth_key_for_verify = SecretKey::new(auth_key_bytes.to_vec());
+        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&auth_key_bytes);
         let usm_raw = v3_response.security_parameters.as_ref();
         let embedded_mac = usm_params.authentication_parameters.to_vec();
         let usm_pos = response_bytes
@@ -1897,9 +1897,9 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_priv(
             "alice",
             AuthProtocol::HmacSha256,
-            SecretKey::new(auth_key_bytes.to_vec()),
+            SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
-            SecretKey::new(wrong_priv_key_bytes.to_vec()),
+            SecretKey::new_from_exposed_slice(&wrong_priv_key_bytes),
         );
         let frame = build_authpriv_frame(
             &auth_key_bytes,
@@ -1964,9 +1964,9 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_priv(
             "alice",
             AuthProtocol::HmacSha256,
-            SecretKey::new(auth_key_bytes.to_vec()),
+            SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
-            SecretKey::new(priv_key_bytes.to_vec()),
+            SecretKey::new_from_exposed_slice(&priv_key_bytes),
         );
 
         // Build a frame with privacy_parameters of length 4 (not 8) and fake ciphertext.
@@ -1997,7 +1997,7 @@ mod tests {
         let frame_with_zeros = rasn::ber::encode(&v3_msg).unwrap();
 
         // Compute a valid HMAC so dispatch proceeds past authentication to the decryption arm.
-        let auth_key = SecretKey::new(auth_key_bytes.to_vec());
+        let auth_key = SecretKey::new_from_exposed_slice(&auth_key_bytes);
         let mac = AuthProtocol::HmacSha256
             .compute_mac(&auth_key, &frame_with_zeros)
             .unwrap();
@@ -2066,9 +2066,9 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_priv(
             "alice",
             AuthProtocol::HmacSha256,
-            SecretKey::new(auth_key_bytes.to_vec()),
+            SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
-            SecretKey::new(wrong_priv_key_bytes.to_vec()),
+            SecretKey::new_from_exposed_slice(&wrong_priv_key_bytes),
         );
 
         // Build frame with flags = 0x03 (authPriv, no reportableFlag) and corrupted ciphertext.
@@ -2097,7 +2097,7 @@ mod tests {
             )),
         };
         let frame_with_zeros = rasn::ber::encode(&v3_msg).unwrap();
-        let auth_key = SecretKey::new(auth_key_bytes.to_vec());
+        let auth_key = SecretKey::new_from_exposed_slice(&auth_key_bytes);
         let mac = AuthProtocol::HmacSha256
             .compute_mac(&auth_key, &frame_with_zeros)
             .unwrap();
@@ -2137,9 +2137,9 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_priv(
             "alice",
             AuthProtocol::HmacSha256,
-            SecretKey::new(auth_key_bytes.to_vec()),
+            SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
-            SecretKey::new(wrong_priv_key_bytes.to_vec()),
+            SecretKey::new_from_exposed_slice(&wrong_priv_key_bytes),
         );
         let frame = build_authpriv_frame(
             &auth_key_bytes,

@@ -28,8 +28,9 @@ fn main() {
         ENGINE_ID,
         AuthProtocol::HmacSha256,
     );
-    let priv_key =
-        SecretKey::new(priv_key_full.as_bytes()[..PrivProtocol::Aes128.key_len()].to_vec());
+    let priv_key = SecretKey::new_from_exposed_slice(
+        &priv_key_full.as_bytes()[..PrivProtocol::Aes128.key_len()],
+    );
     let usm_user = basic_snmp_agent::usm::user::UsmUser::auth_priv(
         "privuser",
         AuthProtocol::HmacSha256,

@@ -735,8 +735,8 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let engine_id = b"\x80\x00\x1f\x88\x04test";
-        let auth_key = SecretKey::new(vec![0x42u8; 32]);
-        let auth_key_for_verify = SecretKey::new(vec![0x42u8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0x42u8; 32]);
+        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42u8; 32]);
         let auth_protocol = AuthProtocol::HmacSha256;
         let pdu = GetResponse {
             request_id: 7,
@@ -810,8 +810,8 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let engine_id = b"\x80\x00\x1f\x88\x04test";
-        let auth_key = SecretKey::new(vec![0x42u8; 64]);
-        let auth_key_for_verify = SecretKey::new(vec![0x42u8; 64]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0x42u8; 64]);
+        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42u8; 64]);
         let auth_protocol = AuthProtocol::HmacSha512;
         let pdu = GetResponse {
             request_id: 8,
@@ -873,8 +873,8 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let engine_id = b"\x80\x00\x1f\x88\x04test";
-        let auth_key = SecretKey::new(vec![0x42u8; 32]);
-        let auth_key_for_verify = SecretKey::new(vec![0x42u8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0x42u8; 32]);
+        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42u8; 32]);
         let auth_protocol = AuthProtocol::HmacSha256;
         // Varbind value is all-zeros with length 24, identical to the SHA-256 placeholder.
         let pdu = GetResponse {
@@ -935,9 +935,9 @@ mod tests {
         use crate::usm::privacy::PrivProtocol;
 
         let engine_id = b"test-engine";
-        let auth_key = SecretKey::new(vec![0xAAu8; 32]);
-        let auth_key_for_verify = SecretKey::new(vec![0xAAu8; 32]);
-        let priv_key = SecretKey::new(vec![0xBBu8; 16]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
+        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
+        let priv_key = SecretKey::new_from_exposed_slice(&[0xBBu8; 16]);
         let auth_protocol = AuthProtocol::HmacSha256;
         let expected_varbind_value = b"test value".to_vec();
         let pdu = GetResponse {
@@ -1065,7 +1065,7 @@ mod tests {
         use crate::usm::keys::SecretKey;
         use crate::usm::privacy::PrivProtocol;
 
-        let priv_key = SecretKey::new(vec![0xBBu8; 16]);
+        let priv_key = SecretKey::new_from_exposed_slice(&[0xBBu8; 16]);
         let pdu = GetResponse {
             request_id: 1,
             error_status: ErrorStatus::NoError,

@@ -19,6 +19,8 @@ text = """
 
 [REQ-0085] The agent MUST zeroise all in-memory copies of localised authentication and privacy keys when the owning type is dropped. The zeroisation MUST be performed in a way that is not subject to dead-store elimination by the compiler.
 
+[REQ-0108] The library MUST zeroise all intermediate key material produced during key derivation (master key hashes, localisation hashes) before the memory is released. The zeroisation MUST NOT be subject to dead-store elimination.
+
 **Rationale:**
 
 Requiring pre-derived localised keys at the configuration boundary keeps the agent's hot path free of password-handling responsibilities: the library never has to own plaintext-password zeroisation, constant-time password comparison, or the choice of any particular password-derivation function beyond the RFC-specified one. Embedders that want password-based configuration call the exposed derivation helper in their own code and hand the resulting bytes to the agent. This is also defence-in-depth: fewer places inside the library hold material that could leak through a logging or panic path.
@@ -29,4 +31,6 @@ Deriving the privacy key from the leading bytes of the localised authentication 
 
 Stating the length-mapping matrix normatively prevents silent interop drift and turns configuration-time length mismatches into hard errors rather than cryptic runtime authentication failures.
 
-Zeroising key material on drop is a defence-in-depth measure against memory disclosure via heap dumps, core files, swap, or post-mortem tools. The "not subject to dead-store elimination" wording is normative because a naive `buf.fill(0)` in a `Drop` impl is trivially elidable by the optimiser and would give false comfort without providing the property. The specific mechanism for achieving this is recorded in a separate ADR rather than named in this clause."""
+Zeroising key material on drop is a defence-in-depth measure against memory disclosure via heap dumps, core files, swap, or post-mortem tools. The "not subject to dead-store elimination" wording is normative because a naive `buf.fill(0)` in a `Drop` impl is trivially elidable by the optimiser and would give false comfort without providing the property. The specific mechanism for achieving this is recorded in a separate ADR rather than named in this clause.
+
+Zeroising intermediate key material during derivation (master key hashes, localisation hashes before truncation) extends the same defence-in-depth principle to transient secrets. These intermediates are as sensitive as the final localised keys and MUST receive the same treatment."""

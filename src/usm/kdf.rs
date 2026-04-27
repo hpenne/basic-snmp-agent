@@ -1,12 +1,12 @@
 //! USM key derivation functions: password-to-key and privacy key derivation.
 //!
 //! # Requirements
-//! Implements: REQ-0081, REQ-0082
+//! Implements: REQ-0081, REQ-0082, REQ-0108
 
 use sha2::{Digest, Sha256, Sha512};
 
 use crate::usm::auth::AuthProtocol;
-use crate::usm::keys::SecretKey;
+use crate::usm::keys::{SecretKey, zeroize_slice};
 use crate::usm::privacy::PrivProtocol;
 
 // The RFC 3414 §2.6 mandated stream length for the password-to-key algorithm.
@@ -29,7 +29,7 @@ const KDF_STREAM_LEN: usize = 1_048_576;
 /// full or partial copy of the password within the stream length.
 ///
 /// # Requirements
-/// Implements: REQ-0081, REQ-0082
+/// Implements: REQ-0081, REQ-0082, REQ-0108
 ///
 /// # Panics
 /// Panics if `password` is empty.
@@ -50,14 +50,15 @@ pub fn password_to_localised_key(
     // Streaming into the hasher avoids materialising the 1 MiB buffer.
     let full_copies = KDF_STREAM_LEN / password.len();
     let remainder = KDF_STREAM_LEN % password.len();
-    let master_key_bytes: Vec<u8> = match protocol {
+    // master_key holds Ku inside a SecretKey so it is zeroised on drop.
+    let master_key: SecretKey = match protocol {
         AuthProtocol::HmacSha256 => {
             let mut hasher = Sha256::new();
             for _ in 0..full_copies {
                 hasher.update(password);
             }
             hasher.update(&password[..remainder]);
-            hasher.finalize().to_vec()
+            finalise_into_secret_key(hasher)
         }
         AuthProtocol::HmacSha512 => {
             let mut hasher = Sha512::new();
@@ -65,7 +66,7 @@ pub fn password_to_localised_key(
                 hasher.update(password);
             }
             hasher.update(&password[..remainder]);
-            hasher.finalize().to_vec()
+            finalise_into_secret_key(hasher)
         }
     };
 
@@ -73,8 +74,9 @@ pub fn password_to_localised_key(
     // RFC 3414 §2.6 specifies H(Ku || snmpEngineID || Ku) — a plain hash,
     // not an HMAC. RFC 7860 §2 extends this to SHA-256/SHA-512 using the
     // same plain-hash formula.
-    let localised_bytes = localise_key(&master_key_bytes, engine_id, protocol);
-    SecretKey::new(localised_bytes[..protocol.key_len()].to_vec())
+    let mut localised = localise_key(master_key.as_bytes(), engine_id, protocol);
+    localised.truncate(protocol.key_len());
+    localised
 }
 
 /// Derive a USM privacy key from a localised authentication key.
@@ -88,7 +90,7 @@ pub fn password_to_localised_key(
 /// hash output length is equal to or shorter than needed.
 ///
 /// # Requirements
-/// Implements: REQ-0081, REQ-0082
+/// Implements: REQ-0081, REQ-0082, REQ-0108
 #[must_use]
 pub fn derive_priv_key_from_auth_key(
     auth_key: &SecretKey,
@@ -98,30 +100,47 @@ pub fn derive_priv_key_from_auth_key(
 ) -> SecretKey {
     // RFC 3826 §2.1 uses the same plain-hash localisation formula as
     // RFC 3414 §2.6: H(key || engineID || key).
-    let full_hash = localise_key(auth_key.as_bytes(), engine_id, auth_protocol);
-    SecretKey::new(full_hash[..priv_protocol.key_len()].to_vec())
+    let mut full_hash = localise_key(auth_key.as_bytes(), engine_id, auth_protocol);
+    full_hash.truncate(priv_protocol.key_len());
+    full_hash
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
+// Finalise a hasher and move its output into a SecretKey, then zeroise the
+// stack-local GenericArray digest. The hasher's internal state is *not*
+// zeroised because the sha2 crate does not expose a way to clear it; this
+// is a known limitation — the hasher state lives on the stack and is
+// overwritten promptly by subsequent frames, but is not defence-in-depth
+// guaranteed.
+// Implements: REQ-0108
+fn finalise_into_secret_key<D: Digest>(hasher: D) -> SecretKey {
+    let mut digest = hasher.finalize();
+    let mut key = SecretKey::zeroed(digest.len());
+    key.as_bytes_mut().copy_from_slice(&digest);
+    zeroize_slice(digest.as_mut_slice());
+    key
+}
+
 // Compute H(key || engine_id || key) per RFC 3414 §2.6 / RFC 3826 §2.1.
-// Returns the full hash digest so callers can truncate to their required length.
-// Implements: REQ-0082
-fn localise_key(key: &[u8], engine_id: &[u8], protocol: AuthProtocol) -> Vec<u8> {
+// Returns the full hash digest inside a SecretKey so intermediate material
+// is zeroised on drop. Callers truncate to their required length.
+// Implements: REQ-0082, REQ-0108
+fn localise_key(key: &[u8], engine_id: &[u8], protocol: AuthProtocol) -> SecretKey {
     match protocol {
         AuthProtocol::HmacSha256 => {
             let mut hasher = Sha256::new();
             hasher.update(key);
             hasher.update(engine_id);
             hasher.update(key);
-            hasher.finalize().to_vec()
+            finalise_into_secret_key(hasher)
         }
         AuthProtocol::HmacSha512 => {
             let mut hasher = Sha512::new();
             hasher.update(key);
             hasher.update(engine_id);
             hasher.update(key);
-            hasher.finalize().to_vec()
+            finalise_into_secret_key(hasher)
         }
     }
 }
@@ -241,7 +260,7 @@ mod tests {
     #[test]
     fn given_auth_key_when_derive_priv_key_aes128_then_returns_16_bytes() {
         // Verifies: REQ-0082
-        let auth_key = SecretKey::new(vec![0xABu8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xABu8; 32]);
         let priv_key = derive_priv_key_from_auth_key(
             &auth_key,
             MAPLE_ENGINE_ID,
@@ -254,7 +273,7 @@ mod tests {
     #[test]
     fn given_auth_key_when_derive_priv_key_aes256_then_returns_32_bytes() {
         // Verifies: REQ-0082
-        let auth_key = SecretKey::new(vec![0xABu8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xABu8; 32]);
         let priv_key = derive_priv_key_from_auth_key(
             &auth_key,
             MAPLE_ENGINE_ID,
@@ -267,7 +286,7 @@ mod tests {
     #[test]
     fn given_sha512_auth_key_when_derive_priv_key_aes128_then_returns_16_bytes() {
         // Verifies: REQ-0082 — SHA-512 auth with AES-128 priv
-        let auth_key = SecretKey::new(vec![0xCDu8; 64]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xCDu8; 64]);
         let priv_key = derive_priv_key_from_auth_key(
             &auth_key,
             MAPLE_ENGINE_ID,
@@ -280,7 +299,7 @@ mod tests {
     #[test]
     fn given_sha512_auth_key_when_derive_priv_key_aes256_then_returns_32_bytes() {
         // Verifies: REQ-0082 — SHA-512 auth with AES-256 priv
-        let auth_key = SecretKey::new(vec![0xCDu8; 64]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xCDu8; 64]);
         let priv_key = derive_priv_key_from_auth_key(
             &auth_key,
             MAPLE_ENGINE_ID,
@@ -293,8 +312,8 @@ mod tests {
     #[test]
     fn given_same_auth_key_and_engine_id_when_derive_priv_twice_then_same() {
         // Verifies: REQ-0082 — deterministic
-        let auth_key_a = SecretKey::new(vec![0x77u8; 32]);
-        let auth_key_b = SecretKey::new(vec![0x77u8; 32]);
+        let auth_key_a = SecretKey::new_from_exposed_slice(&[0x77u8; 32]);
+        let auth_key_b = SecretKey::new_from_exposed_slice(&[0x77u8; 32]);
         let priv_key_a = derive_priv_key_from_auth_key(
             &auth_key_a,
             MAPLE_ENGINE_ID,
@@ -313,8 +332,8 @@ mod tests {
     #[test]
     fn given_different_engine_ids_when_derive_priv_then_different_keys() {
         // Verifies: REQ-0082 — engine ID localises the privacy key
-        let auth_key_a = SecretKey::new(vec![0x55u8; 32]);
-        let auth_key_b = SecretKey::new(vec![0x55u8; 32]);
+        let auth_key_a = SecretKey::new_from_exposed_slice(&[0x55u8; 32]);
+        let auth_key_b = SecretKey::new_from_exposed_slice(&[0x55u8; 32]);
         let engine_id_a = &[0u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
         let engine_id_b = &[0u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
         let priv_key_a = derive_priv_key_from_auth_key(
@@ -344,7 +363,7 @@ mod tests {
         //   full_hash = hashlib.sha256(auth_key + engine_id + auth_key).digest()
         //   priv_key_aes128 = full_hash[:16]
         //   # => f2a0859a33e22a9b5a42af5847f1699e
-        let auth_key = SecretKey::new(vec![0xABu8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xABu8; 32]);
         let priv_key = derive_priv_key_from_auth_key(
             &auth_key,
             MAPLE_ENGINE_ID,
@@ -370,7 +389,7 @@ mod tests {
         //   full_hash = hashlib.sha512(auth_key + engine_id + auth_key).digest()
         //   priv_key_aes256 = full_hash[:32]
         //   # => 05e43de2b7fc67e8b1fe1e28454d1e8bef33368e9c1021055ceb6d5a1dcef63d
-        let auth_key = SecretKey::new(vec![0xCDu8; 64]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xCDu8; 64]);
         let priv_key = derive_priv_key_from_auth_key(
             &auth_key,
             MAPLE_ENGINE_ID,
