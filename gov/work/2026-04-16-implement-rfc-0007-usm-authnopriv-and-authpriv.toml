@@ -48,7 +48,7 @@ Implementation plan:
 - ✓ Step 10h: Behave tests for authenticated GET requests at authNoPriv security level. Scenarios: successful authenticated GET/GETNEXT/GETBULK with correct credentials; rejected request with wrong HMAC; rejected request with unknown user name; rejected request with mismatched security level. (REQ-0078, REQ-0079, REQ-0080, REQ-0100)
 - ✓ Step 10i: Codec changes for encrypted PDU handling. Preserve msgPrivacyParameters (privacy salt/IV material) in UsmSecurityFields. Accept ScopedPduData::EncryptedPdu in decode_v3_message — return raw ciphertext instead of rejecting. Add variant or field on V3InboundMessage to carry either decoded PDU or encrypted blob. Tests: encrypted PDU accepted and ciphertext preserved; cleartext path unchanged.
 - ✓ Step 10j: Decryption in dispatch (REQ-0101). For authPriv messages, after HMAC and time-window pass, decrypt ciphertext using PrivProtocol::decrypt with derived priv key and IV from privacy parameters. Decode decrypted cleartext as ScopedPdu and extract inner PDU. On failure: increment counter, respond with usmStatsDecryptionErrors Report PDU. Tests: correct key decrypts; wrong key gets Report; corrupted ciphertext gets Report.
-- ○ Step 11: Behave tests for authenticated GET requests at authPriv security level (REQ-0078, REQ-0079, REQ-0080)
+- ✓ Step 11: Behave tests for authenticated GET requests at authPriv security level (REQ-0078, REQ-0079, REQ-0080)
 - ○ Step 12: contextEngineID mismatch Report PDU replacing silent discard (REQ-0104)
 - ○ Step 13: Behave test for contextEngineID mismatch (REQ-0104)
 - ○ Step 14: Outbound trap authentication and encryption (REQ-0105, REQ-0106)
