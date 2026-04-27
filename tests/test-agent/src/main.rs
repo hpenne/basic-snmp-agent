@@ -72,8 +72,7 @@ fn main() {
 
     // Use port 0 so the OS assigns a free TCP port; no inbound requests are
     // served in this binary, but the event loop must bind a listener.
-    let mut builder = AgentBuilder::new()
-        .listen_addr("0.0.0.0:0".parse().unwrap());
+    let mut builder = AgentBuilder::new().listen_addr("0.0.0.0:0".parse().unwrap());
 
     if let Some((engine_id, usm_user)) = parse_usm_env() {
         builder = builder.engine_id(engine_id).usm_user(usm_user);
@@ -211,7 +210,6 @@ fn parse_usm_env() -> Option<(Vec<u8>, UsmUser)> {
     Some((engine_id, usm_user))
 }
 
-
 /// Decode a hex-encoded engine ID string (with optional `0x` prefix) into bytes.
 fn decode_hex_engine_id(hex_str: &str) -> Vec<u8> {
     let hex_str = hex_str.strip_prefix("0x").unwrap_or(hex_str);
@@ -223,15 +221,12 @@ fn decode_hex_engine_id(hex_str: &str) -> Vec<u8> {
         .step_by(2)
         .map(|octet_start| {
             u8::from_str_radix(&hex_str[octet_start..octet_start + 2], 16).unwrap_or_else(|e| {
-                eprintln!(
-                    "error: invalid hex in USM_ENGINE_ID at position {octet_start}: {e}"
-                );
+                eprintln!("error: invalid hex in USM_ENGINE_ID at position {octet_start}: {e}");
                 process::exit(1);
             })
         })
         .collect()
 }
-
 
 // ── Value conversion ──────────────────────────────────────────────────────────
 
