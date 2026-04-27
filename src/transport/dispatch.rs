@@ -414,6 +414,10 @@ pub fn process_snmpv3_request(
     let response_auth = ctx
         .usm_user
         .and_then(|user| user.auth_protocol().zip(user.auth_key()));
+    // Implements: REQ-0101
+    let response_priv = ctx
+        .usm_user
+        .and_then(|user| user.priv_protocol().zip(user.priv_key()));
     crate::codec::encode_v3_response(
         v3_msg.msg_id,
         ctx.engine_id,
@@ -422,6 +426,7 @@ pub fn process_snmpv3_request(
         ctx.engine_boots,
         ctx.engine_time,
         response_auth,
+        response_priv,
         &response,
     )
     .ok()
@@ -1751,6 +1756,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn given_correct_priv_key_when_process_authpriv_then_decrypts_and_responds() {
         // Verifies: REQ-0101
         use crate::usm::auth::AuthProtocol;
@@ -1789,13 +1795,42 @@ mod tests {
             tc.decryption_errors, 0,
             "counter must not be incremented on success"
         );
-        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&result.unwrap())
+        let response_bytes = result.unwrap();
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
             .expect("response must be a valid SNMPv3 message");
-        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
-            panic!("response must contain a cleartext ScopedPDU");
+
+        // authPriv response must have flags 0x03 (auth + priv).
+        let flags_byte = v3_response.global_data.flags.first().copied().unwrap_or(0);
+        assert_eq!(flags_byte, 0x03, "authPriv response flags must be 0x03");
+
+        // Response ScopedPdu must be encrypted.
+        let rasn_snmp::v3::ScopedPduData::EncryptedPdu(ciphertext) = v3_response.scoped_data else {
+            panic!("authPriv response must contain an encrypted ScopedPDU");
         };
+
+        // Privacy parameters must be an 8-byte salt.
+        let usm_params: rasn_snmp::v3::USMSecurityParameters =
+            rasn::ber::decode(v3_response.security_parameters.as_ref())
+                .expect("response must have valid USM security parameters");
+        assert_eq!(
+            usm_params.privacy_parameters.len(),
+            8,
+            "response privacy_parameters must be 8 bytes"
+        );
+
+        // Decrypt the response ScopedPdu using the same priv key and verify the inner PDU.
+        let mut aes_iv = [0u8; 16];
+        aes_iv[0..4].copy_from_slice(&1u32.to_be_bytes()); // engine_boots = 1
+        aes_iv[4..8].copy_from_slice(&0u32.to_be_bytes()); // engine_time = 0
+        aes_iv[8..16].copy_from_slice(usm_params.privacy_parameters.as_ref());
+        let priv_key = SecretKey::new(priv_key_bytes.to_vec());
+        let plaintext = PrivProtocol::Aes128
+            .decrypt(&priv_key, &aes_iv, ciphertext.as_ref())
+            .expect("response decryption must succeed");
+        let scoped_pdu: rasn_snmp::v3::ScopedPdu =
+            rasn::ber::decode(&plaintext).expect("decrypted bytes must be a valid ScopedPdu");
         let rasn_snmp::v2::Pdus::Response(response_pdu) = scoped_pdu.data else {
-            panic!("response must be a GetResponse, not a Report");
+            panic!("decrypted ScopedPdu must contain a GetResponse");
         };
         assert_eq!(
             response_pdu.0.request_id, 1,
@@ -1816,6 +1851,33 @@ mod tests {
             test_oid_arcs(),
             "response varbind OID must match the request OID"
         );
+        // The MIB is empty, so the OID resolves to NoSuchObject.
+        assert!(
+            matches!(
+                response_pdu.0.variable_bindings[0].value,
+                rasn_snmp::v2::VarBindValue::NoSuchObject
+            ),
+            "varbind value must be NoSuchObject when OID is not in MIB"
+        );
+
+        // Verify the HMAC over the encrypted response is valid.
+        let auth_key_for_verify = SecretKey::new(auth_key_bytes.to_vec());
+        let usm_raw = v3_response.security_parameters.as_ref();
+        let embedded_mac = usm_params.authentication_parameters.to_vec();
+        let usm_pos = response_bytes
+            .windows(usm_raw.len())
+            .position(|w| w == usm_raw)
+            .expect("USM bytes must appear in response");
+        let mac_pos = response_bytes[usm_pos..usm_pos + usm_raw.len()]
+            .windows(embedded_mac.len())
+            .position(|w| w == embedded_mac.as_slice())
+            .expect("MAC must appear within USM region");
+        let auth_params_offset = usm_pos + mac_pos;
+        let mut zeroed_response = response_bytes.clone();
+        zeroed_response[auth_params_offset..auth_params_offset + embedded_mac.len()].fill(0);
+        AuthProtocol::HmacSha256
+            .verify_mac(&auth_key_for_verify, &zeroed_response, &embedded_mac)
+            .expect("response HMAC must verify");
     }
 
     #[test]

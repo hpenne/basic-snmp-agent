@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use rasn_smi::v2::{ApplicationSyntax, Counter64, ObjectSyntax, SimpleSyntax};
 use rasn_snmp::v2::{
     Pdu as RasnPdu, Pdus, Response, Trap, VarBind, VarBindValue as RasnVarBindValue,
@@ -152,29 +154,64 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
         .map_err(|e| EncodeError::new(format!("BER encoding of GetResponse failed: {e}")))
 }
 
+// RFC 3826 §2.2: each message must use a unique salt. The counter is
+// initialised with the current time on first use so that salts do not repeat
+// across process restarts that happen within the same second.
+static PRIVACY_SALT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+// Implements: REQ-0101
+fn next_privacy_salt() -> [u8; 8] {
+    // Lazy-initialise with current seconds so salts differ across restarts.
+    // The compare-exchange only runs once; subsequent calls just increment.
+    // as_secs() returns u64 directly, avoiding any truncation.
+    let _ = PRIVACY_SALT_COUNTER.compare_exchange(
+        0,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            | 1, // ensure non-zero so the CAS never fires again
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    );
+    PRIVACY_SALT_COUNTER
+        .fetch_add(1, Ordering::Relaxed)
+        .to_be_bytes()
+}
+
 /// BER-encode a [`GetResponse`] inside a full `SNMPv3` message envelope.
 ///
-/// Constructs a `ScopedPdu` from `engine_id` and `context_name`, wraps it in
-/// `ScopedPduData::CleartextPdu`, and builds an `SNMPv3` `Message`. The
-/// `USMSecurityParameters` include the authoritative engine ID and the original
-/// `user_name` echoed back, as required by RFC 3414 §8.2.4 so the command
-/// generator can match the response.
+/// Constructs a `ScopedPdu` from `engine_id` and `context_name`, and builds an
+/// `SNMPv3` `Message`. The `USMSecurityParameters` include the authoritative
+/// engine ID and the original `user_name` echoed back, as required by RFC 3414
+/// §8.2.4 so the command generator can match the response.
 ///
 /// `engine_boots` and `engine_time` are always set in the USM security
 /// parameters, regardless of security level, as required by RFC 3414 §7.1.4.
 ///
 /// When `auth` is `Some((protocol, key))`, the response is signed with HMAC
-/// and the `msgFlags` `authFlag` (bit 0) is set. When `auth` is `None`, the
-/// message is sent noAuthNoPriv with flags `0x00`.
+/// and the `msgFlags` `authFlag` (bit 0) is set.
+///
+/// When `privacy` is `Some((protocol, key))`, the `ScopedPdu` is BER-encoded
+/// and encrypted with AES-CFB128 per RFC 3826 §2.2. The 8-byte salt is sourced
+/// from a monotonically increasing `AtomicU64` counter (seeded once from the
+/// system clock) that guarantees a unique salt per call even in a multi-threaded
+/// context. The IV is `engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes)`.
+/// The `msgFlags` `privFlag` (bit 1) is also set. `privacy` must only be `Some`
+/// when `auth` is also `Some` — `authPriv` requires authentication.
+///
+/// When both are `None`, the message is sent noAuthNoPriv with flags `0x00`.
 ///
 /// # Errors
 ///
 /// Returns an [`EncodeError`] if `rasn` fails to BER-encode any part of the
-/// message, if HMAC computation fails, or if the auth-params placeholder
-/// cannot be located within the encoded message.
+/// message, if HMAC computation fails, if the auth-params placeholder cannot be
+/// located within the encoded message, if AES encryption fails, or if `privacy`
+/// is `Some` while `auth` is `None` (privacy without authentication is not
+/// permitted per RFC 3412).
 ///
 /// # Requirements
-/// Implements: REQ-0068, REQ-0070, REQ-0072, REQ-0100
+/// Implements: REQ-0068, REQ-0070, REQ-0072, REQ-0100, REQ-0101
 ///
 /// # Examples
 ///
@@ -187,7 +224,7 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
 ///     error_index: 0,
 ///     varbinds: vec![],
 /// };
-/// let bytes = encode_v3_response(1, b"engine", b"user", b"", 0, 0, None, &pdu).unwrap();
+/// let bytes = encode_v3_response(1, b"engine", b"user", b"", 0, 0, None, None, &pdu).unwrap();
 /// assert!(!bytes.is_empty());
 /// ```
 #[allow(clippy::too_many_arguments)]
@@ -199,6 +236,10 @@ pub fn encode_v3_response(
     engine_boots: u32,
     engine_time: u32,
     auth: Option<(crate::usm::auth::AuthProtocol, &crate::usm::keys::SecretKey)>,
+    privacy: Option<(
+        crate::usm::privacy::PrivProtocol,
+        &crate::usm::keys::SecretKey,
+    )>,
     pdu: &GetResponse,
 ) -> Result<Vec<u8>, EncodeError> {
     let rasn_response = Response(RasnPdu {
@@ -214,21 +255,56 @@ pub fn encode_v3_response(
         data: Pdus::Response(rasn_response),
     };
 
+    // Encrypt the ScopedPdu when privacy credentials are present, otherwise
+    // leave it as cleartext. The 8-byte salt comes from a process-global
+    // AtomicU64 counter that guarantees uniqueness per RFC 3826 §2.2.
+    let (scoped_data, privacy_salt) = if let Some((priv_protocol, priv_key)) = privacy {
+        let scoped_pdu_bytes = rasn::ber::encode(&scoped_pdu).map_err(|e| {
+            EncodeError::new(format!(
+                "BER encoding of ScopedPdu for encryption failed: {e}"
+            ))
+        })?;
+        let salt = next_privacy_salt();
+        // IV = engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes) per RFC 3826 §2.2.
+        let mut aes_iv = [0u8; 16];
+        aes_iv[0..4].copy_from_slice(&engine_boots.to_be_bytes());
+        aes_iv[4..8].copy_from_slice(&engine_time.to_be_bytes());
+        aes_iv[8..16].copy_from_slice(&salt);
+        let ciphertext = priv_protocol
+            .encrypt(priv_key, &aes_iv, &scoped_pdu_bytes)
+            .map_err(|e| EncodeError::new(format!("AES encryption failed: {e}")))?;
+        (
+            ScopedPduData::EncryptedPdu(ciphertext.into()),
+            salt.to_vec(),
+        )
+    } else {
+        (ScopedPduData::CleartextPdu(scoped_pdu), vec![])
+    };
+
     let auth_params: Vec<u8> = auth
         .as_ref()
         .map(|(proto, _)| vec![0u8; proto.mac_len()])
         .unwrap_or_default();
-    let flags_byte = u8::from(auth.is_some());
+    let flags_byte = match (auth.is_some(), privacy.is_some()) {
+        (true, true) => 0x03u8,
+        (true, false) => 0x01u8,
+        (false, false) => 0x00u8,
+        (false, true) => {
+            return Err(EncodeError::new(
+                "privacy without authentication is not permitted (RFC 3412)",
+            ));
+        }
+    };
 
-    // RFC 3414 §8.2.4: echo engine state and user name; placeholder is already
-    // all-zeros so no separate zeroing step is needed before HMAC computation.
+    // RFC 3414 §8.2.4: echo engine state and user name; auth placeholder is
+    // already all-zeros so no separate zeroing step is needed before HMAC.
     let usm_params = USMSecurityParameters {
         authoritative_engine_id: engine_id.to_vec().into(),
         authoritative_engine_boots: engine_boots.into(),
         authoritative_engine_time: engine_time.into(),
         user_name: user_name.to_vec().into(),
         authentication_parameters: rasn::types::OctetString::from(auth_params.clone()),
-        privacy_parameters: rasn::types::OctetString::from(vec![]),
+        privacy_parameters: rasn::types::OctetString::from(privacy_salt),
     };
 
     let security_parameters_bytes = rasn::ber::encode(&usm_params).map_err(|e| {
@@ -247,7 +323,7 @@ pub fn encode_v3_response(
         // Cloned because security_parameters_bytes is needed for the two-step
         // auth_params offset search after the message is encoded.
         security_parameters: security_parameters_bytes.clone().into(),
-        scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
+        scoped_data,
     };
 
     let mut encoded_message = rasn::ber::encode(&v3_message)
@@ -620,7 +696,8 @@ mod tests {
             }],
         };
 
-        let encoded = encode_v3_response(5, engine_id, b"testuser", b"", 0, 0, None, &pdu).unwrap();
+        let encoded =
+            encode_v3_response(5, engine_id, b"testuser", b"", 0, 0, None, None, &pdu).unwrap();
 
         // Decode back as a V3Message to verify structural validity.
         let decoded: V3Message = rasn::ber::decode(&encoded).expect("must decode as V3Message");
@@ -676,6 +753,7 @@ mod tests {
             1,
             100,
             Some((auth_protocol, &auth_key)),
+            None,
             &pdu,
         )
         .unwrap();
@@ -750,6 +828,7 @@ mod tests {
             2,
             200,
             Some((auth_protocol, &auth_key)),
+            None,
             &pdu,
         )
         .unwrap();
@@ -816,6 +895,7 @@ mod tests {
             1,
             100,
             Some((auth_protocol, &auth_key)),
+            None,
             &pdu,
         )
         .unwrap();
@@ -844,6 +924,173 @@ mod tests {
         auth_protocol
             .verify_mac(&auth_key_for_verify, &zeroed, &embedded_mac)
             .expect("MAC must verify");
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn given_auth_priv_when_encode_v3_response_then_scoped_pdu_is_encrypted_and_decryptable() {
+        // Verifies: REQ-0101
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::privacy::PrivProtocol;
+
+        let engine_id = b"test-engine";
+        let auth_key = SecretKey::new(vec![0xAAu8; 32]);
+        let auth_key_for_verify = SecretKey::new(vec![0xAAu8; 32]);
+        let priv_key = SecretKey::new(vec![0xBBu8; 16]);
+        let auth_protocol = AuthProtocol::HmacSha256;
+        let expected_varbind_value = b"test value".to_vec();
+        let pdu = GetResponse {
+            request_id: 42,
+            error_status: ErrorStatus::NoError,
+            error_index: 0,
+            varbinds: vec![Varbind {
+                oid: "1.3.6.1.2.1.1.1.0".parse().unwrap(),
+                value: VarbindValue::Value(Value::OctetString(expected_varbind_value.clone())),
+            }],
+        };
+
+        let encoded = encode_v3_response(
+            99,
+            engine_id,
+            b"testuser",
+            b"",
+            100,
+            200,
+            Some((auth_protocol, &auth_key)),
+            Some((PrivProtocol::Aes128, &priv_key)),
+            &pdu,
+        )
+        .expect("encoding must succeed");
+
+        // Decode the outer message to verify structure.
+        let v3_msg: V3Message = rasn::ber::decode(&encoded).expect("must decode V3Message");
+
+        // Verify flags = 0x03 (auth + priv).
+        assert_eq!(
+            v3_msg.global_data.flags.as_ref(),
+            &[0x03],
+            "msgFlags must be 0x03 (authPriv)"
+        );
+
+        // Verify ScopedPduData is encrypted.
+        assert!(
+            matches!(v3_msg.scoped_data, ScopedPduData::EncryptedPdu(_)),
+            "expected EncryptedPdu, got CleartextPdu"
+        );
+
+        // Verify privacy_parameters is 8 bytes (the salt).
+        let usm_params: USMSecurityParameters =
+            rasn::ber::decode(v3_msg.security_parameters.as_ref()).expect("must decode USM params");
+        assert_eq!(
+            usm_params.privacy_parameters.len(),
+            8,
+            "salt must be 8 bytes"
+        );
+
+        // Decrypt and verify the ScopedPdu is recoverable.
+        let ciphertext = match v3_msg.scoped_data {
+            ScopedPduData::EncryptedPdu(ct) => ct,
+            ScopedPduData::CleartextPdu(_) => unreachable!(),
+        };
+        let mut aes_iv = [0u8; 16];
+        aes_iv[0..4].copy_from_slice(&100u32.to_be_bytes());
+        aes_iv[4..8].copy_from_slice(&200u32.to_be_bytes());
+        aes_iv[8..16].copy_from_slice(usm_params.privacy_parameters.as_ref());
+        let plaintext = PrivProtocol::Aes128
+            .decrypt(&priv_key, &aes_iv, ciphertext.as_ref())
+            .expect("decryption must succeed");
+
+        // Confirm the decrypted bytes are a valid ScopedPdu with correct content.
+        let scoped_pdu: ScopedPdu =
+            rasn::ber::decode(&plaintext).expect("must decode ScopedPdu from decrypted bytes");
+        assert_eq!(
+            scoped_pdu.engine_id.as_ref(),
+            engine_id,
+            "decrypted ScopedPdu must contain the correct engine_id"
+        );
+        let Pdus::Response(Response(inner_pdu)) = scoped_pdu.data else {
+            panic!("decrypted ScopedPdu must contain a Response PDU");
+        };
+        assert_eq!(
+            inner_pdu.request_id, 42,
+            "request_id must survive encryption round-trip"
+        );
+        assert_eq!(
+            inner_pdu.error_status, 0,
+            "error_status must be noError (0)"
+        );
+        assert_eq!(
+            inner_pdu.variable_bindings.len(),
+            1,
+            "varbind count must survive encryption round-trip"
+        );
+        let sysdescr_oid_arcs: &[u32] = &[1, 3, 6, 1, 2, 1, 1, 1, 0];
+        assert_eq!(
+            inner_pdu.variable_bindings[0].name.as_ref(),
+            sysdescr_oid_arcs,
+            "varbind OID must survive encryption round-trip"
+        );
+        assert!(
+            matches!(
+                &inner_pdu.variable_bindings[0].value,
+                RasnVarBindValue::Value(ObjectSyntax::Simple(SimpleSyntax::String(s)))
+                    if s.as_ref() == expected_varbind_value.as_slice()
+            ),
+            "varbind value must survive encryption round-trip"
+        );
+
+        // Verify the HMAC is valid over the encrypted message.
+        let usm_raw = v3_msg.security_parameters.as_ref();
+        let embedded_mac = usm_params.authentication_parameters.to_vec();
+        let usm_pos = encoded
+            .windows(usm_raw.len())
+            .position(|w| w == usm_raw)
+            .expect("USM bytes must appear in encoded message");
+        let auth_pos = encoded[usm_pos..usm_pos + usm_raw.len()]
+            .windows(embedded_mac.len())
+            .position(|w| w == embedded_mac.as_slice())
+            .expect("MAC must appear within USM region");
+        let auth_params_offset = usm_pos + auth_pos;
+        let mut zeroed = encoded.clone();
+        zeroed[auth_params_offset..auth_params_offset + embedded_mac.len()].fill(0);
+        auth_protocol
+            .verify_mac(&auth_key_for_verify, &zeroed, &embedded_mac)
+            .expect("HMAC over encrypted message must verify");
+    }
+
+    #[test]
+    fn given_priv_without_auth_when_encode_v3_response_then_returns_error() {
+        // Verifies: REQ-0101 — privacy without authentication is invalid per RFC 3412
+        use crate::usm::keys::SecretKey;
+        use crate::usm::privacy::PrivProtocol;
+
+        let priv_key = SecretKey::new(vec![0xBBu8; 16]);
+        let pdu = GetResponse {
+            request_id: 1,
+            error_status: ErrorStatus::NoError,
+            error_index: 0,
+            varbinds: vec![],
+        };
+
+        let result = encode_v3_response(
+            1,
+            b"engine",
+            b"user",
+            b"",
+            0,
+            0,
+            None,
+            Some((PrivProtocol::Aes128, &priv_key)),
+            &pdu,
+        );
+        assert!(result.is_err(), "privacy without auth must return an error");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("privacy without authentication is not permitted"),
+            "error message must mention RFC 3412 constraint, got: {err}"
+        );
     }
 
     #[test]
