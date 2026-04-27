@@ -124,13 +124,17 @@ def step_snmpbulkget(context, non_repeaters, max_repetitions, oid):
     )
 
 
-@when('snmpget with wrong engine ID "{engine_id}" queries OID "{oid}" from the agent')
-def step_snmpget_wrong_engine_id(context, engine_id, oid):
+@when('snmpget with wrong context engine ID "{context_engine_id}" queries OID "{oid}" from the agent')
+def step_snmpget_wrong_context_engine_id(context, context_engine_id, oid):
+    # -e sets the authoritative engine ID (correct), -E sets the contextEngineID
+    # (wrong). This exercises the contextEngineID mismatch path (REQ-0104) while
+    # keeping the message-level engine ID valid so the agent decodes the message.
     _run_and_store(
         context,
         ["snmpget"]
         + SNMPV3_FLAGS
-        + ["-e", engine_id, "-t", "2", "-r", "0", _agent_addr(context), oid],
+        + ["-e", context.agent_engine_id, "-E", context_engine_id,
+           "-t", "2", "-r", "0", _agent_addr(context), oid],
     )
 
 
@@ -219,6 +223,23 @@ def step_request_times_out_or_error(context):
     )
 
 
+@then('the SNMP response is a Report PDU')
+def step_response_is_report_pdu(context):
+    output = context.last_snmp_output
+    returncode = context.last_snmp_returncode
+    # A Report PDU causes net-snmp to exit with non-zero return code and print
+    # an error — but crucially it does NOT contain "Timeout", because the agent
+    # actually responded (unlike the old silent-discard behaviour).
+    assert returncode != 0, (
+        f"Expected non-zero exit code for Report PDU, but got returncode=0 "
+        f"and output:\n{output}"
+    )
+    assert "Timeout" not in output, (
+        f"Expected Report PDU response (not a timeout), but output "
+        f"contains 'Timeout':\n{output}"
+    )
+
+
 @given('a test-agent-mib-auth instance is running with engine ID "{engine_id}"')
 def step_start_test_agent_mib_auth(context, engine_id):
     context.agent_container = _start_agent_container(
@@ -285,6 +306,18 @@ def step_snmpget_auth_no_priv_no_engine_id(context, user, password, oid):
         context,
         ["snmpget", "-v3", "-l", "authNoPriv", "-u", user, "-a", "SHA-256", "-A", password,
          "-On", "-t", "5", "-r", "1", _agent_addr(context), oid],
+    )
+
+
+@when('snmpget at authNoPriv with wrong context engine ID "{context_engine_id}" with user "{user}" and password "{password}" queries OID "{oid}" from the agent')
+def step_snmpget_auth_no_priv_wrong_context_engine_id(context, context_engine_id, user, password, oid):
+    # -e (from _auth_no_priv_flags) sets the authoritative engine ID correctly;
+    # -E sets the contextEngineID to a wrong value to trigger REQ-0104.
+    _run_and_store(
+        context,
+        ["snmpget"]
+        + _auth_no_priv_flags(user, password, context.agent_engine_id)
+        + ["-E", context_engine_id, "-t", "2", "-r", "0", _agent_addr(context), oid],
     )
 
 
@@ -371,4 +404,16 @@ def step_snmpget_auth_priv_no_engine_id(context, user, auth_password, priv_passw
          "-a", "SHA-256", "-A", auth_password,
          "-x", "AES", "-X", priv_password,
          "-On", "-t", "5", "-r", "1", _agent_addr(context), oid],
+    )
+
+
+@when('snmpget at authPriv with wrong context engine ID "{context_engine_id}" with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" queries OID "{oid}" from the agent')
+def step_snmpget_auth_priv_wrong_context_engine_id(context, context_engine_id, user, auth_password, priv_password, oid):
+    # -e (from _auth_priv_flags) sets the authoritative engine ID correctly;
+    # -E sets the contextEngineID to a wrong value to trigger REQ-0104.
+    _run_and_store(
+        context,
+        ["snmpget"]
+        + _auth_priv_flags(user, auth_password, priv_password, context.agent_engine_id)
+        + ["-E", context_engine_id, "-t", "2", "-r", "0", _agent_addr(context), oid],
     )

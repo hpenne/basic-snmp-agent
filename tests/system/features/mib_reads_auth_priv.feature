@@ -53,3 +53,8 @@ Feature: SNMP MIB reads with authPriv security over plain TCP
   Scenario: GET at authNoPriv security level is rejected by authPriv agent
     When snmpget at authNoPriv with user "privuser" and password "authpassword" queries OID "1.3.6.1.2.1.1.1.0" from the agent
     Then the SNMP request times out or returns an error
+
+  @REQ-0104
+  Scenario: GET with correct authPriv credentials but wrong contextEngineID receives Report PDU
+    When snmpget at authPriv with wrong context engine ID "0x80001f8804776f726f6e67" with user "privuser", auth password "authpassword", and priv password "privpassword" queries OID "1.3.6.1.2.1.1.1.0" from the agent
+    Then the SNMP response is a Report PDU

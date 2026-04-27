@@ -50,7 +50,7 @@ Implementation plan:
 - ✓ Step 10j: Decryption in dispatch (REQ-0101). For authPriv messages, after HMAC and time-window pass, decrypt ciphertext using PrivProtocol::decrypt with derived priv key and IV from privacy parameters. Decode decrypted cleartext as ScopedPdu and extract inner PDU. On failure: increment counter, respond with usmStatsDecryptionErrors Report PDU. Tests: correct key decrypts; wrong key gets Report; corrupted ciphertext gets Report.
 - ✓ Step 11: Behave tests for authenticated GET requests at authPriv security level (REQ-0078, REQ-0079, REQ-0080)
 - ✓ Step 12: contextEngineID mismatch Report PDU replacing silent discard (REQ-0104)
-- ○ Step 13: Behave test for contextEngineID mismatch (REQ-0104)
+- ✓ Step 13: Behave test for contextEngineID mismatch (REQ-0104)
 - ○ Step 14: Outbound trap authentication and encryption (REQ-0105, REQ-0106)
 - ○ Step 15: Behave tests for authenticated traps at authNoPriv security level (REQ-0105)
 - ○ Step 16: Behave tests for authenticated traps at authPriv security level (REQ-0105, REQ-0106)"""
@@ -162,5 +162,5 @@ category = "added"
 
 [[content.acceptance_criteria]]
 text = "Behave tests for authenticated GET requests at authPriv security level (REQ-0078, REQ-0079, REQ-0080, step 11)"
-status = "pending"
+status = "done"
 category = "added"

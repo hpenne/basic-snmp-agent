@@ -43,10 +43,10 @@ Feature: SNMP MIB reads over plain TCP
     When snmpset queries OID "1.3.6.1.2.1.1.5.0" with string value "changed" from the agent
     Then the SNMP response contains error "notWritable"
 
-  @REQ-0057
-  Scenario: Request with wrong engine ID is silently discarded
-    When snmpget with wrong engine ID "0x80001f8804776f726f6e67" queries OID "1.3.6.1.2.1.1.1.0" from the agent
-    Then the SNMP request times out or returns an error
+  @REQ-0104
+  Scenario: Request with wrong contextEngineID receives Report PDU
+    When snmpget with wrong context engine ID "0x80001f8804776f726f6e67" queries OID "1.3.6.1.2.1.1.1.0" from the agent
+    Then the SNMP response is a Report PDU
 
   @REQ-0056 @REQ-0058
   Scenario: Request with non-empty context name is silently discarded
