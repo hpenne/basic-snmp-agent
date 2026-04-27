@@ -24,6 +24,8 @@
 use std::net::SocketAddr;
 use std::process;
 
+use basic_snmp_agent::usm::auth::AuthProtocol;
+use basic_snmp_agent::usm::user::UsmUser;
 use basic_snmp_agent::{AgentBuilder, Oid, TrapPdu, Value, Varbind, VarbindValue};
 
 // ── Deserialisation types ─────────────────────────────────────────────────────
@@ -70,13 +72,17 @@ fn main() {
 
     // Use port 0 so the OS assigns a free TCP port; no inbound requests are
     // served in this binary, but the event loop must bind a listener.
-    let agent = AgentBuilder::new()
-        .listen_addr("0.0.0.0:0".parse().unwrap())
-        .build()
-        .unwrap_or_else(|e| {
-            eprintln!("error: failed to build agent: {e}");
-            process::exit(1);
-        });
+    let mut builder = AgentBuilder::new()
+        .listen_addr("0.0.0.0:0".parse().unwrap());
+
+    if let Some((engine_id, usm_user)) = parse_usm_env() {
+        builder = builder.engine_id(engine_id).usm_user(usm_user);
+    }
+
+    let agent = builder.build().unwrap_or_else(|e| {
+        eprintln!("error: failed to build agent: {e}");
+        process::exit(1);
+    });
 
     let mut all_ok = true;
 
@@ -150,6 +156,82 @@ fn main() {
 
     process::exit(i32::from(!all_ok));
 }
+
+// ── Optional USM configuration from environment ──────────────────────────────
+
+/// Read optional USM configuration from environment variables.
+///
+/// Returns `Some((engine_id, usm_user))` when `USM_ENGINE_ID`, `USM_USER`,
+/// `USM_AUTH_PROTO`, `USM_AUTH_PASS`, and `USM_SECURITY_LEVEL` are all set.
+/// Returns `None` when none of them are set. Exits on partial or invalid config.
+fn parse_usm_env() -> Option<(Vec<u8>, UsmUser)> {
+    let engine_id_hex = std::env::var("USM_ENGINE_ID").ok()?;
+    let user_name = std::env::var("USM_USER").unwrap_or_else(|_| {
+        eprintln!("error: USM_ENGINE_ID set but USM_USER missing");
+        process::exit(1);
+    });
+    let auth_proto_name = std::env::var("USM_AUTH_PROTO").unwrap_or_else(|_| {
+        eprintln!("error: USM_ENGINE_ID set but USM_AUTH_PROTO missing");
+        process::exit(1);
+    });
+    let auth_password = std::env::var("USM_AUTH_PASS").unwrap_or_else(|_| {
+        eprintln!("error: USM_ENGINE_ID set but USM_AUTH_PASS missing");
+        process::exit(1);
+    });
+    let security_level = std::env::var("USM_SECURITY_LEVEL").unwrap_or_else(|_| {
+        eprintln!("error: USM_ENGINE_ID set but USM_SECURITY_LEVEL missing");
+        process::exit(1);
+    });
+
+    let engine_id = decode_hex_engine_id(&engine_id_hex);
+
+    let auth_protocol = match auth_proto_name.as_str() {
+        "SHA-256" => AuthProtocol::HmacSha256,
+        "SHA-512" => AuthProtocol::HmacSha512,
+        other => {
+            eprintln!("error: unsupported USM_AUTH_PROTO '{other}'");
+            process::exit(1);
+        }
+    };
+
+    let auth_key = basic_snmp_agent::usm::kdf::password_to_localised_key(
+        auth_password.as_bytes(),
+        &engine_id,
+        auth_protocol,
+    );
+
+    let usm_user = match security_level.as_str() {
+        "authNoPriv" => UsmUser::auth_no_priv(&user_name, auth_protocol, auth_key),
+        other => {
+            eprintln!("error: unsupported USM_SECURITY_LEVEL '{other}'");
+            process::exit(1);
+        }
+    };
+
+    Some((engine_id, usm_user))
+}
+
+
+/// Decode a hex-encoded engine ID string (with optional `0x` prefix) into bytes.
+fn decode_hex_engine_id(hex_str: &str) -> Vec<u8> {
+    let hex_str = hex_str.strip_prefix("0x").unwrap_or(hex_str);
+    if !hex_str.len().is_multiple_of(2) {
+        eprintln!("error: USM_ENGINE_ID has odd number of hex digits");
+        process::exit(1);
+    }
+    (0..hex_str.len())
+        .step_by(2)
+        .map(|octet_start| {
+            u8::from_str_radix(&hex_str[octet_start..octet_start + 2], 16).unwrap_or_else(|e| {
+                eprintln!(
+                    "error: invalid hex in USM_ENGINE_ID at position {octet_start}: {e}"
+                );
+                process::exit(1);
+            })
+        })
+        .collect()
+}
+
 
 // ── Value conversion ──────────────────────────────────────────────────────────
 

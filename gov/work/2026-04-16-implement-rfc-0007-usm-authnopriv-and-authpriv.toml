@@ -52,7 +52,7 @@ Implementation plan:
 - ✓ Step 12: contextEngineID mismatch Report PDU replacing silent discard (REQ-0104)
 - ✓ Step 13: Behave test for contextEngineID mismatch (REQ-0104)
 - ✓ Step 14: Outbound trap authentication and encryption (REQ-0105, REQ-0106)
-- ○ Step 15: Behave tests for authenticated traps at authNoPriv security level (REQ-0105)
+- ✓ Step 15: Behave tests for authenticated traps at authNoPriv security level (REQ-0105)
 - ○ Step 16: Behave tests for authenticated traps at authPriv security level (REQ-0105, REQ-0106)"""
 
 [[content.acceptance_criteria]]
@@ -162,5 +162,10 @@ category = "added"
 
 [[content.acceptance_criteria]]
 text = "Behave tests for authenticated GET requests at authPriv security level (REQ-0078, REQ-0079, REQ-0080, step 11)"
+status = "done"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "Behave tests for authenticated traps at authNoPriv security level (REQ-0105, step 15)"
 status = "done"
 category = "added"

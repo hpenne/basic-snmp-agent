@@ -53,6 +53,41 @@ def _run_agent(context, trap_defs: list) -> subprocess.CompletedProcess:
     return result
 
 
+# Engine ID for the authNoPriv trap test agent ("trap-auth-np" in text format).
+_TRAP_AUTH_NP_ENGINE_ID = "80001f8804747261702d617574682d6e70"
+
+
+def _run_agent_auth_no_priv(
+    context,
+    trap_defs: list,
+    user: str,
+    password: str,
+) -> subprocess.CompletedProcess:
+    """Serialise *trap_defs* and run the test-agent with authNoPriv USM credentials."""
+    fd, path = tempfile.mkstemp(suffix=".json")
+    context.temp_files.append(path)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(trap_defs, fh)
+
+    result = subprocess.run(
+        [
+            "docker", "run", "--rm",
+            "--network", context.docker_network,
+            "-e", f"USM_ENGINE_ID={_TRAP_AUTH_NP_ENGINE_ID}",
+            "-e", f"USM_USER={user}",
+            "-e", "USM_AUTH_PROTO=SHA-256",
+            "-e", f"USM_AUTH_PASS={password}",
+            "-e", "USM_SECURITY_LEVEL=authNoPriv",
+            "-v", f"{path}:/trap.json",
+            context.test_agent_image, "/trap.json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    context.last_agent_output = result.stdout + result.stderr
+    return result
+
+
 def _read_traps(container: str) -> list[dict]:
     """Return all trap records from *container*'s JSON store, or [] if none."""
     result = subprocess.run(
@@ -211,6 +246,51 @@ def step_send_trap_no_destinations(context, trap_oid):
             "varbinds": [],
         }
     ])
+
+
+@when('the agent at authNoPriv with user "{user}" and password "{password}" sends a trap with OID "{trap_oid}"')
+def step_send_trap_auth_no_priv(context, user, password, trap_oid):
+    _run_agent_auth_no_priv(context, [
+        {
+            "request_id": 1,
+            "trap_oid": trap_oid,
+            "destinations": ["snmptrapd:162"],
+            "varbinds": [],
+        }
+    ], user, password)
+
+
+@when('the agent at authNoPriv with user "{user}" and password "{password}" sends a trap with OID "{trap_oid}" and varbinds')
+def step_send_trap_auth_no_priv_with_varbinds(context, user, password, trap_oid):
+    varbinds = []
+    for row in context.table:
+        try:
+            value = int(row["value"])
+        except ValueError:
+            value = row["value"]
+        varbinds.append({"oid": row["oid"], "type": row["type"], "data": value})
+    _run_agent_auth_no_priv(context, [
+        {
+            "request_id": 1,
+            "trap_oid": trap_oid,
+            "destinations": ["snmptrapd:162"],
+            "varbinds": varbinds,
+        }
+    ], user, password)
+
+
+@when('the agent at authNoPriv with user "{user}" and password "{password}" sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"')
+def step_send_trap_auth_no_priv_to_two_receivers(context, user, password, receiver1, receiver2, trap_oid):
+    dest1 = _receiver_dest(context, receiver1)
+    dest2 = _receiver_dest(context, receiver2)
+    _run_agent_auth_no_priv(context, [
+        {
+            "request_id": 1,
+            "trap_oid": trap_oid,
+            "destinations": [dest1, dest2],
+            "varbinds": [],
+        }
+    ], user, password)
 
 
 # ---------------------------------------------------------------------------
