@@ -211,7 +211,7 @@ fn next_privacy_salt() -> [u8; 8] {
 /// permitted per RFC 3412).
 ///
 /// # Requirements
-/// Implements: REQ-0068, REQ-0070, REQ-0072, REQ-0100, REQ-0101
+/// Implements: REQ-0068, REQ-0070, REQ-0072, REQ-0100, REQ-0101, REQ-0107
 ///
 /// # Examples
 ///
@@ -730,7 +730,7 @@ mod tests {
 
     #[test]
     fn given_auth_no_priv_when_encode_v3_response_then_mac_is_embedded_and_valid() {
-        // Verifies: REQ-0100
+        // Verifies: REQ-0100, REQ-0107
         use crate::usm::auth::AuthProtocol;
         use crate::usm::keys::SecretKey;
 
@@ -929,7 +929,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn given_auth_priv_when_encode_v3_response_then_scoped_pdu_is_encrypted_and_decryptable() {
-        // Verifies: REQ-0101
+        // Verifies: REQ-0101, REQ-0107
         use crate::usm::auth::AuthProtocol;
         use crate::usm::keys::SecretKey;
         use crate::usm::privacy::PrivProtocol;

@@ -153,7 +153,7 @@ fn emit_decryption_error_response(
 /// the flag set are silently discarded per RFC 3412 §7.1.3a.
 ///
 /// # Requirements
-/// Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0102, REQ-0103
+/// Implements: REQ-0056, REQ-0057, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0102, REQ-0103, REQ-0107
 ///
 /// # Examples
 ///
@@ -410,11 +410,11 @@ pub fn process_snmpv3_request(
         crate::codec::InboundPdu::SetRequest(req) => request::handle_set(&req),
     };
 
-    // response_context_name is always empty here: non-empty values were rejected above.
+    // Implements: REQ-0107 — response security level must match the request.
     let response_auth = ctx
         .usm_user
         .and_then(|user| user.auth_protocol().zip(user.auth_key()));
-    // Implements: REQ-0101
+    // Implements: REQ-0101, REQ-0107
     let response_priv = ctx
         .usm_user
         .and_then(|user| user.priv_protocol().zip(user.priv_key()));
@@ -1050,7 +1050,7 @@ mod tests {
 
     #[test]
     fn given_correct_hmac_when_process_then_proceeds() {
-        // Verifies: REQ-0100, REQ-0102
+        // Verifies: REQ-0100, REQ-0102, REQ-0107
         use crate::usm::auth::AuthProtocol;
         use crate::usm::keys::SecretKey;
 
@@ -1758,7 +1758,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn given_correct_priv_key_when_process_authpriv_then_decrypts_and_responds() {
-        // Verifies: REQ-0101
+        // Verifies: REQ-0101, REQ-0107
         use crate::usm::auth::AuthProtocol;
         use crate::usm::keys::SecretKey;
         use crate::usm::privacy::PrivProtocol;
