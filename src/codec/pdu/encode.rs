@@ -179,56 +179,11 @@ fn next_privacy_salt() -> [u8; 8] {
         .to_be_bytes()
 }
 
-/// BER-encode a [`GetResponse`] inside a full `SNMPv3` message envelope.
-///
-/// Constructs a `ScopedPdu` from `engine_id` and `context_name`, and builds an
-/// `SNMPv3` `Message`. The `USMSecurityParameters` include the authoritative
-/// engine ID and the original `user_name` echoed back, as required by RFC 3414
-/// §8.2.4 so the command generator can match the response.
-///
-/// `engine_boots` and `engine_time` are always set in the USM security
-/// parameters, regardless of security level, as required by RFC 3414 §7.1.4.
-///
-/// When `auth` is `Some((protocol, key))`, the response is signed with HMAC
-/// and the `msgFlags` `authFlag` (bit 0) is set.
-///
-/// When `privacy` is `Some((protocol, key))`, the `ScopedPdu` is BER-encoded
-/// and encrypted with AES-CFB128 per RFC 3826 §2.2. The 8-byte salt is sourced
-/// from a monotonically increasing `AtomicU64` counter (seeded once from the
-/// system clock) that guarantees a unique salt per call even in a multi-threaded
-/// context. The IV is `engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes)`.
-/// The `msgFlags` `privFlag` (bit 1) is also set. `privacy` must only be `Some`
-/// when `auth` is also `Some` — `authPriv` requires authentication.
-///
-/// When both are `None`, the message is sent noAuthNoPriv with flags `0x00`.
-///
-/// # Errors
-///
-/// Returns an [`EncodeError`] if `rasn` fails to BER-encode any part of the
-/// message, if HMAC computation fails, if the auth-params placeholder cannot be
-/// located within the encoded message, if AES encryption fails, or if `privacy`
-/// is `Some` while `auth` is `None` (privacy without authentication is not
-/// permitted per RFC 3412).
-///
-/// # Requirements
-/// Implements: REQ-0068, REQ-0070, REQ-0072, REQ-0100, REQ-0101, REQ-0107
-///
-/// # Examples
-///
-/// ```
-/// use basic_snmp_agent::codec::{ErrorStatus, GetResponse, encode_v3_response};
-///
-/// let pdu = GetResponse {
-///     request_id: 1,
-///     error_status: ErrorStatus::NoError,
-///     error_index: 0,
-///     varbinds: vec![],
-/// };
-/// let bytes = encode_v3_response(1, b"engine", b"user", b"", 0, 0, None, None, &pdu).unwrap();
-/// assert!(!bytes.is_empty());
-/// ```
+// Shared V3 message-building logic: wraps an already-constructed Pdus variant
+// in a ScopedPdu, optionally encrypts it, adds USM params, and signs with HMAC.
+// Implements: REQ-0068, REQ-0070, REQ-0072, REQ-0100, REQ-0101, REQ-0105, REQ-0106, REQ-0107
 #[allow(clippy::too_many_arguments)]
-pub fn encode_v3_response(
+fn encode_v3_envelope(
     msg_id: i32,
     engine_id: &[u8],
     user_name: &[u8],
@@ -240,19 +195,12 @@ pub fn encode_v3_response(
         crate::usm::privacy::PrivProtocol,
         &crate::usm::keys::SecretKey,
     )>,
-    pdu: &GetResponse,
+    inner_pdu: Pdus,
 ) -> Result<Vec<u8>, EncodeError> {
-    let rasn_response = Response(RasnPdu {
-        request_id: pdu.request_id,
-        error_status: pdu.error_status as u32,
-        error_index: pdu.error_index,
-        variable_bindings: pdu.varbinds.iter().map(varbind_to_rasn).collect(),
-    });
-
     let scoped_pdu = ScopedPdu {
         engine_id: engine_id.to_vec().into(),
         name: context_name.to_vec().into(),
-        data: Pdus::Response(rasn_response),
+        data: inner_pdu,
     };
 
     // Encrypt the ScopedPdu when privacy credentials are present, otherwise
@@ -363,6 +311,154 @@ pub fn encode_v3_response(
     } else {
         Ok(encoded_message)
     }
+}
+
+/// BER-encode a [`GetResponse`] inside a full `SNMPv3` message envelope.
+///
+/// Constructs a `ScopedPdu` from `engine_id` and `context_name`, and builds an
+/// `SNMPv3` `Message`. The `USMSecurityParameters` include the authoritative
+/// engine ID and the original `user_name` echoed back, as required by RFC 3414
+/// §8.2.4 so the command generator can match the response.
+///
+/// `engine_boots` and `engine_time` are always set in the USM security
+/// parameters, regardless of security level, as required by RFC 3414 §7.1.4.
+///
+/// When `auth` is `Some((protocol, key))`, the response is signed with HMAC
+/// and the `msgFlags` `authFlag` (bit 0) is set.
+///
+/// When `privacy` is `Some((protocol, key))`, the `ScopedPdu` is BER-encoded
+/// and encrypted with AES-CFB128 per RFC 3826 §2.2. The 8-byte salt is sourced
+/// from a monotonically increasing `AtomicU64` counter (seeded once from the
+/// system clock) that guarantees a unique salt per call even in a multi-threaded
+/// context. The IV is `engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes)`.
+/// The `msgFlags` `privFlag` (bit 1) is also set. `privacy` must only be `Some`
+/// when `auth` is also `Some` — `authPriv` requires authentication.
+///
+/// When both are `None`, the message is sent noAuthNoPriv with flags `0x00`.
+///
+/// # Errors
+///
+/// Returns an [`EncodeError`] if `rasn` fails to BER-encode any part of the
+/// message, if HMAC computation fails, if the auth-params placeholder cannot be
+/// located within the encoded message, if AES encryption fails, or if `privacy`
+/// is `Some` while `auth` is `None` (privacy without authentication is not
+/// permitted per RFC 3412).
+///
+/// # Requirements
+/// Implements: REQ-0068, REQ-0070, REQ-0072, REQ-0100, REQ-0101, REQ-0107
+///
+/// # Examples
+///
+/// ```
+/// use basic_snmp_agent::codec::{ErrorStatus, GetResponse, encode_v3_response};
+///
+/// let pdu = GetResponse {
+///     request_id: 1,
+///     error_status: ErrorStatus::NoError,
+///     error_index: 0,
+///     varbinds: vec![],
+/// };
+/// let bytes = encode_v3_response(1, b"engine", b"user", b"", 0, 0, None, None, &pdu).unwrap();
+/// assert!(!bytes.is_empty());
+/// ```
+#[allow(clippy::too_many_arguments)]
+pub fn encode_v3_response(
+    msg_id: i32,
+    engine_id: &[u8],
+    user_name: &[u8],
+    context_name: &[u8],
+    engine_boots: u32,
+    engine_time: u32,
+    auth: Option<(crate::usm::auth::AuthProtocol, &crate::usm::keys::SecretKey)>,
+    privacy: Option<(
+        crate::usm::privacy::PrivProtocol,
+        &crate::usm::keys::SecretKey,
+    )>,
+    pdu: &GetResponse,
+) -> Result<Vec<u8>, EncodeError> {
+    let rasn_response = Response(RasnPdu {
+        request_id: pdu.request_id,
+        error_status: pdu.error_status as u32,
+        error_index: pdu.error_index,
+        variable_bindings: pdu.varbinds.iter().map(varbind_to_rasn).collect(),
+    });
+    encode_v3_envelope(
+        msg_id,
+        engine_id,
+        user_name,
+        context_name,
+        engine_boots,
+        engine_time,
+        auth,
+        privacy,
+        Pdus::Response(rasn_response),
+    )
+}
+
+/// BER-encode a [`WireTrapPdu`] inside a full `SNMPv3` message envelope.
+///
+/// Constructs a `ScopedPdu` containing an `SNMPv2-Trap-PDU` and wraps it in
+/// an `SNMPv3` `Message` with USM security parameters. When `auth` is `Some`,
+/// the message is signed with HMAC and `msgFlags` bit 0 is set. When `privacy`
+/// is also `Some`, the `ScopedPdu` is encrypted with AES-CFB128 per RFC 3826
+/// §2.2 and `msgFlags` bit 1 is set. `privacy` must only be `Some` when `auth`
+/// is also `Some`.
+///
+/// When both are `None`, the message is sent `noAuthNoPriv` with flags `0x00`.
+///
+/// # Errors
+///
+/// Returns an [`EncodeError`] if BER encoding, HMAC computation, or AES
+/// encryption fails, or if `privacy` is `Some` while `auth` is `None`.
+///
+/// # Requirements
+/// Implements: REQ-0105, REQ-0106
+///
+/// # Examples
+///
+/// ```
+/// use basic_snmp_agent::codec::{Oid, Value, WireTrapPdu, Varbind, VarbindValue, encode_v3_trap};
+///
+/// let oid: Oid = "1.3.6.1.6.3.1.1.4.1.0".parse().unwrap();
+/// let pdu = WireTrapPdu {
+///     request_id: 1,
+///     varbinds: vec![Varbind { oid, value: VarbindValue::Value(Value::TimeTicks(0)) }],
+/// };
+/// let bytes = encode_v3_trap(1, b"engine", b"user", b"", 0, 0, None, None, &pdu).unwrap();
+/// assert!(!bytes.is_empty());
+/// ```
+#[allow(clippy::too_many_arguments)]
+pub fn encode_v3_trap(
+    msg_id: i32,
+    engine_id: &[u8],
+    user_name: &[u8],
+    context_name: &[u8],
+    engine_boots: u32,
+    engine_time: u32,
+    auth: Option<(crate::usm::auth::AuthProtocol, &crate::usm::keys::SecretKey)>,
+    privacy: Option<(
+        crate::usm::privacy::PrivProtocol,
+        &crate::usm::keys::SecretKey,
+    )>,
+    pdu: &WireTrapPdu,
+) -> Result<Vec<u8>, EncodeError> {
+    let rasn_trap = Trap(RasnPdu {
+        request_id: pdu.request_id,
+        error_status: 0,
+        error_index: 0,
+        variable_bindings: pdu.varbinds.iter().map(varbind_to_rasn).collect(),
+    });
+    encode_v3_envelope(
+        msg_id,
+        engine_id,
+        user_name,
+        context_name,
+        engine_boots,
+        engine_time,
+        auth,
+        privacy,
+        Pdus::Trap(rasn_trap),
+    )
 }
 
 /// BER-encode an `SNMPv3` Report PDU in a full message envelope.
@@ -499,6 +595,36 @@ mod tests {
 
     fn sysdescr_oid() -> Oid {
         "1.3.6.1.2.1.1.1.0".parse().unwrap()
+    }
+
+    /// Verify that the HMAC embedded in `encoded_message` is correct.
+    ///
+    /// Locates the MAC bytes using the same two-step search as the production
+    /// code (USM region first, then MAC within USM), zeroes the placeholder,
+    /// and then calls `verify_mac` to confirm the signature is valid.
+    fn verify_embedded_hmac(
+        encoded_message: &[u8],
+        security_parameters_raw: &[u8],
+        embedded_mac: &[u8],
+        auth_protocol: crate::usm::auth::AuthProtocol,
+        auth_key: &crate::usm::keys::SecretKey,
+    ) {
+        let usm_pos = encoded_message
+            .windows(security_parameters_raw.len())
+            .position(|w| w == security_parameters_raw)
+            .expect("USM bytes must appear in encoded message");
+        let auth_pos = encoded_message[usm_pos..usm_pos + security_parameters_raw.len()]
+            .windows(embedded_mac.len())
+            .position(|w| w == embedded_mac)
+            .expect("MAC must appear within USM region");
+        let auth_params_offset = usm_pos + auth_pos;
+
+        let mut zeroed = encoded_message.to_vec();
+        zeroed[auth_params_offset..auth_params_offset + embedded_mac.len()].fill(0);
+
+        auth_protocol
+            .verify_mac(auth_key, &zeroed, embedded_mac)
+            .expect("HMAC must verify");
     }
 
     #[test]
@@ -782,25 +908,13 @@ mod tests {
             "engine_time must be set in response"
         );
 
-        // Verify the embedded MAC using verify_mac for constant-time comparison.
-        let embedded_mac = usm_params.authentication_parameters.to_vec();
-        let usm_raw = decoded.security_parameters.as_ref();
-        let usm_pos = encoded
-            .windows(usm_raw.len())
-            .position(|w| w == usm_raw)
-            .expect("USM bytes must appear in encoded message");
-        let auth_pos = encoded[usm_pos..usm_pos + usm_raw.len()]
-            .windows(embedded_mac.len())
-            .position(|w| w == embedded_mac.as_slice())
-            .expect("MAC must appear within USM region");
-        let auth_params_offset = usm_pos + auth_pos;
-
-        let mut zeroed = encoded.clone();
-        zeroed[auth_params_offset..auth_params_offset + embedded_mac.len()].fill(0);
-
-        auth_protocol
-            .verify_mac(&auth_key_for_verify, &zeroed, &embedded_mac)
-            .expect("MAC must verify");
+        verify_embedded_hmac(
+            &encoded,
+            decoded.security_parameters.as_ref(),
+            &usm_params.authentication_parameters,
+            auth_protocol,
+            &auth_key_for_verify,
+        );
     }
 
     #[test]
@@ -846,24 +960,13 @@ mod tests {
             "authentication_parameters must be 48 bytes for HMAC-SHA-512"
         );
 
-        let embedded_mac = usm_params.authentication_parameters.to_vec();
-        let usm_raw = decoded.security_parameters.as_ref();
-        let usm_pos = encoded
-            .windows(usm_raw.len())
-            .position(|w| w == usm_raw)
-            .expect("USM bytes must appear in encoded message");
-        let auth_pos = encoded[usm_pos..usm_pos + usm_raw.len()]
-            .windows(embedded_mac.len())
-            .position(|w| w == embedded_mac.as_slice())
-            .expect("MAC must appear within USM region");
-        let auth_params_offset = usm_pos + auth_pos;
-
-        let mut zeroed = encoded.clone();
-        zeroed[auth_params_offset..auth_params_offset + embedded_mac.len()].fill(0);
-
-        auth_protocol
-            .verify_mac(&auth_key_for_verify, &zeroed, &embedded_mac)
-            .expect("MAC must verify");
+        verify_embedded_hmac(
+            &encoded,
+            decoded.security_parameters.as_ref(),
+            &usm_params.authentication_parameters,
+            auth_protocol,
+            &auth_key_for_verify,
+        );
     }
 
     #[test]
@@ -904,26 +1007,15 @@ mod tests {
         let usm_params: USMSecurityParameters =
             rasn::ber::decode(decoded.security_parameters.as_ref())
                 .expect("USM security parameters must decode");
-        let embedded_mac = usm_params.authentication_parameters.to_vec();
 
         // Mirrors the production two-step search to independently verify the offset logic.
-        let usm_raw = decoded.security_parameters.as_ref();
-        let usm_pos = encoded
-            .windows(usm_raw.len())
-            .position(|w| w == usm_raw)
-            .expect("USM bytes must appear in encoded message");
-        let auth_pos = encoded[usm_pos..usm_pos + usm_raw.len()]
-            .windows(embedded_mac.len())
-            .position(|w| w == embedded_mac.as_slice())
-            .expect("MAC must appear within USM region");
-        let auth_params_offset = usm_pos + auth_pos;
-
-        let mut zeroed = encoded.clone();
-        zeroed[auth_params_offset..auth_params_offset + embedded_mac.len()].fill(0);
-
-        auth_protocol
-            .verify_mac(&auth_key_for_verify, &zeroed, &embedded_mac)
-            .expect("MAC must verify");
+        verify_embedded_hmac(
+            &encoded,
+            decoded.security_parameters.as_ref(),
+            &usm_params.authentication_parameters,
+            auth_protocol,
+            &auth_key_for_verify,
+        );
     }
 
     #[test]
@@ -1041,22 +1133,13 @@ mod tests {
         );
 
         // Verify the HMAC is valid over the encrypted message.
-        let usm_raw = v3_msg.security_parameters.as_ref();
-        let embedded_mac = usm_params.authentication_parameters.to_vec();
-        let usm_pos = encoded
-            .windows(usm_raw.len())
-            .position(|w| w == usm_raw)
-            .expect("USM bytes must appear in encoded message");
-        let auth_pos = encoded[usm_pos..usm_pos + usm_raw.len()]
-            .windows(embedded_mac.len())
-            .position(|w| w == embedded_mac.as_slice())
-            .expect("MAC must appear within USM region");
-        let auth_params_offset = usm_pos + auth_pos;
-        let mut zeroed = encoded.clone();
-        zeroed[auth_params_offset..auth_params_offset + embedded_mac.len()].fill(0);
-        auth_protocol
-            .verify_mac(&auth_key_for_verify, &zeroed, &embedded_mac)
-            .expect("HMAC over encrypted message must verify");
+        verify_embedded_hmac(
+            &encoded,
+            v3_msg.security_parameters.as_ref(),
+            &usm_params.authentication_parameters,
+            auth_protocol,
+            &auth_key_for_verify,
+        );
     }
 
     #[test]
@@ -1124,5 +1207,253 @@ mod tests {
             100
         );
         assert!(security_params.user_name.is_empty());
+    }
+
+    #[test]
+    fn given_trap_pdu_when_encode_v3_trap_no_auth_then_valid_v3_message() {
+        // Verifies: REQ-0106
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let trap_oid: Oid = "1.3.6.1.6.3.1.1.5.1".parse().unwrap();
+        let pdu = WireTrapPdu {
+            request_id: 42,
+            varbinds: vec![Varbind {
+                oid: trap_oid,
+                value: VarbindValue::Value(Value::TimeTicks(100)),
+            }],
+        };
+
+        let encoded =
+            encode_v3_trap(42, engine_id, b"trapuser", b"", 3, 500, None, None, &pdu).unwrap();
+
+        let decoded: V3Message = rasn::ber::decode(&encoded).expect("must decode as V3Message");
+
+        // Verify flags = 0x00 (noAuthNoPriv).
+        let flags_byte = decoded.global_data.flags.first().copied().unwrap_or(0xFF);
+        assert_eq!(
+            flags_byte, 0x00,
+            "msgFlags must be 0x00 for noAuthNoPriv trap"
+        );
+
+        // Verify scoped data is cleartext containing a Trap PDU.
+        match decoded.scoped_data {
+            ScopedPduData::CleartextPdu(scoped) => {
+                assert_eq!(scoped.engine_id.as_ref(), engine_id);
+                assert_eq!(scoped.name.as_ref(), b"");
+                assert!(
+                    matches!(scoped.data, Pdus::Trap(_)),
+                    "expected Trap PDU in ScopedPdu, got {:?}",
+                    scoped.data
+                );
+            }
+            ScopedPduData::EncryptedPdu(_) => {
+                panic!("expected cleartext ScopedPdu for noAuthNoPriv trap")
+            }
+        }
+
+        // Verify USM parameters contain engine state and user name.
+        let usm_params: USMSecurityParameters =
+            rasn::ber::decode(decoded.security_parameters.as_ref())
+                .expect("USM security parameters must decode");
+        assert_eq!(
+            usm_params.user_name.as_ref(),
+            b"trapuser",
+            "user_name must be set in USM security parameters"
+        );
+        assert_eq!(
+            u32::try_from(&usm_params.authoritative_engine_boots).unwrap(),
+            3,
+            "engine_boots must be set in USM security parameters"
+        );
+        assert_eq!(
+            u32::try_from(&usm_params.authoritative_engine_time).unwrap(),
+            500,
+            "engine_time must be set in USM security parameters"
+        );
+    }
+
+    #[test]
+    fn given_trap_pdu_when_encode_v3_trap_auth_no_priv_then_mac_is_embedded_and_valid() {
+        // Verifies: REQ-0105
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let engine_id = b"\x80\x00\x1f\x88\x04test";
+        let auth_key = SecretKey::new_from_exposed_slice(&[0x55u8; 32]);
+        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x55u8; 32]);
+        let auth_protocol = AuthProtocol::HmacSha256;
+        let trap_oid: Oid = "1.3.6.1.6.3.1.1.5.1".parse().unwrap();
+        let pdu = WireTrapPdu {
+            request_id: 7,
+            varbinds: vec![Varbind {
+                oid: trap_oid,
+                value: VarbindValue::Value(Value::TimeTicks(0)),
+            }],
+        };
+
+        let encoded = encode_v3_trap(
+            7,
+            engine_id,
+            b"authuser",
+            b"",
+            1,
+            100,
+            Some((auth_protocol, &auth_key)),
+            None,
+            &pdu,
+        )
+        .unwrap();
+
+        let decoded: V3Message = rasn::ber::decode(&encoded).expect("must decode as V3Message");
+        let flags_byte = decoded.global_data.flags.first().copied().unwrap_or(0);
+        assert_eq!(
+            flags_byte & 0x01,
+            0x01,
+            "authFlag must be set for authNoPriv trap"
+        );
+
+        let usm_params: USMSecurityParameters =
+            rasn::ber::decode(decoded.security_parameters.as_ref())
+                .expect("USM security parameters must decode");
+        assert_eq!(
+            usm_params.authentication_parameters.len(),
+            24,
+            "authentication_parameters must be 24 bytes for HMAC-SHA-256"
+        );
+
+        verify_embedded_hmac(
+            &encoded,
+            decoded.security_parameters.as_ref(),
+            &usm_params.authentication_parameters,
+            auth_protocol,
+            &auth_key_for_verify,
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn given_trap_pdu_when_encode_v3_trap_auth_priv_then_encrypted_and_decryptable() {
+        // Verifies: REQ-0105
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::privacy::PrivProtocol;
+
+        let engine_id = b"test-engine";
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
+        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
+        let priv_key = SecretKey::new_from_exposed_slice(&[0xBBu8; 16]);
+        let auth_protocol = AuthProtocol::HmacSha256;
+        let trap_oid: Oid = "1.3.6.1.6.3.1.1.5.1".parse().unwrap();
+        let pdu = WireTrapPdu {
+            request_id: 99,
+            varbinds: vec![Varbind {
+                oid: trap_oid,
+                value: VarbindValue::Value(Value::TimeTicks(12345)),
+            }],
+        };
+
+        let encoded = encode_v3_trap(
+            99,
+            engine_id,
+            b"privuser",
+            b"",
+            5,
+            300,
+            Some((auth_protocol, &auth_key)),
+            Some((PrivProtocol::Aes128, &priv_key)),
+            &pdu,
+        )
+        .expect("encoding must succeed");
+
+        let v3_msg: V3Message = rasn::ber::decode(&encoded).expect("must decode V3Message");
+
+        // Verify flags = 0x03 (authPriv).
+        assert_eq!(
+            v3_msg.global_data.flags.as_ref(),
+            &[0x03],
+            "msgFlags must be 0x03 (authPriv)"
+        );
+
+        // Verify ScopedPduData is encrypted.
+        assert!(
+            matches!(v3_msg.scoped_data, ScopedPduData::EncryptedPdu(_)),
+            "expected EncryptedPdu for authPriv trap"
+        );
+
+        let usm_params: USMSecurityParameters =
+            rasn::ber::decode(v3_msg.security_parameters.as_ref()).expect("must decode USM params");
+        assert_eq!(
+            usm_params.privacy_parameters.len(),
+            8,
+            "salt must be 8 bytes"
+        );
+
+        // Decrypt and verify inner Trap PDU.
+        let ciphertext = match v3_msg.scoped_data {
+            ScopedPduData::EncryptedPdu(ct) => ct,
+            ScopedPduData::CleartextPdu(_) => unreachable!(),
+        };
+        let mut aes_iv = [0u8; 16];
+        aes_iv[0..4].copy_from_slice(&5u32.to_be_bytes());
+        aes_iv[4..8].copy_from_slice(&300u32.to_be_bytes());
+        aes_iv[8..16].copy_from_slice(usm_params.privacy_parameters.as_ref());
+        let plaintext = PrivProtocol::Aes128
+            .decrypt(&priv_key, &aes_iv, ciphertext.as_ref())
+            .expect("decryption must succeed");
+
+        let scoped_pdu: ScopedPdu =
+            rasn::ber::decode(&plaintext).expect("must decode ScopedPdu from decrypted bytes");
+        assert_eq!(scoped_pdu.engine_id.as_ref(), engine_id);
+        let Pdus::Trap(inner_trap) = scoped_pdu.data else {
+            panic!("decrypted ScopedPdu must contain a Trap PDU");
+        };
+        assert_eq!(
+            inner_trap.0.request_id, 99,
+            "request_id must survive encryption round-trip"
+        );
+
+        // Verify the HMAC is valid over the encrypted message.
+        verify_embedded_hmac(
+            &encoded,
+            v3_msg.security_parameters.as_ref(),
+            &usm_params.authentication_parameters,
+            auth_protocol,
+            &auth_key_for_verify,
+        );
+    }
+
+    #[test]
+    fn given_priv_without_auth_when_encode_v3_trap_then_returns_error() {
+        // Verifies: REQ-0105 — privacy without authentication is invalid per RFC 3412
+        use crate::usm::keys::SecretKey;
+        use crate::usm::privacy::PrivProtocol;
+
+        let priv_key = SecretKey::new_from_exposed_slice(&[0xBBu8; 16]);
+        let trap_oid: Oid = "1.3.6.1.6.3.1.1.5.1".parse().unwrap();
+        let pdu = WireTrapPdu {
+            request_id: 1,
+            varbinds: vec![Varbind {
+                oid: trap_oid,
+                value: VarbindValue::Value(Value::TimeTicks(0)),
+            }],
+        };
+
+        let result = encode_v3_trap(
+            1,
+            b"engine",
+            b"user",
+            b"",
+            0,
+            0,
+            None,
+            Some((PrivProtocol::Aes128, &priv_key)),
+            &pdu,
+        );
+        assert!(result.is_err(), "privacy without auth must return an error");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("privacy without authentication is not permitted"),
+            "error message must mention RFC 3412 constraint, got: {err}"
+        );
     }
 }

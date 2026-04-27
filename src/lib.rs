@@ -65,12 +65,6 @@ struct AgentInner {
     command_sender: crate::transport::event_loop::CommandSender,
     trap_sender: TrapSender,
     thread_handle: Mutex<Option<std::thread::JoinHandle<io::Result<()>>>>,
-    // Stored here for use by outbound trap sending (Step 11); not yet consumed.
-    #[allow(dead_code)]
-    usm_user: Option<std::sync::Arc<crate::usm::user::UsmUser>>,
-    // Stored here for access from the application side; the event loop has its own copy.
-    #[allow(dead_code)]
-    engine_boots: u32,
 }
 
 impl Drop for AgentInner {
@@ -331,6 +325,10 @@ impl AgentBuilder {
 
         let listen_addr = self.listen_addr;
 
+        // Clone engine_id so both the event loop and the trap sender get their
+        // own copy; the event loop takes ownership of the original.
+        let trap_engine_id = self.engine_id.clone();
+
         let (event_loop, _bound_addr, command_sender) =
             EventLoop::new(listen_addr, self.engine_id, engine_boots, usm_user.clone()).map_err(
                 |e| match e {
@@ -341,7 +339,8 @@ impl AgentBuilder {
                 },
             )?;
 
-        let trap_sender = TrapSender::new(Instant::now()).map_err(AgentError::UdpSocket)?;
+        let trap_sender = TrapSender::new(Instant::now(), trap_engine_id, engine_boots, usm_user)
+            .map_err(AgentError::UdpSocket)?;
 
         let thread_handle = std::thread::Builder::new()
             .name("snmp-agent-event-loop".into())
@@ -352,8 +351,6 @@ impl AgentBuilder {
             command_sender,
             trap_sender,
             thread_handle: Mutex::new(Some(thread_handle)),
-            usm_user,
-            engine_boots,
         })))
     }
 }

@@ -8,6 +8,7 @@
 //! - [`encode_response`]: BER-encode a [`GetResponse`] for sending.
 //! - [`encode_v3_response`]: BER-encode a [`GetResponse`] inside an `SNMPv3` message envelope.
 //! - [`encode_v3_report`]: BER-encode an `SNMPv3` Report PDU for engine-ID discovery.
+//! - [`encode_v3_trap`]: BER-encode a [`WireTrapPdu`] inside an `SNMPv3` message envelope.
 //! - [`encode_trap`]: BER-encode a [`WireTrapPdu`] for sending.
 
 mod decode;
@@ -15,7 +16,9 @@ mod encode;
 mod types;
 
 pub use decode::{decode_pdu, decode_scoped_pdu, decode_v3_message};
-pub use encode::{encode_response, encode_trap, encode_v3_report, encode_v3_response};
+pub use encode::{
+    encode_response, encode_trap, encode_v3_report, encode_v3_response, encode_v3_trap,
+};
 pub use types::{
     DecodeError, DecodeErrorKind, DecodedScopedPdu, EncodeError, ErrorStatus, GetBulkRequest,
     GetNextRequest, GetRequest, GetResponse, InboundPdu, SetRequest, UsmSecurityFields,

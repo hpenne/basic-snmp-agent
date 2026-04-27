@@ -22,6 +22,6 @@ pub use pdu::{
     GetNextRequest, GetRequest, GetResponse, InboundPdu, SetRequest, UsmSecurityFields,
     V3InboundMessage, V3ScopedData, Varbind, VarbindValue, WireTrapPdu, decode_pdu,
     decode_scoped_pdu, decode_v3_message, encode_response, encode_trap, encode_v3_report,
-    encode_v3_response,
+    encode_v3_response, encode_v3_trap,
 };
 pub use value::Value;
