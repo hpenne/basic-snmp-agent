@@ -6,7 +6,7 @@ Feature: SNMP trap sending
   Background:
     Given snmptrapd is running
 
-  @REQ-0034 @REQ-0035 @REQ-0036 @REQ-0037 @REQ-0038 @REQ-0039 @REQ-0041 @REQ-0046 @REQ-0050
+  @REQ-0034 @REQ-0035 @REQ-0036 @REQ-0037 @REQ-0038 @REQ-0039 @REQ-0041 @REQ-0046 @REQ-0050 @REQ-0106
   Scenario: Cold-start trap includes mandatory RFC 3416 varbinds
     When the agent sends a trap with OID "1.3.6.1.6.3.1.1.5.1"
     Then snmptrapd receives a trap named "cold-start"

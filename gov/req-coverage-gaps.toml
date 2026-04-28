@@ -49,18 +49,13 @@ missing = ["behave_test"]
 rationale = "Negative/absence constraint: the non-existence of a delete/remove API on Agent or Store is enforced by the type system at compile time. No runtime test can verify the absence of a method."
 
 [[gap]]
-req     = "REQ-0039"
-missing = ["behave_test"]
-rationale = "Structural type constraint: TrapPdu having no sysUpTime.0 field is enforced by the Rust type definition and verified at compile time via struct-literal tests. A Behave system test cannot introspect struct shape."
-
-[[gap]]
 req     = "REQ-0043"
 missing = ["behave_test"]
 rationale = "The empty-destinations error is returned before any PDU is sent. A system-level Behave test cannot meaningfully distinguish this early-return case from other failures, and the requirement is fully covered by a unit test."
 
 [[gap]]
 req     = "REQ-0046"
-missing = ["rust_test", "behave_test"]
+missing = ["rust_test"]
 rationale = "Absence/negative constraint: the non-existence of a send_inform API is enforced by the type system at compile time. No runtime test can verify the absence of a method; the constraint is satisfied by the public API having no such function."
 
 [[gap]]
@@ -72,3 +67,83 @@ rationale = "Negative max-repetitions values are rejected at BER decode level (r
 req     = "REQ-0059"
 missing = ["code", "rust_test", "behave_test"]
 rationale = "REQ-0059 is a SHOULD: the agent SHOULD respond with a Report PDU incrementing snmpUnknownContexts. The current implementation silently discards requests with a non-empty context name (the required minimum). The Report PDU enhancement is deferred and will be tracked separately."
+
+[[gap]]
+req     = "REQ-0076"
+missing = ["behave_test"]
+rationale = "Library API constraint: the single-user-at-construction invariant is enforced by the Rust type system (AgentBuilder accepts exactly one UsmUser). A Behave system test cannot introspect API shape."
+
+[[gap]]
+req     = "REQ-0077"
+missing = ["behave_test"]
+rationale = "Internal immutability constraint: the security level being fixed at construction time is enforced by the Rust type system (no setter method). Not observable from the protocol level."
+
+[[gap]]
+req     = "REQ-0081"
+missing = ["behave_test"]
+rationale = "Configuration API constraint: rejection of plaintext passwords is enforced at construction time before any network interaction. A Behave system test cannot exercise the builder API directly."
+
+[[gap]]
+req     = "REQ-0082"
+missing = ["behave_test"]
+rationale = "Library API: localised key derivation is a pure function tested by unit tests. Not observable from protocol-level system tests."
+
+[[gap]]
+req     = "REQ-0083"
+missing = ["behave_test"]
+rationale = "Configuration-time key length validation is enforced at construction before any network interaction. A Behave system test cannot exercise builder-level validation."
+
+[[gap]]
+req     = "REQ-0084"
+missing = ["behave_test"]
+rationale = "Internal key derivation algorithm (priv-key-from-auth) is an implementation detail not directly observable from the protocol. Verified by unit tests."
+
+[[gap]]
+req     = "REQ-0085"
+missing = ["behave_test"]
+rationale = "Memory zeroisation via write_volatile is a runtime safety property not observable from the network protocol. Verified by unit tests inspecting memory contents."
+
+[[gap]]
+req     = "REQ-0087"
+missing = ["behave_test"]
+rationale = "HMAC-SHA-512 is testable in principle but no SHA-512 test infrastructure (snmptrapd createUser with SHA-512, net-snmp CLI with SHA-512) exists in the current system test environment."
+
+[[gap]]
+req     = "REQ-0089"
+missing = ["behave_test"]
+rationale = "AES-256-CFB is testable in principle but no AES-256 test infrastructure (snmptrapd createUser with AES-256, net-snmp CLI with AES-256) exists in the current system test environment."
+
+[[gap]]
+req     = "REQ-0090"
+missing = ["rust_test", "behave_test"]
+rationale = "Compile-time type safety constraint: the type system prevents constructing invalid auth/priv combinations. Tested by successful compilation, not runtime assertions. Neither unit tests nor Behave tests can verify compile-time type constraints."
+
+[[gap]]
+req     = "REQ-0092"
+missing = ["behave_test"]
+rationale = "Compile-time type constraint: key-length matching between auth protocol and key type is enforced by the Rust type system. Not observable from protocol-level tests."
+
+[[gap]]
+req     = "REQ-0095"
+missing = ["behave_test"]
+rationale = "Internal trait implementation: EngineBootsStore being a trait with a file-backed implementation is an architectural choice verified by unit tests. Not observable from the protocol level."
+
+[[gap]]
+req     = "REQ-0096"
+missing = ["rust_test", "behave_test"]
+rationale = "File I/O atomicity implementation detail: atomic write-rename for the boots file is an implementation safety measure. Not directly testable via assertions (would require fault injection). Verified by code review of the atomic write-rename implementation."
+
+[[gap]]
+req     = "REQ-0097"
+missing = ["behave_test"]
+rationale = "Boots counter overflow at 2^31-1 is impractical to test at the system level (would require simulating 2^31-1 reboots). Verified by unit tests."
+
+[[gap]]
+req     = "REQ-0102"
+missing = ["behave_test"]
+rationale = "Internal RFC 3414 §3.2 processing order (user-name → level → HMAC → time → decrypt) is an implementation detail not directly observable from the protocol. The correct order is enforced by code structure and verified by unit tests."
+
+[[gap]]
+req     = "REQ-0108"
+missing = ["behave_test"]
+rationale = "Intermediate key material zeroisation is a runtime safety property not observable from the network protocol. Verified by unit tests inspecting memory contents."

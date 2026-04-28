@@ -6,7 +6,7 @@ Feature: SNMP MIB reads over plain TCP
   Background:
     Given a test-agent-mib instance is running with engine ID "0x80001f8804746573742d6167656e742d6d6962"
 
-  @REQ-0021 @REQ-0022 @REQ-0023 @REQ-0050 @REQ-0051 @REQ-0052 @REQ-0055 @REQ-0060 @REQ-0062 @REQ-0063 @REQ-0066 @REQ-0068 @REQ-0069 @REQ-0070 @REQ-0071 @REQ-0072 @REQ-0073
+  @REQ-0021 @REQ-0022 @REQ-0023 @REQ-0050 @REQ-0051 @REQ-0052 @REQ-0055 @REQ-0060 @REQ-0062 @REQ-0063 @REQ-0066 @REQ-0068 @REQ-0069 @REQ-0070 @REQ-0071 @REQ-0072 @REQ-0073 @REQ-0075 @REQ-0103
   Scenario: GET returns the value for a present OID
     When snmpget queries OID "1.3.6.1.2.1.1.1.0" from the agent
     Then the SNMP response contains OID "1.3.6.1.2.1.1.1.0" with string value "basic-snmp-agent test instance"

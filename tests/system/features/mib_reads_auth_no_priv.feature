@@ -7,7 +7,7 @@ Feature: SNMP MIB reads with authNoPriv security over plain TCP
   Background:
     Given a test-agent-mib-auth instance is running with engine ID "0x80001f8804746573742d6167656e742d61757468"
 
-  @REQ-0078 @REQ-0079 @REQ-0100 @REQ-0107
+  @REQ-0074 @REQ-0075 @REQ-0078 @REQ-0079 @REQ-0086 @REQ-0091 @REQ-0100 @REQ-0107
   Scenario: GET with correct authNoPriv credentials succeeds
     When snmpget at authNoPriv with user "authuser" and password "authpassword" queries OID "1.3.6.1.2.1.1.1.0" from the agent
     Then the SNMP response contains OID "1.3.6.1.2.1.1.1.0" with string value "basic-snmp-agent test instance"
@@ -23,7 +23,7 @@ Feature: SNMP MIB reads with authNoPriv security over plain TCP
     Then the SNMP response contains OID "1.3.6.1.2.1.1.3.0"
     And the SNMP response contains OID "1.3.6.1.2.1.1.5.0"
 
-  @REQ-0080 @REQ-0093 @REQ-0100 @REQ-0107
+  @REQ-0080 @REQ-0093 @REQ-0094 @REQ-0098 @REQ-0099 @REQ-0100 @REQ-0107
   Scenario: GET without explicit engine ID succeeds after automatic discovery with authNoPriv
     When snmpget at authNoPriv without explicit engine ID with user "authuser" and password "authpassword" queries OID "1.3.6.1.2.1.1.1.0" from the agent
     Then the SNMP response contains OID "1.3.6.1.2.1.1.1.0" with string value "basic-snmp-agent test instance"
