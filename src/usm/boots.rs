@@ -196,50 +196,45 @@ impl EngineBootsStore for FileEngineBootsStore {
             Err(e) => return Err(e),
         };
         // Parse: 4 bytes engine_id length, N bytes engine_id, 4 bytes boots.
-        // The minimum valid file is 8 bytes (4-byte length prefix + empty engine ID
-        // + 4-byte boots), but the exact-length check below rejects any mismatch
-        // with a single consistent error message.
-        if file_data.len() < 4 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "engine-boots file has unexpected length",
-            ));
-        }
-        let engine_id_len = usize::try_from(u32::from_be_bytes(
-            file_data[0..4].try_into().unwrap(),
-        ))
-        .map_err(|_| {
+        // split_first_chunk handles both the too-short case and the slice-to-array
+        // conversion without unwrap, propagating a uniform "unexpected length" error.
+        let (engine_id_len_bytes, rest) = file_data.split_first_chunk::<4>().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "engine-boots file contains implausible engine ID length",
+                "engine-boots file has unexpected length",
             )
         })?;
+        let engine_id_len =
+            usize::try_from(u32::from_be_bytes(*engine_id_len_bytes)).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "engine-boots file contains implausible engine ID length",
+                )
+            })?;
         if engine_id_len > MAX_ENGINE_ID_LEN {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "engine-boots file contains implausible engine ID length",
             ));
         }
-        let expected_len = 4 + engine_id_len + 4;
-        if file_data.len() != expected_len {
+        let expected_remaining = engine_id_len + 4;
+        if rest.len() != expected_remaining {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "engine-boots file has unexpected length",
             ));
         }
-        let engine_id = file_data[4..4 + engine_id_len].to_vec();
-        let boots = u32::from_be_bytes(
-            file_data[4 + engine_id_len..4 + engine_id_len + 4]
-                .try_into()
-                .unwrap(),
-        );
+        let (engine_id_bytes, boots_tail) = rest.split_at(engine_id_len);
+        let engine_id = engine_id_bytes.to_vec();
+        let boots = u32::from_be_bytes(boots_tail.try_into().map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "engine-boots file has unexpected length",
+            )
+        })?);
         Ok(Some(StoredBootsState { engine_id, boots }))
     }
 
-    /// # Panics
-    ///
-    /// Unreachable in practice: `into_inner` can only fail if the internal flush
-    /// fails, but we have already flushed explicitly above.
     fn save(&mut self, engine_id: &[u8], boots: u32) -> Result<(), std::io::Error> {
         let tmp_path = self.path.with_extension("tmp");
         {
@@ -253,10 +248,11 @@ impl EngineBootsStore for FileEngineBootsStore {
             writer.write_all(engine_id)?;
             writer.write_all(&boots.to_be_bytes())?;
             writer.flush()?;
-            // After explicit flush, into_inner cannot fail (buffer is empty)
+            // After explicit flush, into_inner cannot fail (buffer is empty).
+            // map_err converts the IntoInnerError, which wraps the underlying I/O error.
             let file = writer
                 .into_inner()
-                .expect("BufWriter flush was explicit; buffer is empty");
+                .map_err(std::io::IntoInnerError::into_error)?;
             file.sync_all()?;
         }
         std::fs::rename(&tmp_path, &self.path)

@@ -175,14 +175,11 @@ pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
 /// Returns a [`DecodeError`] if:
 /// - The bytes are not valid BER.
 /// - The message version is not 3 ([`DecodeErrorKind::WrongVersion`]).
+/// - The USM security parameters bytes are not found as a contiguous
+///   substring of the raw message (e.g. constructed BER OCTET STRING).
+/// - The `auth_params` bytes are not found within the USM region.
 /// - The inner PDU type is not a recognised inbound type.
 /// - An OID or value in a varbind cannot be decoded.
-///
-/// # Panics
-///
-/// Panics if the successfully decoded USM security parameters or `auth_params`
-/// bytes cannot be located within the raw message bytes. This is a decode
-/// invariant violation: if the BER decode succeeded, the bytes must be present.
 ///
 /// # Requirements
 /// Implements: REQ-0068, REQ-0069, REQ-0071, REQ-0073, REQ-0100, REQ-0101
@@ -284,13 +281,21 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
         let usm_pos = bytes
             .windows(usm_raw.len())
             .position(|w| w == usm_raw)
-            // Decoded from bytes, so it must be present.
-            .expect("USM security parameters must appear in raw_message");
+            .ok_or_else(|| {
+                DecodeError::new(
+                    DecodeErrorKind::Ber,
+                    "USM security parameters not found as contiguous bytes in raw message",
+                )
+            })?;
         let auth_pos = bytes[usm_pos..usm_pos + usm_raw.len()]
             .windows(usm.auth_params.len())
             .position(|w| w == usm.auth_params.as_slice())
-            // Decoded from USM params, so auth_params must be within the USM region.
-            .expect("auth_params must appear within the USM security parameters region");
+            .ok_or_else(|| {
+                DecodeError::new(
+                    DecodeErrorKind::Ber,
+                    "auth_params not found within USM security parameters region",
+                )
+            })?;
         Some(usm_pos + auth_pos)
     };
 
@@ -1077,6 +1082,212 @@ mod tests {
         assert!(
             msg.auth_params_offset.is_none(),
             "noAuthNoPriv messages must have auth_params_offset = None"
+        );
+    }
+
+    // Converts the security_parameters primitive OCTET STRING in an encoded V3 message
+    // to BER constructed form by splitting the USM content into two equal chunks.
+    // Constructed-form OCTET STRINGs are valid in BER but not DER; rasn's BER decoder
+    // reassembles the fragments, but the reassembled bytes no longer appear contiguously
+    // in the raw message, breaking the window-search in decode_v3_message.
+    //
+    // Preconditions: the USM bytes appear exactly once as a contiguous substring of
+    // encoded; the preceding TLV uses 1-byte length encoding; the outer SEQUENCE length
+    // fits in one byte and does not exceed 251 (so adding 4 remains within u8 range).
+    fn make_security_params_constructed_form(encoded: &[u8], usm_bytes: &[u8]) -> Vec<u8> {
+        let usm_start = encoded
+            .windows(usm_bytes.len())
+            .position(|w| w == usm_bytes)
+            .expect("usm_bytes must appear as a contiguous substring of encoded");
+        assert_eq!(
+            encoded[usm_start - 2],
+            0x04,
+            "expected OCTET STRING tag (0x04) two bytes before usm_bytes"
+        );
+        assert_eq!(
+            encoded[usm_start - 1],
+            u8::try_from(usm_bytes.len()).expect("usm_bytes.len() fits in u8"),
+            "expected 1-byte length before usm_bytes"
+        );
+        let sp_start = usm_start - 2;
+        let sp_end = usm_start + usm_bytes.len();
+
+        let mid = usm_bytes.len() / 2;
+        let rest = usm_bytes.len() - mid;
+        // inner_len: two primitive TLV headers at 2 bytes each, plus their payloads.
+        let inner_len = 4 + usm_bytes.len();
+        let mut constructed: Vec<u8> = Vec::with_capacity(6 + usm_bytes.len());
+        constructed.push(0x24); // constructed OCTET STRING tag (0x04 | 0x20)
+        constructed.push(
+            u8::try_from(inner_len).expect("inner_len fits in u8 for test-sized USM parameters"),
+        );
+        constructed.push(0x04);
+        constructed.push(u8::try_from(mid).expect("mid fits in u8"));
+        constructed.extend_from_slice(&usm_bytes[..mid]);
+        constructed.push(0x04);
+        constructed.push(u8::try_from(rest).expect("rest fits in u8"));
+        constructed.extend_from_slice(&usm_bytes[mid..]);
+
+        // The constructed TLV is 4 bytes larger than the original primitive TLV:
+        // two additional inner TLV headers at 2 bytes each.
+        let new_outer_len = encoded[1]
+            .checked_add(4)
+            .expect("outer SEQUENCE length + 4 does not overflow u8");
+
+        let mut modified = Vec::with_capacity(encoded.len() + 4);
+        modified.push(encoded[0]); // outer SEQUENCE tag (0x30)
+        modified.push(new_outer_len);
+        modified.extend_from_slice(&encoded[2..sp_start]);
+        modified.extend_from_slice(&constructed);
+        modified.extend_from_slice(&encoded[sp_end..]);
+        modified
+    }
+
+    #[test]
+    fn given_constructed_security_params_octet_string_when_decode_v3_then_ber_error() {
+        // Verifies: REQ-0100
+        // BER permits constructed encoding for OCTET STRING fields. When the
+        // security_parameters OCTET STRING uses constructed form, rasn reassembles
+        // the USM content from its two fragment chunks, but the reassembled byte
+        // sequence does not appear contiguously in the raw message. The window
+        // search used to locate the USM region therefore fails.
+        use rasn_snmp::v2::{
+            GetRequest as RasnGetRequest2, Pdu, Pdus as V2Pdus, VarBind, VarBindValue,
+        };
+        use rasn_snmp::v3::{HeaderData, ScopedPdu, ScopedPduData as V3ScopedPduData};
+        use std::borrow::Cow;
+
+        let engine_id = b"\x80\x00\x1f\x88\x04";
+        let auth_params: Vec<u8> = vec![0xab; 12];
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: engine_id.to_vec().into(),
+            authoritative_engine_boots: 0.into(),
+            authoritative_engine_time: 0.into(),
+            user_name: rasn::types::OctetString::from(b"alice".to_vec()),
+            authentication_parameters: rasn::types::OctetString::from(auth_params),
+            privacy_parameters: rasn::types::OctetString::from(vec![]),
+        };
+        let usm_bytes = rasn::ber::encode(&usm_params).unwrap();
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(vec![
+            1, 3, 6, 1, 2, 1, 1, 1, 0,
+        ]));
+        let get_request = RasnGetRequest2(Pdu {
+            request_id: 1,
+            error_status: 0,
+            error_index: 0,
+            variable_bindings: vec![VarBind {
+                name: rasn_oid,
+                value: VarBindValue::Unspecified,
+            }],
+        });
+        let scoped_pdu = ScopedPdu {
+            engine_id: engine_id.to_vec().into(),
+            name: vec![].into(),
+            data: V2Pdus::GetRequest(get_request),
+        };
+        let v3_msg = V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 1.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x05u8]),
+                security_model: 3.into(),
+            },
+            security_parameters: usm_bytes.clone().into(),
+            scoped_data: V3ScopedPduData::CleartextPdu(scoped_pdu),
+        };
+        let valid_encoded = rasn::ber::encode(&v3_msg).unwrap();
+        assert!(
+            decode_v3_message(&valid_encoded).is_ok(),
+            "original message with primitive security_params must decode successfully"
+        );
+
+        let tampered = make_security_params_constructed_form(&valid_encoded, &usm_bytes);
+
+        let result = decode_v3_message(&tampered);
+
+        assert!(
+            result.is_err(),
+            "constructed security_params OCTET STRING must yield an error"
+        );
+        assert_eq!(
+            result.unwrap_err().kind(),
+            &DecodeErrorKind::Ber,
+            "constructed security_params OCTET STRING must yield a Ber error"
+        );
+    }
+
+    #[test]
+    fn given_constructed_auth_params_in_usm_when_decode_v3_then_ber_error() {
+        // Verifies: REQ-0100
+        // When the authentication_parameters OCTET STRING within the USM uses BER
+        // constructed encoding, rasn reassembles the content from two 6-byte chunks
+        // into 12 consecutive 0xAB bytes. Those 12 consecutive bytes do not appear
+        // contiguously in the raw USM region (the chunks are separated by an inner
+        // TLV header), so the auth_params window search fails.
+        use rasn_snmp::v2::{
+            GetRequest as RasnGetRequest2, Pdu, Pdus as V2Pdus, VarBind, VarBindValue,
+        };
+        use rasn_snmp::v3::{HeaderData, ScopedPdu, ScopedPduData as V3ScopedPduData};
+        use std::borrow::Cow;
+
+        let engine_id = b"\x80\x00\x1f\x88\x04";
+
+        // Hand-crafted USM bytes: authentication_parameters (tag 0x24) uses constructed
+        // encoding split into two 6-byte chunks. rasn reassembles them into 12
+        // consecutive 0xAB bytes, but the raw region only contains runs of 6.
+        let usm_with_constructed_auth_params: Vec<u8> = vec![
+            0x30, 0x28, // SEQUENCE, length=40
+            0x04, 0x05, 0x80, 0x00, 0x1f, 0x88, 0x04, // engine_id (5 bytes)
+            0x02, 0x01, 0x00, // boots=0
+            0x02, 0x01, 0x00, // time=0
+            0x04, 0x05, 0x61, 0x6c, 0x69, 0x63, 0x65, // user_name="alice"
+            0x24, 0x10, // constructed OCTET STRING, length=16
+            0x04, 0x06, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, // chunk 1: 6 bytes
+            0x04, 0x06, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, // chunk 2: 6 bytes
+            0x04, 0x00, // priv_params (empty)
+        ];
+
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(vec![
+            1, 3, 6, 1, 2, 1, 1, 1, 0,
+        ]));
+        let get_request = RasnGetRequest2(Pdu {
+            request_id: 1,
+            error_status: 0,
+            error_index: 0,
+            variable_bindings: vec![VarBind {
+                name: rasn_oid,
+                value: VarBindValue::Unspecified,
+            }],
+        });
+        let scoped_pdu = ScopedPdu {
+            engine_id: engine_id.to_vec().into(),
+            name: vec![].into(),
+            data: V2Pdus::GetRequest(get_request),
+        };
+        let v3_msg = V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 1.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x05u8]),
+                security_model: 3.into(),
+            },
+            security_parameters: usm_with_constructed_auth_params.into(),
+            scoped_data: V3ScopedPduData::CleartextPdu(scoped_pdu),
+        };
+        let encoded = rasn::ber::encode(&v3_msg).unwrap();
+
+        let result = decode_v3_message(&encoded);
+
+        assert!(
+            result.is_err(),
+            "constructed auth_params OCTET STRING in USM must yield an error"
+        );
+        assert_eq!(
+            result.unwrap_err().kind(),
+            &DecodeErrorKind::Ber,
+            "constructed auth_params OCTET STRING must yield a Ber error"
         );
     }
 }
