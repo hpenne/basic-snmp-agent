@@ -93,6 +93,10 @@ def load_implemented_rfcs(
     ``spec`` or ``impl`` phase are still being written and are excluded,
     unless their ID is listed in *force_rfc_ids*, in which case they are
     included regardless of phase.
+
+    Deprecated RFCs are always excluded: their requirements have either
+    migrated to a successor RFC (where they are tracked) or were
+    intentionally retired.
     """
     rfc_root = gov_dir / "rfc"
     implemented: list[ImplementedRfc] = []
@@ -103,6 +107,8 @@ def load_implemented_rfcs(
         with rfc_toml_path.open("rb") as toml_file:
             rfc_record = tomllib.load(toml_file)
         rfc_id = rfc_record["govctl"]["id"]
+        if rfc_record["govctl"].get("status") == "deprecated":
+            continue
         phase_qualifies = rfc_record["govctl"].get("phase") in ("test", "stable")
         force_included = force_rfc_ids is not None and rfc_id in force_rfc_ids
         if phase_qualifies or force_included:
