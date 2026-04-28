@@ -3,8 +3,9 @@
 [govctl]
 id = "WI-2026-03-16-003"
 title = "ADR-0017: Agent construction and config API"
-status = "queue"
+status = "cancelled"
 created = "2026-03-16"
+completed = "2026-04-28"
 
 [content]
 description = "ADR-0017 is currently a proposed stub. Before further agent construction work, we need a decided API for how the public Agent type is built: plain TCP listen address, engine ID, USM configuration (initially noAuthNoPriv), trap destination list, and error handling for invalid configuration at construction time. This work item produces a reviewed and approved ADR-0017 covering the Agent construction API in the post-TLS (USM + plain TCP) architecture per ADR-0022."

@@ -3,7 +3,7 @@
 [govctl]
 id = "ADR-0017"
 title = "agent: Construction and configuration API"
-status = "proposed"
+status = "rejected"
 date = "2026-03-04"
 refs = [
     "RFC-0001",
@@ -15,5 +15,8 @@ context = """
 C-CRATE, C-TRANSPORT, C-AUTH, and C-ENGINE all specify construction-time configuration (engine ID, certificates, listen address).
 The Agent type is the primary public API surface and needs a well-designed construction API.
 """
-decision = "TBD"
+decision = """
+Rejected.
+The construction API (AgentBuilder) is self-documenting in code and does not warrant a separate architectural decision record.
+The original context referenced C-AUTH and C-TRANSPORT, both of which were retired when TLS was abandoned in favour of USM ([[ADR-0022]])."""
 consequences = "TBD"
