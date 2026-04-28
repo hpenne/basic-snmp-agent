@@ -3,8 +3,9 @@
 [govctl]
 id = "WI-2026-04-28-003"
 title = "Add fuzz targets for TCP framing and authenticated SNMPv3 processing"
-status = "queue"
+status = "active"
 created = "2026-04-28"
+started = "2026-04-28"
 
 [content]
 description = """
