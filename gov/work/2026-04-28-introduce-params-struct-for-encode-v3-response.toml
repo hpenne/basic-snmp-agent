@@ -1,0 +1,25 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-04-28-002"
+title = "Introduce params struct for encode_v3_response"
+status = "queue"
+created = "2026-04-28"
+
+[content]
+description = "Refactor encode_v3_response (codec::pdu::encode) to accept a params struct instead of nine positional arguments. Improves readability at call sites and makes future parameter additions non-breaking."
+
+[[content.acceptance_criteria]]
+text = "encode_v3_response takes a single params struct instead of positional arguments"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "All call sites updated"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "cargo test passes"
+status = "pending"
+category = "chore"
