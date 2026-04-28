@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-04-16-001"
 title = "Implement RFC-0007: USM authNoPriv and authPriv"
-status = "active"
+status = "done"
 created = "2026-04-16"
 started = "2026-04-16"
+completed = "2026-04-28"
 refs = [
     "RFC-0007",
     "ADR-0023",
