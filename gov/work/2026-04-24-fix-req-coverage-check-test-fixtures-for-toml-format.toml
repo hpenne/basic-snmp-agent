@@ -9,9 +9,7 @@ started = "2026-04-24"
 completed = "2026-04-24"
 
 [content]
-description = """
-Describe the work to be done.
-What is the goal? What are the acceptance criteria?"""
+description = "Update req_coverage_check test fixtures from the old RFC file format to the current TOML-based govctl format so that the pre-commit hook passes."
 
 [[content.acceptance_criteria]]
 text = "make_rfc_dir creates rfc.toml and clause .toml fixtures matching current tool format"

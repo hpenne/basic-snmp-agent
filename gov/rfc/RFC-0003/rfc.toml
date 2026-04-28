@@ -3,12 +3,13 @@
 [govctl]
 id = "RFC-0003"
 title = "MIB Store"
-version = "0.1.0"
+version = "0.1.1"
 status = "normative"
 phase = "stable"
 owners = ["@Helge Penne"]
 created = "2026-03-16"
 updated = "2026-04-28"
+signature = "15f5f6c2ac329125281f957504ceb82e8d03ec3cbc9e3d9c901f33f5f7a53ac6"
 
 [[sections]]
 title = "Summary"
@@ -16,6 +17,12 @@ title = "Summary"
 [[sections]]
 title = "Specification"
 clauses = ["clauses/C-MIB-STORE.toml"]
+
+[[changelog]]
+version = "0.1.1"
+date = "2026-04-28"
+notes = "Set clause since version"
+fixed = ["C-MIB-STORE now has since version"]
 
 [[changelog]]
 version = "0.1.0"

@@ -5,6 +5,7 @@ id = "C-TRAPS"
 title = "Outbound Trap Sending"
 kind = "normative"
 status = "active"
+since = "0.1.1"
 
 [content]
 text = """

@@ -5,6 +5,7 @@ id = "C-MIB-STORE"
 title = "Internal MIB Store"
 kind = "normative"
 status = "active"
+since = "0.1.1"
 
 [content]
 text = """

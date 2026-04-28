@@ -5,6 +5,7 @@ id = "ADR-0024"
 title = "Engine boots persistence via application-provided storage trait"
 status = "accepted"
 date = "2026-04-16"
+refs = ["RFC-0007"]
 
 [content]
 context = """

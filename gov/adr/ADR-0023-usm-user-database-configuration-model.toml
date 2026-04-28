@@ -5,6 +5,7 @@ id = "ADR-0023"
 title = "USM user database configuration model"
 status = "accepted"
 date = "2026-04-16"
+refs = ["RFC-0007"]
 
 [content]
 context = """
