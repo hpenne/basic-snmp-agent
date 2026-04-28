@@ -135,6 +135,8 @@ Use `grep -r 'Implements: REQ-'` to find all implementation sites, `grep -r 'Ver
 - Keep Related Things Together: Group related structs, enums, and trait implementations, rather than splitting them arbitrarily across the file.
 - Avoid using "cfg" to write code that is only used for test support. Test using the existing public APIs instead.
 - Do not use "as" for conversion between integer types unless truncation is intended. Use "from" or "try_from" instead.
+- Do NOT use unwrap in production code, and avoid expect unless it is provable that it cannot be triggered (state why in a code comment).
+- Tests should not use "is_ok" or "is_some" for verification (check the value properly)
 
 ## Tool preferences
 - Prefer native file editing tools (Edit, MultiEdit) over shell scripts for text manipulation
