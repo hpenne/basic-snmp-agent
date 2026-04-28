@@ -1,0 +1,91 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-04-28-004"
+title = "Replace rasn crates with der + hand-written outer BER codec"
+status = "active"
+created = "2026-04-28"
+started = "2026-04-28"
+
+[content]
+description = """
+Replace the rasn, rasn-snmp, and rasn-smi production dependencies with the RustCrypto `der` crate (with `ber` feature) plus hand-written outer BER codec code.
+
+**Motivation:** The rasn ecosystem pulls in ~30 transitive dependencies (nom, bitvec, chrono, num-bigint, serde_json, snafu, proc-macro infrastructure) that are never exercised by this project.
+This makes auditing impractical.
+The `der` crate with `ber` + `oid` + `alloc` features adds only ~2 dependencies (der + const-oid).
+
+**Approach:** Hand-write the outer SNMPv3 message TLV parsing/building (tag, length, field extraction) and delegate inner content decoding/encoding (INTEGER, OCTET STRING, OID, SEQUENCE fields) to the `der` crate's BER mode.
+rasn remains as a dev-dependency for cross-implementation verification in unit tests.
+
+**Scope:** Replace the production codec in `src/codec/pdu/encode.rs` and `src/codec/pdu/decode.rs`.
+Transport-layer test code that uses rasn for fixture construction is unaffected (rasn stays as dev-dependency).
+The `snmpv3-frames` test helper crate also retains rasn.
+
+## Known caveats and interop risks
+
+1. The `der` crate rejects non-minimal definite-length encodings even in BER mode.
+   Managers sending non-canonical lengths (e.g. encoding length 5 as `82 00 05`) will be rejected.
+   Mainstream managers (Net-SNMP, PySNMP, commercial NMS) produce DER-compatible encodings, so this is low risk.
+2. The `der` crate rejects non-minimal INTEGER encodings (leading-zero-padded).
+   Same interop risk profile as above.
+3. Encoding output is DER-canonical, which is valid BER per X.690.
+   No interop concern on the encoding side.
+4. Cross-implementation testing (new codec vs rasn in unit tests) provides confidence in correctness but does not cover every edge case in the wild.
+
+## ADR context (for later)
+
+When the migration is complete, the following ADRs need updating:
+
+**Supersede ADR-0005** ("codec: Use rasn and rasn-snmp for BER codec"):
+The new ADR should record the decision to replace rasn with `der` + hand-written outer BER, the motivation (audit burden from ~30 transitive deps), the interop caveats above, and that rasn is retained as a dev-dependency for cross-implementation verification.
+Alternatives considered: keep rasn (works but audit burden remains), fully hand-written BER without `der` (~400 more lines, owns correctness risk for integer/OID/length encoding primitives), snmp-parser/asn1-rs (lacks encoding support).
+
+**Supersede ADR-0007** ("codec: Use rasn-snmp wire types directly"):
+The new codec defines its own BER structures rather than using rasn-snmp wire types in production.
+ADR-0011 (Value enum as public API) remains valid and is strengthened — the decoupling it mandates is even more important without rasn-snmp types in production code.
+
+## Implementation plan
+
+- [ ] Add `der` crate dependency with `alloc`, `ber`, `oid` features
+- [ ] Implement BER primitives module (tag, length, integer, OID wire encoding)
+- [ ] Implement SNMP structure encode/decode: SNMPv3 Message, HeaderData, USMSecurityParameters, ScopedPdu, ScopedPduData
+- [ ] Implement PDU encode/decode: Pdus CHOICE (context-tagged), PDU, BulkPDU
+- [ ] Implement VarBind encode/decode: VarBind, VarBindValue CHOICE, ObjectSyntax/SimpleSyntax/ApplicationSyntax
+- [ ] Implement APPLICATION-tagged types: IpAddress, Counter32, Gauge32, TimeTicks, Opaque, Counter64
+- [ ] Implement SNMPv2c Message encoding (for plain trap delivery)
+- [ ] Replace production encode.rs and decode.rs to use new codec
+- [ ] Move rasn, rasn-snmp, rasn-smi to dev-dependencies only
+- [ ] Verify all existing tests pass with new codec
+- [ ] Write or update ADRs to record the final decision
+- [ ] Run clippy pedantic and govctl check"""
+
+[[content.acceptance_criteria]]
+text = "Production code no longer imports rasn crates — only dev-dependencies remain"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "All existing unit and integration tests pass against the new codec"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "Wire format is byte-identical to rasn output for DER-canonical inputs (verified by cross-codec round-trip tests)"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "cargo clippy pedantic passes without warnings"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "ADRs written/updated to record the final decision (supersede ADR-0005 and ADR-0007)"
+status = "pending"
+category = "chore"
