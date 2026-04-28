@@ -1,0 +1,31 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-04-28-001"
+title = "Implement REQ-0059: Report PDU for snmpUnknownContexts"
+status = "queue"
+created = "2026-04-28"
+refs = ["RFC-0005"]
+
+[content]
+description = "Implement RFC-0005:C-ENGINE REQ-0059: when the agent receives a scoped PDU with a non-empty contextName, respond with a Report PDU incrementing snmpUnknownContexts (RFC 3412) instead of silently discarding."
+
+[[content.acceptance_criteria]]
+text = "Agent responds with Report PDU containing snmpUnknownContexts OID on non-empty contextName"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "snmpUnknownContexts counter incremented per occurrence"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "REQ-0059 traceability tag present in implementation and tests"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"
