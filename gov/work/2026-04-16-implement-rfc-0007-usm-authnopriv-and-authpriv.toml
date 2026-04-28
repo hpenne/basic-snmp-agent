@@ -53,7 +53,7 @@ Implementation plan:
 - ✓ Step 13: Behave test for contextEngineID mismatch (REQ-0104)
 - ✓ Step 14: Outbound trap authentication and encryption (REQ-0105, REQ-0106)
 - ✓ Step 15: Behave tests for authenticated traps at authNoPriv security level (REQ-0105)
-- ○ Step 16: Behave tests for authenticated traps at authPriv security level (REQ-0105, REQ-0106)"""
+- ✓ Step 16: Behave tests for authenticated traps at authPriv security level (REQ-0105, REQ-0106)"""
 
 [[content.acceptance_criteria]]
 text = "SecretKey newtype with Drop zeroisation via write_volatile + compiler_fence (REQ-0085, ADR-0025)"
@@ -167,5 +167,10 @@ category = "added"
 
 [[content.acceptance_criteria]]
 text = "Behave tests for authenticated traps at authNoPriv security level (REQ-0105, step 15)"
+status = "done"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "Behave tests for authenticated traps at authPriv security level (REQ-0105, REQ-0106, step 16)"
 status = "done"
 category = "added"
