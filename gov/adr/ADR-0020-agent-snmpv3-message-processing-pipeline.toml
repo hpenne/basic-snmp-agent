@@ -3,18 +3,46 @@
 [govctl]
 id = "ADR-0020"
 title = "agent: SNMPv3 message processing pipeline"
-status = "proposed"
+status = "accepted"
 date = "2026-03-04"
 refs = [
-    "RFC-0001",
     "ADR-0001",
     "ADR-0005",
+    "RFC-0005",
+    "RFC-0007",
 ]
 
 [content]
 context = """
-C-ENGINE requires contextEngineID and contextName validation with silent discard of mismatches.
-C-INBOUND defines request dispatch logic.
-The processing pipeline from raw TLS payload to SNMP response needs a defined structure: where does message unwrapping, security model handling, context validation, and PDU dispatch occur, and in which crate?"""
-decision = "TBD"
-consequences = "TBD"
+RFC 3414 §3.1 mandates a strict ordering of security checks for incoming SNMPv3 messages: engine ID validation, user lookup, security level check, HMAC verification, time window validation, and only then decryption and PDU dispatch.
+The agent must also validate contextEngineID and contextName ([[RFC-0005:C-ENGINE]]).
+A design choice is needed on how to structure this pipeline: as a chain of trait objects (allowing pluggable security models), as composed helper functions, or as a single sequential function."""
+decision = """
+Implement the pipeline as a single function (`process_snmpv3_request` in `transport::dispatch`) with sequential if-guards and early returns.
+Each guard implements one RFC 3414 security check in the mandated order: engine ID discovery, contextEngineID mismatch, user lookup, security level validation, HMAC verification, time window check, context name validation, decryption (if authPriv), post-decryption context name check, and finally PDU dispatch.
+Silent discard is represented by returning `None`; a response (including Report PDUs) is `Some(bytes)`.
+
+Context validation is split across two points: once before dispatch for cleartext messages, and once after decryption for encrypted messages, since the scoped PDU is not available until decryption completes.
+
+The USM logic (HMAC computation, time window evaluation, key derivation, decryption) lives in dedicated modules under `usm::`, but the orchestration and check ordering remain in `dispatch`.
+PDU handling (GET, GETNEXT, GETBULK, SET) is delegated to `transport::request`, which resolves OIDs against the MIB store and builds the response PDU.
+BER encoding and decoding live in `codec::pdu`.
+
+Everything is in the single `basic_snmp_agent` crate; no separate crate boundary exists for the pipeline."""
+consequences = """
+The monolithic function makes the RFC-mandated check ordering immediately visible to a reader; no indirection hides or reorders steps.
+This prevents accidental security vulnerabilities from misordered checks.
+The trade-off is that the function is large, but the sequential structure keeps each guard self-contained.
+Adding a second security model (e.g. TSM) would require refactoring, but USM is the only supported model and there are no plans to add another."""
+
+[[content.alternatives]]
+text = """
+Trait-based pipeline with pluggable security models.
+Rejected because the agent supports only USM, and trait indirection would obscure the RFC-mandated check ordering, making it harder to audit for correctness."""
+status = "considered"
+
+[[content.alternatives]]
+text = """
+Composed helper functions, each returning a Result that short-circuits the pipeline.
+Rejected in favour of inline guards because the checks share mutable state (the decoded message and USM parameters) and the helpers would need many parameters, reducing clarity without improving modularity."""
+status = "considered"

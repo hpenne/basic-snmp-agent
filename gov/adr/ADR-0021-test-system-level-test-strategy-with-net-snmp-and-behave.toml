@@ -3,88 +3,81 @@
 [govctl]
 id = "ADR-0021"
 title = "test: System-level test strategy with net-snmp and behave"
-status = "proposed"
+status = "accepted"
 date = "2026-03-10"
 refs = [
-    "RFC-0001",
     "ADR-0001",
+    "RFC-0005",
+    "RFC-0007",
 ]
 
 [content]
 context = """
-The agent library needs system-level tests that exercise the full stack: TLS transport, SNMPv3 message processing, request handling, and trap sending.
+The agent library needs system-level tests that exercise the full stack: plain TCP transport, SNMPv3 USM authentication and privacy, request handling, and trap sending.
 Unit tests cover the codec, MIB store, and request handlers, but cannot verify interoperability with real SNMP managers.
 Tests must run reliably both locally and in GitHub Actions CI.
-No Python SNMP library (pysnmp, pysnmp-lextudio) supports SNMP over TLS, so a command-line SNMP tool is needed.
-Stock net-snmp packages and Docker images typically do not include TLS transport support, which requires compile-time flags."""
+The standard Debian net-snmp package supports SNMPv3 USM out of the box, so no custom compilation is needed."""
 decision = """
-Use Python with behave (BDD framework) as the system test runner, shelling out to net-snmp command-line tools running inside a custom Docker container.
+Use Python with behave (BDD framework) as the system test runner, shelling out to net-snmp command-line tools running inside Docker containers managed by Docker Compose.
 
 The test infrastructure consists of four components:
 
-1. A test agent binary: a small Rust binary in a dedicated crate (tests/test-agent/) that constructs an Agent, populates a known set of MIB values, optionally sends traps, and runs.
-The binary accepts a command-line argument pointing to a trap definition file.
-If provided, it reads the file, sends the specified traps at startup, and then continues serving inbound requests.
-The trap file uses JSON format; the binary deserialises it using serde_json, scoped as a dev-dependency of the test-agent crate only.
-The binary uses only the public API of the basic-snmp-agent crate (TrapSender, TrapPdu, Oid, Value, Varbind, and related types).
-Behave starts the binary as a subprocess per scenario (with or without a trap file) and stops it afterwards.
+1. Multiple test agent binaries in dedicated crates under tests/:
+   test-agent (trap sender, reads JSON trap definitions from stdin),
+   test-agent-mib (MIB host at noAuthNoPriv),
+   test-agent-mib-auth (MIB host at authNoPriv with HMAC-SHA-256),
+   test-agent-mib-auth-priv (MIB host at authPriv with SHA-256 + AES-128),
+   and test-agent-mib-common (shared MIB seeding library).
+   Each binary uses only the public API of the basic-snmp-agent crate.
+   Separate binaries per security level keep each one simple and avoid runtime configuration complexity.
 
-2. A custom net-snmp Docker image: built from a Dockerfile checked into the repository (tests/system/docker/).
-net-snmp is compiled with --with-security-modules=tsm and --with-transports=TLSTCP to enable TLS support.
-The image includes snmpget, snmpwalk, snmpbulkget, snmptrapd, and net-snmp-cert.
-The container is started once per test run and kept alive; behave invokes tools via docker exec.
+2. Docker Compose orchestration: a docker-compose.yml defines a shared bridge network (snmp-test) and a persistent snmptrapd service.
+   Test agent containers are started on demand per scenario via docker run (not as Compose services) and stopped in after_scenario.
+   Docker images for each test agent and snmptrapd are built once in before_all via docker compose build.
 
-3. Pre-generated test certificates: a self-signed CA, agent certificate, and client certificate checked into the repository (tests/certs/).
-These are test-only certificates with no secret value.
+3. SNMPv3 USM credentials hardcoded in both the test agent binaries and the snmptrapd configuration (snmptrapd.conf createUser directives with hex engine IDs).
+   No certificates or TLS are used; USM password-based authentication is sufficient for interoperability testing.
 
-4. Behave test suite: feature files in tests/system/features/ covering inbound requests (GET, GETNEXT, GETBULK, SET), TLS authentication (valid client, untrusted client), and outbound traps.
-Step definitions shell out to docker exec to run net-snmp commands and assert on their output.
-environment.py manages the lifecycle of the test agent subprocess, the Docker container, and snmptrapd.
+4. Behave test suite: feature files in tests/system/features/ covering inbound requests (GET, GETNEXT, GETBULK, SET) and outbound traps at all three security levels (noAuthNoPriv, authNoPriv, authPriv).
+   Step definitions shell out to docker exec to run net-snmp commands (snmpget, snmpgetnext, snmpbulkget, snmpset) with SNMPv3 flags (-v3, -l, -u, -a, -A, -x, -X, -e).
+   environment.py manages the lifecycle of the snmptrapd container and cleans up per-scenario state.
 
-For trap testing, snmptrapd runs inside the same Docker container, configured to receive plain UDP traps and log them to stdout.
-Behave reads snmptrapd's container logs after each trap scenario to verify receipt.
+For trap testing, snmptrapd runs inside a dedicated container with a custom Python handler (record-trap.py) that writes structured JSON records to a file.
+Behave steps read the JSON file via docker exec to verify trap receipt, avoiding fragile log parsing.
 
-For trap scenarios, behave writes a trap definition JSON file and starts the test agent binary with it.
-The agent sends the traps at startup before entering its main loop.
-This avoids the need for a runtime control mechanism; each scenario gets a fresh agent process with the exact traps it needs.
-
-To run locally: docker build the image once, cargo build the test agent, then run behave.
-In GitHub Actions: the ubuntu-latest runner provides Docker natively; the workflow builds the image, the test agent, installs behave via pip, and runs the test suite."""
+Test agent containers for trap scenarios receive a JSON trap definition file and send the specified traps at startup before exiting.
+This avoids the need for a runtime control mechanism; each scenario gets a fresh agent process with the exact traps it needs."""
 consequences = """
-System tests verify real interoperability with an industry-standard SNMP manager, not just internal codec round-trips.
-The custom Docker image adds a build step but ensures consistent TLS-enabled net-snmp across all environments.
-Pre-generated certificates avoid runtime cert generation complexity and are fully reproducible.
-The container-per-run model avoids container startup overhead per step while keeping test isolation at the scenario level via agent restarts.
-The test agent binary is a thin integration shim; all real logic lives in the library crate under unit test.
-Python/behave is a widely understood BDD framework, making test scenarios readable to non-Rust developers.
+System tests verify real interoperability with an industry-standard SNMP implementation, not just internal codec round-trips.
+The standard Debian net-snmp package works without custom compilation, since USM support is included by default.
+Docker Compose keeps the test environment reproducible across local and CI environments.
+Structured JSON trap capture eliminates fragile log parsing.
+Separate test agent binaries per security level are simple to reason about but add build time; the shared mib-common crate mitigates code duplication.
 The trade-off is a Docker dependency for running system tests, but Docker is ubiquitous in CI and common in local development."""
-
-[[content.alternatives]]
-text = """
-pysnmp with direct Python SNMP calls instead of net-snmp CLI.
-Rejected because pysnmp does not support SNMP over TLS, which is the only transport the agent speaks for inbound requests.
-"""
-status = "considered"
-
-[[content.alternatives]]
-text = """
-Install net-snmp natively on the CI runner and locally instead of using Docker.
-Rejected because stock net-snmp packages rarely include TLS transport support.
-Building net-snmp from source on each platform is fragile and harder to reproduce than a Docker image.
-"""
-status = "considered"
-
-[[content.alternatives]]
-text = """
-Rust-based integration tests (cargo test) using a Rust SNMP client library.
-Rejected because no mature Rust SNMP client library with TLS support exists.
-Testing against a real third-party SNMP implementation provides stronger interoperability confidence.
-"""
-status = "considered"
 
 [[content.alternatives]]
 text = """
 pytest instead of behave.
 A viable alternative; behave was chosen because BDD-style feature files make SNMP interaction scenarios particularly readable.
 """
+status = "considered"
+
+[[content.alternatives]]
+text = """
+pysnmp with direct Python SNMP calls instead of net-snmp CLI.
+Rejected because pysnmp (and its forks) have inconsistent SNMPv3 USM support and limited maintenance.
+Testing against net-snmp provides stronger interoperability confidence with the tool that real deployments use."""
+status = "considered"
+
+[[content.alternatives]]
+text = """
+Install net-snmp natively on the CI runner instead of using Docker.
+Rejected because Docker provides a reproducible environment with pre-configured USM credentials and snmptrapd, avoiding per-platform setup drift."""
+status = "considered"
+
+[[content.alternatives]]
+text = """
+Rust-based integration tests (cargo test) using a Rust SNMP client library.
+Rejected because no mature Rust SNMP client library exists.
+Testing against a real third-party SNMP implementation provides stronger interoperability confidence."""
 status = "considered"
