@@ -1,0 +1,43 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-04-28-003"
+title = "Add fuzz targets for TCP framing and authenticated SNMPv3 processing"
+status = "queue"
+created = "2026-04-28"
+
+[content]
+description = """
+Add two new fuzz targets to close coverage gaps identified in the fuzz audit.
+The existing snmpv3_request fuzzer covers the inbound pipeline well but misses the TCP framing layer (first code to touch untrusted network input) and authenticated/encrypted processing paths (usm_user is None in the current fuzzer).
+Both targets must be wired into the Makefile and CI pipeline alongside the existing fuzzer."""
+
+[[content.acceptance_criteria]]
+text = "fuzz_tcp_framing target exercising parse_ber_length with raw byte streams"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "fuzz_snmpv3_request_auth target exercising process_snmpv3_request with a configured USM user"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "Seed corpora for both new targets"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "Makefile fuzz targets updated to include new fuzzers"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "CI pipeline runs all three fuzzers"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Both fuzzers run without panics on their seed corpora"
+status = "pending"
+category = "chore"
