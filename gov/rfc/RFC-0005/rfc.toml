@@ -5,10 +5,10 @@ id = "RFC-0005"
 title = "Plain TCP Transport and Inbound Requests"
 version = "0.3.0"
 status = "normative"
-phase = "test"
+phase = "stable"
 owners = ["@Helge Penne"]
 created = "2026-03-16"
-updated = "2026-04-16"
+updated = "2026-04-28"
 signature = "80fca83c53790e0f3176fdbe8be5078a9e4c3f73f19022b8e2ebf898ab48a30b"
 
 [[sections]]

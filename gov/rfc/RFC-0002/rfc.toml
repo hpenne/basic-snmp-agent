@@ -5,10 +5,10 @@ id = "RFC-0002"
 title = "Crate and Runtime"
 version = "0.1.1"
 status = "normative"
-phase = "test"
+phase = "stable"
 owners = ["@Helge Penne"]
 created = "2026-03-16"
-updated = "2026-04-14"
+updated = "2026-04-28"
 signature = "31d06e6770ff4b1db63f2758cf1037517bcd4e29e248c9e0faffad39a8fc863d"
 
 [[sections]]

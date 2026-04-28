@@ -5,10 +5,10 @@ id = "RFC-0003"
 title = "MIB Store"
 version = "0.1.0"
 status = "normative"
-phase = "test"
+phase = "stable"
 owners = ["@Helge Penne"]
 created = "2026-03-16"
-updated = "2026-03-19"
+updated = "2026-04-28"
 
 [[sections]]
 title = "Summary"
