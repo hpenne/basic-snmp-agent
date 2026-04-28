@@ -4,11 +4,11 @@
 id = "RFC-0001"
 title = "SNMP Agent Core Protocol"
 version = "0.2.0"
-status = "normative"
+status = "deprecated"
 phase = "impl"
 owners = ["@Helge Penne"]
 created = "2026-03-01"
-updated = "2026-04-14"
+updated = "2026-04-28"
 signature = "12119af469b91c49e7a3f1e26119d230ced5e6c9dc20413305fa4deeb50c27b4"
 
 [[sections]]
