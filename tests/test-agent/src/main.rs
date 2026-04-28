@@ -25,6 +25,8 @@ use std::net::SocketAddr;
 use std::process;
 
 use basic_snmp_agent::usm::auth::AuthProtocol;
+use basic_snmp_agent::usm::keys::SecretKey;
+use basic_snmp_agent::usm::privacy::PrivProtocol;
 use basic_snmp_agent::usm::user::UsmUser;
 use basic_snmp_agent::{AgentBuilder, Oid, TrapPdu, Value, Varbind, VarbindValue};
 
@@ -201,6 +203,36 @@ fn parse_usm_env() -> Option<(Vec<u8>, UsmUser)> {
 
     let usm_user = match security_level.as_str() {
         "authNoPriv" => UsmUser::auth_no_priv(&user_name, auth_protocol, auth_key),
+        "authPriv" => {
+            let priv_proto_name = std::env::var("USM_PRIV_PROTO").unwrap_or_else(|_| {
+                eprintln!("error: USM_SECURITY_LEVEL=authPriv but USM_PRIV_PROTO missing");
+                process::exit(1);
+            });
+            let priv_password = std::env::var("USM_PRIV_PASS").unwrap_or_else(|_| {
+                eprintln!("error: USM_SECURITY_LEVEL=authPriv but USM_PRIV_PASS missing");
+                process::exit(1);
+            });
+
+            let priv_protocol = match priv_proto_name.as_str() {
+                "AES-128" => PrivProtocol::Aes128,
+                "AES-256" => PrivProtocol::Aes256,
+                other => {
+                    eprintln!("error: unsupported USM_PRIV_PROTO '{other}'");
+                    process::exit(1);
+                }
+            };
+
+            let priv_key_full = basic_snmp_agent::usm::kdf::password_to_localised_key(
+                priv_password.as_bytes(),
+                &engine_id,
+                auth_protocol,
+            );
+            let priv_key = SecretKey::new_from_exposed_slice(
+                &priv_key_full.as_bytes()[..priv_protocol.key_len()],
+            );
+
+            UsmUser::auth_priv(&user_name, auth_protocol, auth_key, priv_protocol, priv_key)
+        }
         other => {
             eprintln!("error: unsupported USM_SECURITY_LEVEL '{other}'");
             process::exit(1);
