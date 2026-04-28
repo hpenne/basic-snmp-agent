@@ -23,6 +23,6 @@ pub mod request;
 pub mod trap;
 
 pub use dispatch::process_snmpv3_request;
-pub use event_loop::EventLoopError;
+pub use event_loop::{BerLengthError, EventLoopError, parse_ber_length};
 pub use request::TrapPdu;
 pub use trap::{TrapResult, TrapSender};

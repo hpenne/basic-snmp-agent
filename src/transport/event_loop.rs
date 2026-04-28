@@ -82,6 +82,22 @@ impl std::error::Error for EventLoopError {
     }
 }
 
+// ── BerLengthError ─────────────────────────────────────────────────────────
+
+/// Error returned by [`parse_ber_length`] when the BER length encoding is invalid.
+///
+/// This indicates a protocol error from which the connection cannot recover.
+#[derive(Debug, PartialEq, Eq)]
+pub struct BerLengthError;
+
+impl fmt::Display for BerLengthError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("invalid BER length encoding (indefinite-length or >4-octet long form)")
+    }
+}
+
+impl std::error::Error for BerLengthError {}
+
 // ── Command ──────────────────────────────────────────────────────────────────
 
 /// Commands sent from application threads to the event loop.
@@ -555,7 +571,7 @@ impl EventLoop {
             let (content_length, length_field_bytes) = match parse_ber_length(&conn.read_buf[1..]) {
                 Ok(Some(parsed)) => parsed,
                 Ok(None) => break,
-                Err(()) => {
+                Err(_) => {
                     // Invalid BER length encoding (e.g., indefinite-length form 0x80).
                     // The stream is unrecoverable; close the connection.
                     eprintln!(
@@ -713,30 +729,33 @@ fn drain_pipe(fd: RawFd) {
 
 /// Parse a BER length field starting at `buf[0]`.
 ///
-/// Returns:
-/// - `Ok(Some((content_length, length_field_bytes)))` — parsed successfully.
-/// - `Ok(None)` — buffer is incomplete; caller should wait for more data.
-/// - `Err(())` — invalid encoding (indefinite-length form `0x80`, or more than
-///   4 length octets); caller should close the connection.
+/// Returns `Ok(Some((content_length, length_field_bytes)))` on success,
+/// `Ok(None)` when the buffer is incomplete (caller should wait for more data).
 ///
 /// BER length encoding (X.690 §8.1.3):
 /// - Short form: `buf[0]` bit 7 is 0; length = `buf[0]` (0–127); field is 1 byte.
 /// - Long form: `buf[0]` bit 7 is 1; low 7 bits = number of subsequent octets N;
 ///   content length is encoded in the next N octets (big-endian).
+///
+/// # Errors
+///
+/// Returns [`BerLengthError`] for invalid encodings: the indefinite-length form
+/// (`0x80`) and long forms with more than 4 subsequent octets. The caller should
+/// close the connection on error, as the stream is unrecoverable.
 // Implements: REQ-0071
-fn parse_ber_length(buf: &[u8]) -> Result<Option<(usize, usize)>, ()> {
+pub fn parse_ber_length(buf: &[u8]) -> Result<Option<(usize, usize)>, BerLengthError> {
     if buf.is_empty() {
         return Ok(None);
     }
     if buf[0] & 0x80 == 0 {
         // Short form: the byte itself is the length.
-        return Ok(Some((buf[0] as usize, 1)));
+        return Ok(Some((usize::from(buf[0]), 1)));
     }
-    let num_octets = (buf[0] & 0x7f) as usize;
+    let num_octets = usize::from(buf[0] & 0x7f);
     if num_octets == 0 || num_octets > 4 {
         // Indefinite-length (0x80) or absurdly large (>4 bytes) is a protocol
         // error; the connection cannot recover.
-        return Err(());
+        return Err(BerLengthError);
     }
     if buf.len() < 1 + num_octets {
         // Incomplete length field; caller should wait for more data.
@@ -744,7 +763,7 @@ fn parse_ber_length(buf: &[u8]) -> Result<Option<(usize, usize)>, ()> {
     }
     let mut content_length: usize = 0;
     for &byte in &buf[1..=num_octets] {
-        content_length = (content_length << 8) | (byte as usize);
+        content_length = (content_length << 8) | usize::from(byte);
     }
     Ok(Some((content_length, 1 + num_octets)))
 }
@@ -1126,14 +1145,17 @@ mod tests {
     fn given_indefinite_length_when_parsed_then_returns_error() {
         // Verifies: REQ-0071
         // 0x80 = indefinite-length form; irrecoverable protocol error.
-        assert_eq!(parse_ber_length(&[0x80]), Err(()));
+        assert_eq!(parse_ber_length(&[0x80]), Err(BerLengthError));
     }
 
     #[test]
     fn given_oversized_length_field_when_parsed_then_returns_error() {
         // Verifies: REQ-0071
         // 0x85 = 5 subsequent octets; more than 4 is not supported, irrecoverable.
-        assert_eq!(parse_ber_length(&[0x85, 0, 0, 0, 0, 1]), Err(()));
+        assert_eq!(
+            parse_ber_length(&[0x85, 0, 0, 0, 0, 1]),
+            Err(BerLengthError)
+        );
     }
 
     #[test]
@@ -1185,10 +1207,10 @@ mod tests {
         let (content_len, length_field_bytes) = loop {
             let next_byte = read_exact_with_timeout(stream, 1);
             length_buf.push(next_byte[0]);
-            match parse_ber_length(&length_buf) {
-                Ok(Some(parsed)) => break parsed,
-                Ok(None) => {}
-                Err(()) => panic!("invalid BER length encoding in response from event loop"),
+            let result = parse_ber_length(&length_buf)
+                .expect("invalid BER length encoding in response from event loop");
+            if let Some(parsed) = result {
+                break parsed;
             }
         };
 

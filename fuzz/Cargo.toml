@@ -27,3 +27,15 @@ name = "generate_seeds"
 path = "generate_seeds.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "tcp_framing"
+path = "fuzz_targets/tcp_framing.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "snmpv3_request_auth"
+path = "fuzz_targets/snmpv3_request_auth.rs"
+test = false
+doc = false

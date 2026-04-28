@@ -1,4 +1,4 @@
-.PHONY: test trace clippy rust-test python-test behave-test fuzz-gen-seeds fuzz-1m fuzz-10m
+.PHONY: test trace clippy rust-test python-test behave-test fuzz-gen-seeds fuzz-1s fuzz-1m fuzz-10m fuzz-30m
 
 # Run the full test suite: lint, Rust unit/doc tests, Python unit tests, and Behave system tests.
 test: clippy rust-test python-test behave-test
@@ -26,21 +26,33 @@ behave-test:
 trace:
 	python3 tools/req_coverage_check.py
 
-# Generate seed corpus files for the snmpv3_request fuzz target.
+# Generate seed corpus files for all fuzz targets.
 fuzz-gen-seeds:
 	cargo run --manifest-path fuzz/Cargo.toml --bin generate_seeds
 
-# Run the fuzzer locally for 1 second.
+# Run all fuzzers locally for 1 second each.
 fuzz-1s:
 	cargo +nightly fuzz run snmpv3_request -- -max_total_time=1
+	cargo +nightly fuzz run tcp_framing -- -max_total_time=1
+	cargo +nightly fuzz run snmpv3_request_auth -- -max_total_time=1
 
-# Run the fuzzer locally for 1 minute.
+# Run all fuzzers locally for 1 minute each.
 fuzz-1m:
 	cargo +nightly fuzz run snmpv3_request -- -max_total_time=60
+	cargo +nightly fuzz run tcp_framing -- -max_total_time=60
+	cargo +nightly fuzz run snmpv3_request_auth -- -max_total_time=60
 
-# Run the fuzzer locally for 10 minutes.
+# Run all fuzzers locally for 10 minutes each.
 fuzz-10m:
 	cargo +nightly fuzz run snmpv3_request -- -max_total_time=600
+	cargo +nightly fuzz run tcp_framing -- -max_total_time=600
+	cargo +nightly fuzz run snmpv3_request_auth -- -max_total_time=600
+
+# Run all fuzzers locally for 30 minutes each.
+fuzz-30m:
+	cargo +nightly fuzz run snmpv3_request -- -max_total_time=1800
+	cargo +nightly fuzz run tcp_framing -- -max_total_time=1800
+	cargo +nightly fuzz run snmpv3_request_auth -- -max_total_time=1800
 
 check-format:
 	cargo fmt --check

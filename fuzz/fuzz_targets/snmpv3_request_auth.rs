@@ -1,15 +1,19 @@
+// Like snmpv3_request but with a USM user configured for HMAC-SHA-256 authentication,
+// exercising the authentication verification and time-window check code paths.
 #![no_main]
 
 use std::sync::OnceLock;
 
 use basic_snmp_agent::mib::Store;
 use basic_snmp_agent::transport::dispatch::DispatchContext;
+use basic_snmp_agent::usm::auth::AuthProtocol;
+use basic_snmp_agent::usm::keys::SecretKey;
+use basic_snmp_agent::usm::user::UsmUser;
 use basic_snmp_agent::{Oid, Value, process_snmpv3_request};
 use libfuzzer_sys::fuzz_target;
 
-// Pre-populated MIB store shared across all fuzz iterations.
-// Using OnceLock avoids rebuilding the store on every call.
 static MIB: OnceLock<Store> = OnceLock::new();
+static USER: OnceLock<UsmUser> = OnceLock::new();
 
 fn mib() -> &'static Store {
     MIB.get_or_init(|| {
@@ -50,9 +54,14 @@ fn mib() -> &'static Store {
     })
 }
 
+fn user() -> &'static UsmUser {
+    USER.get_or_init(|| {
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xAB; 32]);
+        UsmUser::auth_no_priv("fuzz-user", AuthProtocol::HmacSha256, auth_key)
+    })
+}
+
 fuzz_target!(|request_bytes: &[u8]| {
-    // Use a fixed engine ID; the fuzzer will explore both matching and
-    // non-matching cases by varying the bytes that map to the engine ID field.
     let engine_id = b"\x80\x00\x1f\x88\x80test";
     let mut unknown_engine_ids_counter = 0u32;
     let mut unknown_user_names_counter = 0u32;
@@ -70,7 +79,7 @@ fuzz_target!(|request_bytes: &[u8]| {
         wrong_digests_counter: &mut wrong_digests_counter,
         not_in_time_windows_counter: &mut not_in_time_windows_counter,
         decryption_errors_counter: &mut decryption_errors_counter,
-        usm_user: None,
+        usm_user: Some(user()),
     };
     let _ = process_snmpv3_request(request_bytes, &mut ctx, mib());
 });
