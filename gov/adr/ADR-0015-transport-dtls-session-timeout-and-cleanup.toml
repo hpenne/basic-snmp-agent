@@ -3,7 +3,7 @@
 [govctl]
 id = "ADR-0015"
 title = "transport: TLS connection idle timeout and cleanup"
-status = "proposed"
+status = "rejected"
 date = "2026-03-04"
 refs = [
     "RFC-0001",
@@ -16,10 +16,10 @@ The event loop accepts inbound TLS connections from SNMP managers.
 Without a timeout mechanism, idle connections from disconnected or forgotten peers accumulate indefinitely.
 Each connection consumes a file descriptor and TLS session state."""
 decision = """
-On every event loop iteration, scan all TLS connections and close any whose last-activity timestamp is older than the timeout threshold.
-The timeout is a compile-time constant of 30 minutes.
-Timed-out connections are closed and dropped.
-The last-activity timestamp is updated whenever a connection sends or receives data."""
+Rejected.
+TLS transport was abandoned in favour of USM over plain TCP (see [[ADR-0022]]).
+This ADR's TLS-specific idle timeout and cleanup design is no longer applicable.
+If idle connection cleanup is needed for plain TCP, a new ADR should be created."""
 consequences = """
 Idle TLS connections are cleaned up without needing a separate timer or background task.
 The scan runs on every iteration, which is simple but scales linearly with connection count.
