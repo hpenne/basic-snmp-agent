@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-04-28-003"
 title = "Add fuzz targets for TCP framing and authenticated SNMPv3 processing"
-status = "active"
+status = "done"
 created = "2026-04-28"
 started = "2026-04-28"
+completed = "2026-04-29"
 
 [content]
 description = """
@@ -15,30 +16,30 @@ Both targets must be wired into the Makefile and CI pipeline alongside the exist
 
 [[content.acceptance_criteria]]
 text = "fuzz_tcp_framing target exercising parse_ber_length with raw byte streams"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "fuzz_snmpv3_request_auth target exercising process_snmpv3_request with a configured USM user"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "Seed corpora for both new targets"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "Makefile fuzz targets updated to include new fuzzers"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "CI pipeline runs all three fuzzers"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "Both fuzzers run without panics on their seed corpora"
-status = "pending"
+status = "done"
 category = "chore"
