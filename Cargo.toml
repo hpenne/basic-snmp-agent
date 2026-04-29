@@ -10,6 +10,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+der = { version = "0.8", features = ["alloc", "ber", "oid"] }
 rasn = "0.22"
 rasn-smi = "0.22"
 rasn-snmp = "0.22"
