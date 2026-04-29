@@ -1,14 +1,17 @@
-//! `SNMPv3` message-level BER encode/decode layer.
+//! SNMP message-level BER encode/decode layer.
 //!
-//! This module implements the outer `SNMPv3` message envelope (RFC 3412 §6 and
-//! RFC 3414 §2.4) using the [`BerWriter`] and [`BerReader`] primitives from
-//! the parent module. It handles the envelope only — the inner PDU is left as
-//! raw bytes and decoded by a higher layer.
+//! Covers both the `SNMPv3` message envelope (RFC 3412 §6 and RFC 3414 §2.4)
+//! and the `SNMPv2c` message envelope (RFC 1901 §3), using the [`BerWriter`]
+//! and [`BerReader`] primitives from the parent module. The inner PDU is left
+//! as raw bytes and decoded by a higher layer.
 
 use super::{BerError, BerReader, BerWriter, TAG_OCTET_STRING, TAG_SEQUENCE};
 
 /// `SNMPv3` message version field value (RFC 3412 §6).
 const SNMPV3_VERSION: i32 = 3;
+
+/// `SNMPv2c` message version field value (RFC 1901 §3).
+const SNMPV2C_VERSION: i32 = 1;
 
 // ── Intermediate types ────────────────────────────────────────────────────────
 
@@ -369,6 +372,26 @@ pub(crate) fn encode_v3_message(
 
     let auth_params_offset = find_auth_params_offset(&encoded_message, auth_params.len())?;
     Ok((encoded_message, auth_params_offset))
+}
+
+/// Encodes an `SNMPv2c` message envelope (RFC 1901 §3).
+///
+/// Produces `SEQUENCE { INTEGER version, OCTET STRING community, <raw PDU TLV> }`.
+/// `raw_pdu_tlv` must be a fully-encoded PDU TLV (e.g. the output of
+/// [`super::pdu::encode_pdu`]) and is written verbatim without additional
+/// wrapping. Used for plain trap delivery when no USM user is configured.
+///
+/// # Requirements
+/// Implements: REQ-0000
+pub(crate) fn encode_v2c_message(community: &[u8], raw_pdu_tlv: &[u8]) -> Vec<u8> {
+    let mut inner = BerWriter::new();
+    inner.write_integer(SNMPV2C_VERSION);
+    inner.write_octet_string(community);
+    inner.write_raw(raw_pdu_tlv);
+
+    let mut outer = BerWriter::new();
+    outer.write_sequence(inner.as_bytes());
+    outer.into_vec()
 }
 
 /// Re-parses `encoded_message` to find the byte offset of `msgAuthenticationParameters`.
@@ -969,5 +992,105 @@ mod tests {
             ber_error.to_string().to_lowercase().contains("msgflags"),
             "error must mention msgFlags, got: {ber_error}"
         );
+    }
+
+    // ── Test 13: Encode v2c with empty community ──────────────────────────────
+
+    // Wire encoding of V2cMessage { version: 1, community: "", data: empty Trap PDU }
+    //
+    // Inner TLVs:
+    //   INTEGER 1:           02 01 01         (3 bytes)
+    //   OCTET STRING "":     04 00            (2 bytes)
+    //   raw PDU:             A7 00            (2 bytes)
+    // Total inner = 7 bytes
+    // Outer: 30 07 [7 bytes]
+    const V2C_EMPTY_COMMUNITY_WIRE: &[u8] = &[0x30, 0x07, 0x02, 0x01, 0x01, 0x04, 0x00, 0xA7, 0x00];
+
+    #[test]
+    fn given_empty_community_when_v2c_encoded_then_matches_wire_vector() {
+        // Verifies: REQ-0000
+        let encoded = encode_v2c_message(b"", &[0xA7, 0x00]);
+        assert_eq!(encoded, V2C_EMPTY_COMMUNITY_WIRE);
+    }
+
+    // ── Test 14: Encode v2c with "public" community ───────────────────────────
+
+    // Wire encoding of V2cMessage { version: 1, community: "public", data: empty Trap PDU }
+    //
+    // Inner TLVs:
+    //   INTEGER 1:           02 01 01                        (3 bytes)
+    //   OCTET STRING:        04 06 70 75 62 6C 69 63         (8 bytes — "public")
+    //   raw PDU:             A7 00                           (2 bytes)
+    // Total inner = 13 bytes
+    // Outer: 30 0D [13 bytes]
+    const V2C_PUBLIC_COMMUNITY_WIRE: &[u8] = &[
+        0x30, 0x0D, 0x02, 0x01, 0x01, 0x04, 0x06, 0x70, 0x75, 0x62, 0x6C, 0x69, 0x63, 0xA7, 0x00,
+    ];
+
+    #[test]
+    fn given_public_community_when_v2c_encoded_then_matches_wire_vector() {
+        // Verifies: REQ-0000
+        let encoded = encode_v2c_message(b"public", &[0xA7, 0x00]);
+        assert_eq!(encoded, V2C_PUBLIC_COMMUNITY_WIRE);
+    }
+
+    // ── Helper: decode the three fields of a v2c message ─────────────────────
+
+    /// Decodes a BER-encoded `SNMPv2c` message and returns `(version, community, pdu_bytes)`.
+    ///
+    /// Asserts that no bytes trail the outer SEQUENCE in the encoded buffer,
+    /// verifying there is no trailing garbage after the message envelope.
+    fn decode_v2c_fields(encoded: &[u8]) -> (i32, Vec<u8>, Vec<u8>) {
+        let mut outer_reader = BerReader::new(encoded);
+        let mut msg_reader = outer_reader.read_sequence().expect("SEQUENCE must parse");
+        // Verify no bytes trail the outer SEQUENCE TLV in the encoded buffer.
+        assert!(
+            outer_reader.is_empty(),
+            "no trailing bytes expected after the SNMPv2c outer SEQUENCE"
+        );
+        let version = msg_reader.read_integer().expect("version must parse");
+        let community = msg_reader
+            .read_octet_string()
+            .expect("community must parse")
+            .to_vec();
+        let pdu_bytes = msg_reader.remaining().to_vec();
+        (version, community, pdu_bytes)
+    }
+
+    // ── Test 15: Decode round-trip ────────────────────────────────────────────
+
+    #[test]
+    fn given_v2c_message_when_encoded_and_decoded_then_fields_match() {
+        // Verifies: REQ-0000
+        let community = b"test-community";
+        let raw_pdu = [0xA7, 0x00]; // empty Trap PDU
+        let encoded = encode_v2c_message(community, &raw_pdu);
+
+        let (version, decoded_community, decoded_pdu) = decode_v2c_fields(&encoded);
+
+        assert_eq!(version, 1);
+        assert_eq!(decoded_community, community);
+        assert_eq!(decoded_pdu, raw_pdu);
+    }
+
+    // ── Test 16: Encode with real trap PDU ───────────────────────────────────
+
+    #[test]
+    fn given_v2c_message_with_trap_pdu_when_encoded_and_decoded_then_pdu_preserved() {
+        // Verifies: REQ-0000
+        use super::super::TAG_TRAP;
+        use super::super::pdu::encode_pdu;
+
+        // Build a minimal trap PDU: request_id=1, error_status=0, error_index=0, empty varbind list
+        let trap_pdu =
+            encode_pdu(TAG_TRAP, 1, 0, 0, &[0x30, 0x00]).expect("encode_pdu must succeed");
+
+        let encoded = encode_v2c_message(b"", &trap_pdu);
+
+        let (version, community, decoded_pdu) = decode_v2c_fields(&encoded);
+
+        assert_eq!(version, 1);
+        assert_eq!(community, b"");
+        assert_eq!(decoded_pdu, trap_pdu.as_slice());
     }
 }

@@ -57,6 +57,7 @@ ADR-0011 (Value enum as public API) remains valid and is strengthened — the de
 - ○ Replace production encode.rs and decode.rs to use new codec
 - ○ Move rasn, rasn-snmp, rasn-smi to dev-dependencies only
 - ○ Verify all existing tests pass with new codec
+- ○ Add Behave tests for SNMPv3 noAuthNoPriv traps (similar to SNMPv2c trap scenarios)
 - ○ Write or update ADRs to record the final decision
 - ○ Run clippy pedantic and govctl check"""
 
