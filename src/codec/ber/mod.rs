@@ -12,6 +12,7 @@
 use crate::codec::Oid;
 use std::fmt;
 
+pub(crate) mod pdu;
 pub(crate) mod snmp;
 
 // ----- Tag constants --------------------------------------------------------
@@ -105,7 +106,7 @@ pub(crate) struct BerError {
 }
 
 impl BerError {
-    fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
         }
