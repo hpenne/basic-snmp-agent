@@ -4,12 +4,12 @@ use rasn_smi::v2::{ApplicationSyntax, Counter64, ObjectSyntax, SimpleSyntax};
 use rasn_snmp::v2::{
     Pdu as RasnPdu, Pdus, Response, Trap, VarBind, VarBindValue as RasnVarBindValue,
 };
-use rasn_snmp::v2c::Message as V2cMessage;
 use rasn_snmp::v3::{
     HeaderData, Message as V3Message, ScopedPdu, ScopedPduData, USMSecurityParameters,
 };
 
 use super::types::{EncodeError, GetResponse, Varbind, VarbindValue, WireTrapPdu};
+use crate::codec::ber;
 use crate::codec::{Oid, Value};
 
 /// Converts our `Oid` into a `rasn` `ObjectIdentifier`.
@@ -120,13 +120,32 @@ fn varbind_to_rasn(varbind: &Varbind) -> VarBind {
     }
 }
 
+// Implements: REQ-0000
+fn encode_varbinds(varbinds: &[Varbind]) -> Result<Vec<u8>, EncodeError> {
+    let encoded_varbinds: Vec<Vec<u8>> = varbinds
+        .iter()
+        .map(|vb| {
+            let encoded_value = ber::varbind::encode_varbind_value(&vb.value)
+                .map_err(|e| EncodeError::new(format!("varbind value encoding failed: {e}")))?;
+            Ok(ber::varbind::encode_varbind(&vb.oid, &encoded_value))
+        })
+        .collect::<Result<Vec<_>, EncodeError>>()?;
+    let refs: Vec<&[u8]> = encoded_varbinds.iter().map(Vec::as_slice).collect();
+    Ok(ber::varbind::encode_varbind_list(&refs))
+}
+
 /// BER-encode a [`GetResponse`] PDU for transmission.
 ///
 /// Returns the raw BER bytes ready to be wrapped in an `SNMPv3` message.
 ///
 /// # Errors
 ///
-/// Returns an [`EncodeError`] if `rasn` fails to BER-encode the PDU.
+/// Returns an [`EncodeError`] if BER encoding of the PDU fails.
+///
+/// # Panics
+///
+/// This function will not panic in practice: `ErrorStatus` values 0–18 all fit
+/// in `i32`, so the internal conversion is infallible for any valid `ErrorStatus`.
 ///
 /// # Examples
 ///
@@ -144,14 +163,23 @@ fn varbind_to_rasn(varbind: &Varbind) -> VarBind {
 /// assert!(!bytes.is_empty());
 /// ```
 pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
-    let rasn_pdu = Response(RasnPdu {
-        request_id: pdu.request_id,
-        error_status: pdu.error_status as u32,
-        error_index: pdu.error_index,
-        variable_bindings: pdu.varbinds.iter().map(varbind_to_rasn).collect(),
-    });
-    rasn::ber::encode(&rasn_pdu)
-        .map_err(|e| EncodeError::new(format!("BER encoding of GetResponse failed: {e}")))
+    let raw_varbind_list = encode_varbinds(&pdu.varbinds)?;
+    let error_status =
+        i32::try_from(pdu.error_status as u32).expect("ErrorStatus values 0–18 always fit in i32");
+    let error_index = i32::try_from(pdu.error_index).map_err(|_| {
+        EncodeError::new(format!(
+            "error_index {} exceeds maximum representable value in BER",
+            pdu.error_index
+        ))
+    })?;
+    ber::pdu::encode_pdu(
+        ber::TAG_RESPONSE,
+        pdu.request_id,
+        error_status,
+        error_index,
+        &raw_varbind_list,
+    )
+    .map_err(|e| EncodeError::new(format!("BER encoding of GetResponse failed: {e}")))
 }
 
 // RFC 3826 §2.2: each message must use a unique salt. The counter is
@@ -552,7 +580,7 @@ pub fn encode_v3_report(
 ///
 /// # Errors
 ///
-/// Returns an [`EncodeError`] if `rasn` fails to BER-encode the PDU.
+/// Returns an [`EncodeError`] if BER encoding of the PDU fails.
 ///
 /// # Examples
 ///
@@ -568,23 +596,13 @@ pub fn encode_v3_report(
 /// assert!(!bytes.is_empty());
 /// ```
 pub fn encode_trap(pdu: &WireTrapPdu) -> Result<Vec<u8>, EncodeError> {
-    let rasn_pdu = Trap(RasnPdu {
-        request_id: pdu.request_id,
-        error_status: 0,
-        error_index: 0,
-        variable_bindings: pdu.varbinds.iter().map(varbind_to_rasn).collect(),
-    });
-    let v2c_message = V2cMessage {
-        version: V2cMessage::<Pdus>::VERSION.into(),
-        // An empty community string is intentional: this agent does not
-        // implement SNMPv2c community-based authentication. Trap receivers
-        // used in this project are configured with `disableAuthorization yes`
-        // to accept unauthenticated traps.
-        community: rasn::types::OctetString::from(vec![]),
-        data: Pdus::Trap(rasn_pdu),
-    };
-    rasn::ber::encode(&v2c_message)
-        .map_err(|e| EncodeError::new(format!("BER encoding of WireTrapPdu failed: {e}")))
+    let raw_varbind_list = encode_varbinds(&pdu.varbinds)?;
+    let raw_pdu_bytes =
+        ber::pdu::encode_pdu(ber::TAG_TRAP, pdu.request_id, 0, 0, &raw_varbind_list)
+            .map_err(|e| EncodeError::new(format!("BER encoding of WireTrapPdu failed: {e}")))?;
+    // The community string is empty because SNMPv2c traps use plain UDP delivery;
+    // the authenticated path uses SNMPv3 instead.
+    Ok(ber::snmp::encode_v2c_message(b"", &raw_pdu_bytes))
 }
 
 #[cfg(test)]
@@ -592,6 +610,7 @@ mod tests {
     use super::*;
     use crate::codec::pdu::{ErrorStatus, GetResponse, Varbind, VarbindValue, WireTrapPdu};
     use crate::codec::{Oid, Value};
+    use rasn_snmp::v2c::Message as V2cMessage;
 
     fn sysdescr_oid() -> Oid {
         "1.3.6.1.2.1.1.1.0".parse().unwrap()
@@ -625,22 +644,6 @@ mod tests {
         auth_protocol
             .verify_mac(auth_key, &zeroed, embedded_mac)
             .expect("HMAC must verify");
-    }
-
-    #[test]
-    fn encode_response_produces_non_empty_bytes() {
-        let oid = sysdescr_oid();
-        let pdu = GetResponse {
-            request_id: 1234,
-            error_status: ErrorStatus::NoError,
-            error_index: 0,
-            varbinds: vec![Varbind {
-                oid,
-                value: VarbindValue::Value(Value::OctetString(b"Linux".to_vec())),
-            }],
-        };
-        let encoded_response = encode_response(&pdu).unwrap();
-        assert!(!encoded_response.is_empty());
     }
 
     #[test]
