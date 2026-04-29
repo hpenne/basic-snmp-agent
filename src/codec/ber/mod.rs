@@ -14,6 +14,7 @@ use std::fmt;
 
 pub(crate) mod pdu;
 pub(crate) mod snmp;
+pub(crate) mod varbind;
 
 // ----- Tag constants --------------------------------------------------------
 
