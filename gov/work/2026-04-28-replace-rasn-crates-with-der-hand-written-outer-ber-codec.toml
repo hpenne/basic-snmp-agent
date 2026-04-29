@@ -47,18 +47,18 @@ ADR-0011 (Value enum as public API) remains valid and is strengthened — the de
 
 ## Implementation plan
 
-- [ ] Add `der` crate dependency with `alloc`, `ber`, `oid` features
-- [ ] Implement BER primitives module (tag, length, integer, OID wire encoding)
-- [ ] Implement SNMP structure encode/decode: SNMPv3 Message, HeaderData, USMSecurityParameters, ScopedPdu, ScopedPduData
-- [ ] Implement PDU encode/decode: Pdus CHOICE (context-tagged), PDU, BulkPDU
-- [ ] Implement VarBind encode/decode: VarBind, VarBindValue CHOICE, ObjectSyntax/SimpleSyntax/ApplicationSyntax
-- [ ] Implement APPLICATION-tagged types: IpAddress, Counter32, Gauge32, TimeTicks, Opaque, Counter64
-- [ ] Implement SNMPv2c Message encoding (for plain trap delivery)
-- [ ] Replace production encode.rs and decode.rs to use new codec
-- [ ] Move rasn, rasn-snmp, rasn-smi to dev-dependencies only
-- [ ] Verify all existing tests pass with new codec
-- [ ] Write or update ADRs to record the final decision
-- [ ] Run clippy pedantic and govctl check"""
+- ● Add `der` crate dependency with `alloc`, `ber`, `oid` features
+- ● Implement BER primitives module (tag, length, integer, OID wire encoding)
+- ● Implement SNMP structure encode/decode: SNMPv3 Message, HeaderData, USMSecurityParameters, ScopedPdu, ScopedPduData
+- ● Implement PDU encode/decode: Pdus CHOICE (context-tagged), PDU, BulkPDU
+- ● Implement VarBind encode/decode: VarBind, VarBindValue CHOICE, ObjectSyntax/SimpleSyntax/ApplicationSyntax
+- ● Implement APPLICATION-tagged types: IpAddress, Counter32, Gauge32, TimeTicks, Opaque, Counter64
+- ○ Implement SNMPv2c Message encoding (for plain trap delivery)
+- ○ Replace production encode.rs and decode.rs to use new codec
+- ○ Move rasn, rasn-snmp, rasn-smi to dev-dependencies only
+- ○ Verify all existing tests pass with new codec
+- ○ Write or update ADRs to record the final decision
+- ○ Run clippy pedantic and govctl check"""
 
 [[content.acceptance_criteria]]
 text = "Production code no longer imports rasn crates — only dev-dependencies remain"
