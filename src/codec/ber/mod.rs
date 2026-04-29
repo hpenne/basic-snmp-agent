@@ -12,6 +12,8 @@
 use crate::codec::Oid;
 use std::fmt;
 
+pub(crate) mod snmp;
+
 // ----- Tag constants --------------------------------------------------------
 
 // Universal primitive tags (X.690 §8).
