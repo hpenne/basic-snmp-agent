@@ -6,6 +6,11 @@ title = "Replace rasn crates with hand-written BER codec"
 status = "active"
 created = "2026-04-28"
 started = "2026-04-28"
+refs = [
+    "ADR-0026",
+    "ADR-0027",
+    "ADR-0011",
+]
 
 [content]
 description = """
@@ -56,35 +61,35 @@ ADR-0011 (Value enum as public API) remains valid and is strengthened — the de
 - ● Remove unused `der` crate dependency
 - ● Verify all existing tests pass with new codec
 - ○ Add Behave tests for SNMPv3 noAuthNoPriv traps (similar to SNMPv2c trap scenarios)
-- ○ Write or update ADRs to record the final decision
-- ○ Run clippy pedantic and govctl check"""
+- ● Write or update ADRs to record the final decision
+- ● Run clippy pedantic and govctl check"""
 
 [[content.acceptance_criteria]]
 text = "Production code no longer imports rasn crates — only dev-dependencies remain"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
 text = "All existing unit and integration tests pass against the new codec"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
 text = "Wire format is byte-identical to rasn output for DER-canonical inputs (verified by cross-codec round-trip tests)"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
 text = "cargo clippy pedantic passes without warnings"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "govctl check passes"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "ADRs written/updated to record the final decision (supersede ADR-0005 and ADR-0007)"
-status = "pending"
+status = "done"
 category = "chore"

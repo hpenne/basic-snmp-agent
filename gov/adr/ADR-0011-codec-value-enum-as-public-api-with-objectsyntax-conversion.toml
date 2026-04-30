@@ -8,29 +8,27 @@ date = "2026-03-04"
 refs = [
     "RFC-0001",
     "ADR-0006",
-    "ADR-0007",
     "ADR-0010",
+    "ADR-0027",
 ]
 
 [content]
 context = """
 ADR-0006 defines a flat 9-variant Value enum for the MIB store.
-ADR-0007 says use rasn-snmp wire types (including ObjectSyntax) directly for serialization.
-The relationship between these two types needs to be defined: where does conversion happen, and which type is exposed in the public API?
-"""
+ADR-0007 originally used rasn-snmp wire types (including ObjectSyntax) directly for serialization.
+ADR-0027 replaced rasn-snmp wire types with hand-written BER structures internal to the codec.
+The relationship between the public Value enum and the internal wire types needs to be defined: where does conversion happen, and which type is exposed in the public API?"""
 decision = """
 Expose the flat Value enum (ADR-0006) as the public API type for Agent::set() and trap varbinds.
-Use rasn-snmp's ObjectSyntax internally for wire serialization.
-The codec crate provides bidirectional conversion between Value and ObjectSyntax via From/TryFrom trait implementations.
-Callers never interact with rasn-snmp types.
-"""
+Use the hand-written BER codec's internal structures for wire serialization (ADR-0027).
+The codec modules provide bidirectional conversion between Value/VarbindValue and the BER wire format.
+Callers never interact with internal codec types."""
 consequences = """
-The public API is ergonomic (flat enum, e.g. Value::Counter32(42)) and decoupled from rasn-snmp.
-A rasn major version bump does not break callers.
-The conversion is a trivial match in each direction, implemented once in the codec crate.
+The public API is ergonomic (flat enum, e.g. Value::Counter32(42)) and fully decoupled from the wire format.
+A codec implementation change does not break callers.
+The conversion is a trivial match in each direction, implemented once in the codec modules.
 The negative trade-off is a per-request conversion cost when resolving SNMP requests and when the application pushes values, but this is a cheap in-memory operation — negligible compared to network I/O.
-An unsupported ObjectSyntax variant received on the wire will produce a TryFrom error, which is the correct behavior for types we do not handle.
-"""
+An unsupported wire value received on the wire will produce a decode error, which is the correct behaviour for types the agent does not handle."""
 
 [[content.alternatives]]
 text = "Use ObjectSyntax directly as the MIB store and public API type: zero conversion cost, but leaks rasn-snmp into the public API, couples callers to a third-party type layout, and exposes unsupported value variants"

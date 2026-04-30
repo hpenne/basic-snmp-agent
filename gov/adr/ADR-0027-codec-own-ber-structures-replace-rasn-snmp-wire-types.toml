@@ -1,0 +1,34 @@
+#:schema ../schema/adr.schema.json
+
+[govctl]
+id = "ADR-0027"
+title = "codec: Own BER structures replace rasn-snmp wire types"
+status = "accepted"
+date = "2026-04-30"
+refs = [
+    "ADR-0007",
+    "ADR-0026",
+    "ADR-0011",
+]
+
+[content]
+context = """
+ADR-0007 chose to use rasn-snmp's SNMPv3 types directly as the wire format, avoiding custom structures.
+ADR-0026 replaced rasn with a fully hand-written BER codec, eliminating rasn from production code.
+With rasn removed, the codec needs its own internal structures for decoded SNMP messages, PDUs, VarBinds, and USM security parameters.
+The public API types (InboundPdu, GetResponse, Varbind, Value) defined by ADR-0011 remain unchanged."""
+decision = """
+The BER codec defines its own internal structures for decoded wire data:
+`DecodedPdu` (Standard and Bulk variants), `V3MessageEnvelope`, `UsmFields`, `ScopedData`, `DecodedVarbind`, and `DecodedVarbindValue`.
+These are crate-internal (`pub(crate)`) types that map directly to the BER TLV structure of SNMP messages.
+The public-facing types from ADR-0011 (`InboundPdu`, `GetResponse`, `Varbind`, `Value`, `VarbindValue`) remain the API boundary.
+Conversion between internal BER structures and public types happens in `src/codec/pdu/decode.rs` and `src/codec/pdu/encode.rs`."""
+consequences = """
+The codec is fully self-contained with no external type dependencies in production code.
+The internal BER structures are minimal and map directly to wire layout, avoiding unused fields.
+The public API (ADR-0011) is strengthened: callers are completely decoupled from the wire format, and a codec change never breaks the public interface.
+The trade-off is a conversion step between internal BER structures and public types, but this is a cheap in-memory operation — negligible compared to network I/O."""
+
+[[content.alternatives]]
+text = "Continue using rasn-snmp wire types directly: no longer viable since rasn was removed from production dependencies (ADR-0026)"
+status = "rejected"
