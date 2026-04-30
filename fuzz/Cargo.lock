@@ -81,9 +81,6 @@ dependencies = [
  "hmac",
  "libc",
  "mio",
- "rasn",
- "rasn-smi",
- "rasn-snmp",
  "rustls",
  "sha2",
 ]
