@@ -10,7 +10,6 @@ edition = "2024"
 publish = false
 
 [dependencies]
-der = { version = "0.8", features = ["alloc", "ber", "oid"] }
 mio = { version = "1", features = ["net", "os-poll", "os-ext"] }
 libc = "0.2"
 hmac = "0.12"
