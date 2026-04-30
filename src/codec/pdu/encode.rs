@@ -1,124 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rasn_smi::v2::{ApplicationSyntax, Counter64, ObjectSyntax, SimpleSyntax};
-use rasn_snmp::v2::{
-    Pdu as RasnPdu, Pdus, Response, Trap, VarBind, VarBindValue as RasnVarBindValue,
-};
-use rasn_snmp::v3::{
-    HeaderData, Message as V3Message, ScopedPdu, ScopedPduData, USMSecurityParameters,
-};
-
 use super::types::{EncodeError, GetResponse, Varbind, VarbindValue, WireTrapPdu};
 use crate::codec::ber;
 use crate::codec::{Oid, Value};
-
-/// Converts our `Oid` into a `rasn` `ObjectIdentifier`.
-fn oid_to_rasn(oid: &Oid) -> rasn::types::ObjectIdentifier {
-    // rasn ObjectIdentifier owns its arcs via a Cow<'static, [u32]>.
-    // We clone the slice into an owned Vec wrapped in a Cow.
-    let components: Vec<u32> = oid.as_slice().to_vec();
-    rasn::types::ObjectIdentifier::new_unchecked(std::borrow::Cow::Owned(components))
-}
-
-/// Constructs an `smi::Opaque` value from raw bytes.
-///
-/// `Opaque`'s constructor is private inside `rasn-smi`, so we reconstruct it
-/// by BER-decoding a hand-crafted `APPLICATION 4` encoding.  The bytes stored
-/// inside `Opaque` are the raw payload bytes (identical to what `as_ref()`
-/// returns when decoding from the wire).
-///
-/// # Panics
-///
-/// Panics if `bytes.len() > 0xFFFF`, since BER lengths above 65535 are not
-/// supported by this helper.  In practice `Opaque` payloads in SNMP are far
-/// below this limit; exceeding it is treated as a programming error.
-// The casts to u8 below are guarded: each branch is only reached when the
-// length fits in the target byte width.
-#[allow(clippy::cast_possible_truncation)]
-fn bytes_to_opaque(bytes: &[u8]) -> rasn_smi::v1::Opaque {
-    let payload_len = bytes.len();
-    assert!(
-        payload_len <= 0xFFFF,
-        "bytes_to_opaque: payload length {payload_len} exceeds maximum supported BER length (65535)"
-    );
-
-    // BER tag for APPLICATION 4 (primitive): class=application(0x40),
-    // constructed=0, tag=4  →  0x44.
-    let mut ber = Vec::with_capacity(4 + payload_len);
-    ber.push(0x44u8);
-    if payload_len <= 0x7F {
-        // Short-form length: single byte, no high-bit set.
-        ber.push(payload_len as u8);
-    } else if payload_len <= 0xFF {
-        // Long-form length: 0x81 indicates one following length byte.
-        ber.push(0x81u8);
-        ber.push(payload_len as u8);
-    } else {
-        // Long-form length: 0x82 indicates two following length bytes.
-        ber.push(0x82u8);
-        ber.push((payload_len >> 8) as u8);
-        ber.push((payload_len & 0xFF) as u8);
-    }
-    ber.extend_from_slice(bytes);
-    rasn::ber::decode::<rasn_smi::v1::Opaque>(&ber)
-        .expect("hand-crafted APPLICATION 4 BER must decode to Opaque")
-}
-
-/// Converts our public [`Value`] into the rasn-snmp wire type `ObjectSyntax`.
-fn value_to_object_syntax(value: &Value) -> ObjectSyntax {
-    // The rasn_smi::v2 types (Counter32, IpAddress, TimeTicks, Unsigned32) are
-    // type aliases for the v1 concrete structs (Counter, IpAddress, TimeTicks,
-    // Gauge).  We use the v1 constructors directly.
-    match value {
-        Value::Integer32(n) => ObjectSyntax::Simple(SimpleSyntax::Integer((*n).into())),
-        Value::OctetString(bytes) => {
-            ObjectSyntax::Simple(SimpleSyntax::String(bytes.clone().into()))
-        }
-        Value::ObjectIdentifier(oid) => {
-            ObjectSyntax::Simple(SimpleSyntax::ObjectId(oid_to_rasn(oid)))
-        }
-        Value::IpAddress(octets) => {
-            let fixed = rasn::types::FixedOctetString::<4>::from(*octets);
-            ObjectSyntax::ApplicationWide(ApplicationSyntax::Address(rasn_smi::v1::IpAddress(
-                fixed,
-            )))
-        }
-        Value::Counter32(n) => {
-            ObjectSyntax::ApplicationWide(ApplicationSyntax::Counter(rasn_smi::v1::Counter(*n)))
-        }
-        Value::Counter64(n) => {
-            ObjectSyntax::ApplicationWide(ApplicationSyntax::BigCounter(Counter64(*n)))
-        }
-        Value::Gauge32(n) => {
-            ObjectSyntax::ApplicationWide(ApplicationSyntax::Unsigned(rasn_smi::v1::Gauge(*n)))
-        }
-        Value::TimeTicks(n) => {
-            ObjectSyntax::ApplicationWide(ApplicationSyntax::Ticks(rasn_smi::v1::TimeTicks(*n)))
-        }
-        Value::Opaque(bytes) => {
-            ObjectSyntax::ApplicationWide(ApplicationSyntax::Arbitrary(bytes_to_opaque(bytes)))
-        }
-    }
-}
-
-/// Converts our [`VarbindValue`] to the rasn-snmp wire type.
-fn varbind_value_to_rasn(value: &VarbindValue) -> RasnVarBindValue {
-    match value {
-        VarbindValue::Value(v) => RasnVarBindValue::Value(value_to_object_syntax(v)),
-        VarbindValue::Unspecified => RasnVarBindValue::Unspecified,
-        VarbindValue::NoSuchObject => RasnVarBindValue::NoSuchObject,
-        VarbindValue::NoSuchInstance => RasnVarBindValue::NoSuchInstance,
-        VarbindValue::EndOfMibView => RasnVarBindValue::EndOfMibView,
-    }
-}
-
-/// Converts our [`Varbind`] to the rasn-snmp wire type.
-fn varbind_to_rasn(varbind: &Varbind) -> VarBind {
-    VarBind {
-        name: oid_to_rasn(&varbind.oid),
-        value: varbind_value_to_rasn(&varbind.value),
-    }
-}
 
 // Implements: REQ-0000
 fn encode_varbinds(varbinds: &[Varbind]) -> Result<Vec<u8>, EncodeError> {
@@ -207,8 +91,8 @@ fn next_privacy_salt() -> [u8; 8] {
         .to_be_bytes()
 }
 
-// Shared V3 message-building logic: wraps an already-constructed Pdus variant
-// in a ScopedPdu, optionally encrypts it, adds USM params, and signs with HMAC.
+// Shared V3 message-building logic: wraps pre-encoded PDU bytes in a ScopedPdu,
+// optionally encrypts it, adds USM params, and signs with HMAC.
 // Implements: REQ-0068, REQ-0070, REQ-0072, REQ-0100, REQ-0101, REQ-0105, REQ-0106, REQ-0107
 #[allow(clippy::too_many_arguments)]
 fn encode_v3_envelope(
@@ -223,44 +107,23 @@ fn encode_v3_envelope(
         crate::usm::privacy::PrivProtocol,
         &crate::usm::keys::SecretKey,
     )>,
-    inner_pdu: Pdus,
+    raw_pdu_bytes: &[u8],
 ) -> Result<Vec<u8>, EncodeError> {
-    let scoped_pdu = ScopedPdu {
-        engine_id: engine_id.to_vec().into(),
-        name: context_name.to_vec().into(),
-        data: inner_pdu,
-    };
+    // RFC 3412 §7.1: engine_boots and engine_time are non-negative integers
+    // bounded to [0, 2147483647]. Reject values that would not fit in i32.
+    let ber_boots = i32::try_from(engine_boots).map_err(|_| {
+        EncodeError::new(format!(
+            "engine_boots {engine_boots} exceeds maximum BER INTEGER value for i32"
+        ))
+    })?;
+    let ber_time = i32::try_from(engine_time).map_err(|_| {
+        EncodeError::new(format!(
+            "engine_time {engine_time} exceeds maximum BER INTEGER value for i32"
+        ))
+    })?;
 
-    // Encrypt the ScopedPdu when privacy credentials are present, otherwise
-    // leave it as cleartext. The 8-byte salt comes from a process-global
-    // AtomicU64 counter that guarantees uniqueness per RFC 3826 §2.2.
-    let (scoped_data, privacy_salt) = if let Some((priv_protocol, priv_key)) = privacy {
-        let scoped_pdu_bytes = rasn::ber::encode(&scoped_pdu).map_err(|e| {
-            EncodeError::new(format!(
-                "BER encoding of ScopedPdu for encryption failed: {e}"
-            ))
-        })?;
-        let salt = next_privacy_salt();
-        // IV = engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes) per RFC 3826 §2.2.
-        let mut aes_iv = [0u8; 16];
-        aes_iv[0..4].copy_from_slice(&engine_boots.to_be_bytes());
-        aes_iv[4..8].copy_from_slice(&engine_time.to_be_bytes());
-        aes_iv[8..16].copy_from_slice(&salt);
-        let ciphertext = priv_protocol
-            .encrypt(priv_key, &aes_iv, &scoped_pdu_bytes)
-            .map_err(|e| EncodeError::new(format!("AES encryption failed: {e}")))?;
-        (
-            ScopedPduData::EncryptedPdu(ciphertext.into()),
-            salt.to_vec(),
-        )
-    } else {
-        (ScopedPduData::CleartextPdu(scoped_pdu), vec![])
-    };
+    let scoped_pdu_bytes = ber::snmp::encode_scoped_pdu(engine_id, context_name, raw_pdu_bytes);
 
-    let auth_params: Vec<u8> = auth
-        .as_ref()
-        .map(|(proto, _)| vec![0u8; proto.mac_len()])
-        .unwrap_or_default();
     let flags_byte = match (auth.is_some(), privacy.is_some()) {
         (true, true) => 0x03u8,
         (true, false) => 0x01u8,
@@ -272,60 +135,51 @@ fn encode_v3_envelope(
         }
     };
 
-    // RFC 3414 §8.2.4: echo engine state and user name; auth placeholder is
-    // already all-zeros so no separate zeroing step is needed before HMAC.
-    let usm_params = USMSecurityParameters {
-        authoritative_engine_id: engine_id.to_vec().into(),
-        authoritative_engine_boots: engine_boots.into(),
-        authoritative_engine_time: engine_time.into(),
-        user_name: user_name.to_vec().into(),
-        authentication_parameters: rasn::types::OctetString::from(auth_params.clone()),
-        privacy_parameters: rasn::types::OctetString::from(privacy_salt),
-    };
+    let auth_params: Vec<u8> = auth
+        .as_ref()
+        .map(|(proto, _)| vec![0u8; proto.mac_len()])
+        .unwrap_or_default();
 
-    let security_parameters_bytes = rasn::ber::encode(&usm_params).map_err(|e| {
-        EncodeError::new(format!("BER encoding of USMSecurityParameters failed: {e}"))
-    })?;
+    // Encrypt the ScopedPdu when privacy credentials are present, otherwise
+    // leave it as cleartext. The 8-byte salt comes from a process-global
+    // AtomicU64 counter that guarantees uniqueness per RFC 3826 §2.2.
+    let (scoped_or_ciphertext, priv_params, encrypted) =
+        if let Some((priv_protocol, priv_key)) = privacy {
+            let salt = next_privacy_salt();
+            // IV = engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes) per RFC 3826 §2.2.
+            let mut aes_iv = [0u8; 16];
+            aes_iv[0..4].copy_from_slice(&engine_boots.to_be_bytes());
+            aes_iv[4..8].copy_from_slice(&engine_time.to_be_bytes());
+            aes_iv[8..16].copy_from_slice(&salt);
+            let ciphertext = priv_protocol
+                .encrypt(priv_key, &aes_iv, &scoped_pdu_bytes)
+                .map_err(|e| EncodeError::new(format!("AES encryption failed: {e}")))?;
+            (ciphertext, salt.to_vec(), true)
+        } else {
+            (scoped_pdu_bytes, vec![], false)
+        };
 
-    let v3_message = V3Message {
-        version: 3.into(),
-        global_data: HeaderData {
-            message_id: msg_id.into(),
-            max_size: 65535.into(),
-            flags: rasn::types::OctetString::from(vec![flags_byte]),
-            // Security model 3 = USM (RFC 3414).
-            security_model: 3.into(),
-        },
-        // Cloned because security_parameters_bytes is needed for the two-step
-        // auth_params offset search after the message is encoded.
-        security_parameters: security_parameters_bytes.clone().into(),
-        scoped_data,
-    };
-
-    let mut encoded_message = rasn::ber::encode(&v3_message)
-        .map_err(|e| EncodeError::new(format!("BER encoding of SNMPv3 Message failed: {e}")))?;
+    let (mut encoded_message, auth_params_offset) = ber::snmp::encode_v3_message(
+        msg_id,
+        65535,
+        flags_byte,
+        3,
+        engine_id,
+        ber_boots,
+        ber_time,
+        user_name,
+        &auth_params,
+        &priv_params,
+        &scoped_or_ciphertext,
+        encrypted,
+    )
+    .map_err(|e| EncodeError::new(format!("BER encoding of SNMPv3 Message failed: {e}")))?;
 
     if let Some((auth_protocol, auth_key)) = auth {
         let mac_len = auth_params.len();
-
-        // Locate the auth_params placeholder within the encoded message using
-        // the two-step search to avoid false positives from attacker-controlled
-        // varbind data coincidentally matching the placeholder.
-        let usm_pos = encoded_message
-            .windows(security_parameters_bytes.len())
-            .position(|w| w == security_parameters_bytes.as_slice())
-            .ok_or_else(|| {
-                EncodeError::new("USM security parameters not found in encoded message")
-            })?;
-        let auth_pos = encoded_message[usm_pos..usm_pos + security_parameters_bytes.len()]
-            .windows(mac_len)
-            .position(|w| w == auth_params.as_slice())
-            .ok_or_else(|| {
-                EncodeError::new(
-                    "auth params placeholder not found in USM security parameters region",
-                )
-            })?;
-        let auth_params_offset = usm_pos + auth_pos;
+        let offset = auth_params_offset.ok_or_else(|| {
+            EncodeError::new("auth params offset missing despite auth being requested")
+        })?;
 
         // The placeholder is already all-zeros so no zeroing step is needed
         // before computing the HMAC.
@@ -333,12 +187,10 @@ fn encode_v3_envelope(
             .compute_mac(auth_key, &encoded_message)
             .map_err(|e| EncodeError::new(format!("HMAC computation failed: {e}")))?;
 
-        encoded_message[auth_params_offset..auth_params_offset + mac_len].copy_from_slice(&mac);
-
-        Ok(encoded_message)
-    } else {
-        Ok(encoded_message)
+        encoded_message[offset..offset + mac_len].copy_from_slice(&mac);
     }
+
+    Ok(encoded_message)
 }
 
 /// BER-encode a [`GetResponse`] inside a full `SNMPv3` message envelope.
@@ -366,11 +218,15 @@ fn encode_v3_envelope(
 ///
 /// # Errors
 ///
-/// Returns an [`EncodeError`] if `rasn` fails to BER-encode any part of the
-/// message, if HMAC computation fails, if the auth-params placeholder cannot be
-/// located within the encoded message, if AES encryption fails, or if `privacy`
-/// is `Some` while `auth` is `None` (privacy without authentication is not
-/// permitted per RFC 3412).
+/// Returns an [`EncodeError`] if BER encoding of any part of the message fails,
+/// if HMAC computation fails, if AES encryption fails, if `engine_boots` or
+/// `engine_time` exceed `i32::MAX`, or if `privacy` is `Some` while `auth` is
+/// `None` (privacy without authentication is not permitted per RFC 3412).
+///
+/// # Panics
+///
+/// This function will not panic in practice: `ErrorStatus` values 0–18 all fit
+/// in `i32`, so the internal conversion is infallible for any valid `ErrorStatus`.
 ///
 /// # Requirements
 /// Implements: REQ-0068, REQ-0070, REQ-0072, REQ-0100, REQ-0101, REQ-0107
@@ -404,12 +260,23 @@ pub fn encode_v3_response(
     )>,
     pdu: &GetResponse,
 ) -> Result<Vec<u8>, EncodeError> {
-    let rasn_response = Response(RasnPdu {
-        request_id: pdu.request_id,
-        error_status: pdu.error_status as u32,
-        error_index: pdu.error_index,
-        variable_bindings: pdu.varbinds.iter().map(varbind_to_rasn).collect(),
-    });
+    let raw_varbind_list = encode_varbinds(&pdu.varbinds)?;
+    let error_status =
+        i32::try_from(pdu.error_status as u32).expect("ErrorStatus values 0–18 always fit in i32");
+    let error_index = i32::try_from(pdu.error_index).map_err(|_| {
+        EncodeError::new(format!(
+            "error_index {} exceeds maximum representable value in BER",
+            pdu.error_index
+        ))
+    })?;
+    let raw_pdu_bytes = ber::pdu::encode_pdu(
+        ber::TAG_RESPONSE,
+        pdu.request_id,
+        error_status,
+        error_index,
+        &raw_varbind_list,
+    )
+    .map_err(|e| EncodeError::new(format!("BER encoding of GetResponse PDU failed: {e}")))?;
     encode_v3_envelope(
         msg_id,
         engine_id,
@@ -419,7 +286,7 @@ pub fn encode_v3_response(
         engine_time,
         auth,
         privacy,
-        Pdus::Response(rasn_response),
+        &raw_pdu_bytes,
     )
 }
 
@@ -470,12 +337,10 @@ pub fn encode_v3_trap(
     )>,
     pdu: &WireTrapPdu,
 ) -> Result<Vec<u8>, EncodeError> {
-    let rasn_trap = Trap(RasnPdu {
-        request_id: pdu.request_id,
-        error_status: 0,
-        error_index: 0,
-        variable_bindings: pdu.varbinds.iter().map(varbind_to_rasn).collect(),
-    });
+    let raw_varbind_list = encode_varbinds(&pdu.varbinds)?;
+    let raw_pdu_bytes =
+        ber::pdu::encode_pdu(ber::TAG_TRAP, pdu.request_id, 0, 0, &raw_varbind_list)
+            .map_err(|e| EncodeError::new(format!("BER encoding of WireTrapPdu failed: {e}")))?;
     encode_v3_envelope(
         msg_id,
         engine_id,
@@ -485,7 +350,7 @@ pub fn encode_v3_trap(
         engine_time,
         auth,
         privacy,
-        Pdus::Trap(rasn_trap),
+        &raw_pdu_bytes,
     )
 }
 
@@ -503,7 +368,8 @@ pub fn encode_v3_trap(
 ///
 /// # Errors
 ///
-/// Returns an [`EncodeError`] if `rasn` fails to BER-encode any part of the message.
+/// Returns an [`EncodeError`] if BER encoding of any part of the message fails,
+/// or if `engine_boots` or `engine_time` exceed `i32::MAX`.
 ///
 /// # Requirements
 /// Implements: REQ-0093, REQ-0098, REQ-0099
@@ -526,50 +392,28 @@ pub fn encode_v3_report(
     counter_oid: &Oid,
     counter_value: u32,
 ) -> Result<Vec<u8>, EncodeError> {
-    use rasn_snmp::v2::Report;
-
     let varbind = Varbind {
         oid: counter_oid.clone(),
         value: VarbindValue::Value(Value::Counter32(counter_value)),
     };
-    let report_pdu = Report(RasnPdu {
-        request_id: msg_id,
-        error_status: 0,
-        error_index: 0,
-        variable_bindings: vec![varbind_to_rasn(&varbind)],
-    });
-    let scoped_pdu = ScopedPdu {
-        engine_id: engine_id.to_vec().into(),
-        name: vec![].into(),
-        data: Pdus::Report(report_pdu),
-    };
+    let raw_varbind_list = encode_varbinds(&[varbind])?;
+    // RFC 3412 §7.1.3(4): the Report PDU's request-id echoes the inbound msgID.
+    let raw_pdu_bytes = ber::pdu::encode_pdu(ber::TAG_REPORT, msg_id, 0, 0, &raw_varbind_list)
+        .map_err(|e| EncodeError::new(format!("BER encoding of Report PDU failed: {e}")))?;
     // RFC 3414 §8.2.4: the report's USM security parameters carry the authoritative
-    // engine state so the manager can synchronise its local copy.
-    let usm_params = USMSecurityParameters {
-        authoritative_engine_id: engine_id.to_vec().into(),
-        authoritative_engine_boots: engine_boots.into(),
-        authoritative_engine_time: engine_time.into(),
-        user_name: vec![].into(),
-        authentication_parameters: rasn::types::OctetString::from(vec![]),
-        privacy_parameters: rasn::types::OctetString::from(vec![]),
-    };
-    let security_parameters_bytes = rasn::ber::encode(&usm_params).map_err(|e| {
-        EncodeError::new(format!("BER encoding of USMSecurityParameters failed: {e}"))
-    })?;
-    // Flags byte 0x00: noAuthNoPriv, reportable bit clear (this is a report).
-    let v3_message = V3Message {
-        version: 3.into(),
-        global_data: HeaderData {
-            message_id: msg_id.into(),
-            max_size: 65535.into(),
-            flags: rasn::types::OctetString::from(vec![0x00]),
-            security_model: 3.into(),
-        },
-        security_parameters: security_parameters_bytes.into(),
-        scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
-    };
-    rasn::ber::encode(&v3_message)
-        .map_err(|e| EncodeError::new(format!("BER encoding of SNMPv3 Report failed: {e}")))
+    // engine state so the manager can synchronise its local copy. Reports are always
+    // sent noAuthNoPriv with an empty user name and empty context name.
+    encode_v3_envelope(
+        msg_id,
+        engine_id,
+        b"",
+        b"",
+        engine_boots,
+        engine_time,
+        None,
+        None,
+        &raw_pdu_bytes,
+    )
 }
 
 /// BER-encode a [`WireTrapPdu`] for transmission as a plain UDP datagram.
@@ -610,7 +454,10 @@ mod tests {
     use super::*;
     use crate::codec::pdu::{ErrorStatus, GetResponse, Varbind, VarbindValue, WireTrapPdu};
     use crate::codec::{Oid, Value};
+    use rasn_smi::v2::{ApplicationSyntax, ObjectSyntax, SimpleSyntax};
+    use rasn_snmp::v2::{Pdus, Response, VarBindValue as RasnVarBindValue};
     use rasn_snmp::v2c::Message as V2cMessage;
+    use rasn_snmp::v3::{Message as V3Message, ScopedPdu, ScopedPduData, USMSecurityParameters};
 
     fn sysdescr_oid() -> Oid {
         "1.3.6.1.2.1.1.1.0".parse().unwrap()
@@ -789,25 +636,6 @@ mod tests {
             }
             other => panic!("expected Response, got {other:?}"),
         }
-    }
-
-    // Exercises the one-byte long-form BER length path (0x80 <= len <= 0xFF).
-    // A 128-byte payload uses BER long-form length 0x81 0x80.
-    #[test]
-    fn bytes_to_opaque_medium_payload_round_trips() {
-        let opaque_payload: Vec<u8> = (0u8..128).collect();
-        let opaque = bytes_to_opaque(&opaque_payload);
-        assert_eq!(opaque.as_ref(), opaque_payload.as_slice());
-    }
-
-    // Exercises the two-byte long-form BER length path (len > 0xFF).
-    // A 256-byte payload uses BER long-form length 0x82 0x01 0x00.
-    // This catches mutations to the `>>` shift and `&` mask on the high/low bytes.
-    #[test]
-    fn bytes_to_opaque_large_payload_round_trips() {
-        let opaque_payload: Vec<u8> = (0u8..=255).collect(); // exactly 256 bytes
-        let opaque = bytes_to_opaque(&opaque_payload);
-        assert_eq!(opaque.as_ref(), opaque_payload.as_slice());
     }
 
     #[test]
@@ -1180,21 +1008,11 @@ mod tests {
     }
 
     #[test]
-    fn given_valid_inputs_when_encode_v3_report_then_returns_non_empty_bytes() {
-        // Verifies: REQ-0093
-        let engine_id = b"\x80\x00\x1f\x88\x04test";
-        let oid: Oid = "1.3.6.1.6.3.15.1.1.4.0".parse().unwrap();
-        let result = encode_v3_report(42, engine_id, 3, 100, &oid, 7);
-        assert!(result.is_ok(), "encode_v3_report should succeed");
-        assert!(!result.unwrap().is_empty());
-    }
-
-    #[test]
     fn given_encode_v3_report_when_decoded_then_security_params_contain_engine_state() {
         // Verifies: REQ-0093, REQ-0099
         let engine_id = b"\x80\x00\x1f\x88\x04test";
-        let oid: Oid = "1.3.6.1.6.3.15.1.1.4.0".parse().unwrap();
-        let encoded = encode_v3_report(42, engine_id, 3, 100, &oid, 7).unwrap();
+        let counter_oid: Oid = "1.3.6.1.6.3.15.1.1.4.0".parse().unwrap();
+        let encoded = encode_v3_report(42, engine_id, 3, 100, &counter_oid, 7).unwrap();
 
         let decoded: rasn_snmp::v3::Message = rasn::ber::decode(&encoded).unwrap();
         let security_params: USMSecurityParameters =
@@ -1210,6 +1028,36 @@ mod tests {
             100
         );
         assert!(security_params.user_name.is_empty());
+
+        // Verify the inner PDU carried in the ScopedPdu is a Report with the correct content.
+        let ScopedPduData::CleartextPdu(scoped_pdu) = decoded.scoped_data else {
+            panic!("Report must be sent as cleartext (noAuthNoPriv)");
+        };
+        let Pdus::Report(report_pdu) = scoped_pdu.data else {
+            panic!("inner PDU must be a Report");
+        };
+        assert_eq!(
+            report_pdu.0.request_id, 42,
+            "Report request_id must echo the inbound msgID"
+        );
+        assert_eq!(
+            report_pdu.0.variable_bindings.len(),
+            1,
+            "Report must carry exactly one varbind"
+        );
+        let varbind = &report_pdu.0.variable_bindings[0];
+        assert_eq!(
+            varbind.name.as_ref(),
+            counter_oid.as_slice(),
+            "Report varbind OID must match counter_oid"
+        );
+        let RasnVarBindValue::Value(ObjectSyntax::ApplicationWide(ApplicationSyntax::Counter(
+            ref counter,
+        ))) = varbind.value
+        else {
+            panic!("Report varbind value must be a Counter32");
+        };
+        assert_eq!(counter.0, 7u32, "Report varbind must carry counter value 7");
     }
 
     #[test]
