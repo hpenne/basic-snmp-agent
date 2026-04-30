@@ -2,7 +2,6 @@
 //!
 //! This module provides:
 //!
-//! - Clean public PDU types decoupled from the `rasn`/`rasn-snmp` wire types.
 //! - [`decode_pdu`]: BER-decode inbound SNMP PDU bytes into an [`InboundPdu`].
 //! - [`decode_v3_message`]: BER-decode an inbound `SNMPv3` message into a [`V3InboundMessage`].
 //! - [`encode_response`]: BER-encode a [`GetResponse`] for sending.
