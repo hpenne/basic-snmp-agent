@@ -10,11 +10,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-rasn = "0.22"
-rasn-smi = "0.22"
-rasn-snmp = "0.22"
 mio = { version = "1", features = ["net", "os-poll", "os-ext"] }
-rustls = "0.23"
 libc = "0.2"
 hmac = "0.12"
 sha2 = "0.10"
@@ -22,4 +18,7 @@ aes = "0.8"
 cfb-mode = "0.8"
 
 [dev-dependencies]
+rasn = "0.22"
+rasn-smi = "0.22"
+rasn-snmp = "0.22"
 snmpv3-frames = { path = "tests/snmpv3-frames" }

@@ -366,7 +366,7 @@ impl std::error::Error for DecodeError {}
 /// parse-error granularity).
 #[derive(Debug, PartialEq, Eq)]
 pub enum DecodeErrorKind {
-    /// rasn BER decode failure.
+    /// BER decode failure.
     Ber,
     /// PDU type received that is not a recognised inbound type.
     UnsupportedPduType,

@@ -1,0 +1,46 @@
+#:schema ../schema/adr.schema.json
+
+[govctl]
+id = "ADR-0026"
+title = "codec: Hand-written BER codec replaces rasn"
+status = "accepted"
+date = "2026-04-30"
+refs = [
+    "ADR-0005",
+    "ADR-0001",
+]
+
+[content]
+context = """
+The codec module needs an ASN.1/BER library to encode and decode SNMPv3 messages.
+ADR-0005 chose rasn and rasn-snmp for this purpose.
+However, the rasn ecosystem pulls in ~30 transitive dependencies (nom, bitvec, chrono, num-bigint, serde_json, snafu, proc-macro infrastructure) that this project never exercises.
+This transitive dependency count makes security auditing impractical for a network-facing agent.
+The agent uses a narrow subset of BER: SEQUENCE, INTEGER, OCTET STRING, OID, NULL, plus SNMP-specific APPLICATION and CONTEXT tags."""
+decision = """
+Replace rasn with a fully hand-written BER codec in `src/codec/ber/`.
+The codec provides `BerReader` (TLV parser) and `BerWriter` (DER-canonical TLV emitter), plus typed helpers for INTEGER (signed i32, unsigned u32/u64), OCTET STRING, OID, NULL, and SEQUENCE nesting.
+SNMP-specific modules handle PDU encode/decode, VarBind lists, SNMPv3 message envelopes, USM security parameters, and SNMPv2c message wrapping.
+The production codec has zero external ASN.1/BER dependencies.
+rasn is retained as a dev-dependency for cross-implementation verification in unit tests.
+Encoding output is DER-canonical (valid BER per X.690).
+Indefinite-length encodings are rejected as required by SNMP."""
+consequences = """
+The production binary has zero ASN.1/BER transitive dependencies, making auditing trivial.
+The hand-written codec is ~1800 lines across four modules (`mod.rs`, `pdu.rs`, `varbind.rs`, `snmp.rs`) with ~200 unit tests exercising round-trips, boundary values, and malformed input.
+Fuzz testing covers the decode paths.
+Cross-implementation testing against rasn in `#[cfg(test)]` modules confirms wire-format compatibility for DER-canonical inputs.
+The trade-off is that the project now owns correctness risk for BER primitives (integer encoding, OID encoding, length parsing), but this is mitigated by comprehensive testing and fuzzing.
+The original plan called for the RustCrypto `der` crate to handle inner primitives, but the hand-written code turned out complete and well-tested on its own, so `der` was never used."""
+
+[[content.alternatives]]
+text = "Keep rasn: works correctly but pulls ~30 transitive dependencies that are impractical to audit for a network-facing agent"
+status = "rejected"
+
+[[content.alternatives]]
+text = "RustCrypto der crate for inner BER primitives with hand-written outer SNMP structures: planned initially but the hand-written primitives turned out complete at ~700 lines, making der an unnecessary dependency"
+status = "rejected"
+
+[[content.alternatives]]
+text = "snmp-parser / asn1-rs: zero-copy parsing used in Suricata, but analysis-focused — lacks encoding support needed for building responses and traps"
+status = "rejected"

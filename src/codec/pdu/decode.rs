@@ -1,132 +1,104 @@
-use rasn_smi::v2::{ApplicationSyntax, ObjectSyntax, SimpleSyntax};
-use rasn_snmp::v2::{
-    GetBulkRequest as RasnGetBulkRequest, GetNextRequest as RasnGetNextRequest,
-    GetRequest as RasnGetRequest, Pdus, SetRequest as RasnSetRequest, VarBind,
-    VarBindValue as RasnVarBindValue,
-};
-use rasn_snmp::v3::{Message as V3Message, ScopedPduData, USMSecurityParameters};
-
 use super::types::{
     DecodeError, DecodeErrorKind, DecodedScopedPdu, GetBulkRequest, GetNextRequest, GetRequest,
     InboundPdu, SetRequest, UsmSecurityFields, V3InboundMessage, V3ScopedData, Varbind,
-    VarbindValue,
 };
-use crate::codec::{Oid, Value};
-
-/// Converts a `rasn` `ObjectIdentifier` into our `Oid`.
-fn oid_from_rasn(oid: &rasn::types::ObjectIdentifier) -> Result<Oid, DecodeError> {
-    let components: Vec<u32> = oid.as_ref().to_vec();
-    Oid::try_from(components)
-        .map_err(|e| DecodeError::new(DecodeErrorKind::InvalidOid, format!("invalid OID: {e}")))
-}
-
-/// Converts a rasn-snmp wire type `ObjectSyntax` into our public [`Value`].
-// pub(super) rather than private: used by the cross-module round-trip test in mod.rs.
-pub(super) fn value_from_object_syntax(syntax: ObjectSyntax) -> Result<Value, DecodeError> {
-    match syntax {
-        ObjectSyntax::Simple(SimpleSyntax::Integer(raw_integer)) => {
-            let integer_value: i32 = raw_integer
-                .try_into()
-                .map_err(|_| DecodeError::new(DecodeErrorKind::Ber, "Integer32 out of range"))?;
-            Ok(Value::Integer32(integer_value))
-        }
-        ObjectSyntax::Simple(SimpleSyntax::String(bytes)) => Ok(Value::OctetString(bytes.to_vec())),
-        ObjectSyntax::Simple(SimpleSyntax::ObjectId(oid)) => {
-            Ok(Value::ObjectIdentifier(oid_from_rasn(&oid)?))
-        }
-        ObjectSyntax::ApplicationWide(ApplicationSyntax::Address(ip)) => {
-            Ok(Value::IpAddress(*ip.0))
-        }
-        ObjectSyntax::ApplicationWide(ApplicationSyntax::Counter(c)) => Ok(Value::Counter32(c.0)),
-        ObjectSyntax::ApplicationWide(ApplicationSyntax::BigCounter(c)) => {
-            Ok(Value::Counter64(c.0))
-        }
-        ObjectSyntax::ApplicationWide(ApplicationSyntax::Unsigned(u)) => Ok(Value::Gauge32(u.0)),
-        ObjectSyntax::ApplicationWide(ApplicationSyntax::Ticks(t)) => Ok(Value::TimeTicks(t.0)),
-        ObjectSyntax::ApplicationWide(ApplicationSyntax::Arbitrary(o)) => {
-            Ok(Value::Opaque(o.as_ref().to_vec()))
-        }
-    }
-}
-
-/// Converts a rasn-snmp wire `VarBindValue` into our [`VarbindValue`].
-///
-/// `Unspecified` (the Null placeholder used in `GetRequest` varbinds) is mapped
-/// to [`VarbindValue::Unspecified`], which the agent's event loop can
-/// distinguish from the `NoSuchObject` response exception.
-fn varbind_value_from_rasn(value: RasnVarBindValue) -> Result<VarbindValue, DecodeError> {
-    match value {
-        RasnVarBindValue::Value(syntax) => {
-            Ok(VarbindValue::Value(value_from_object_syntax(syntax)?))
-        }
-        RasnVarBindValue::Unspecified => Ok(VarbindValue::Unspecified),
-        RasnVarBindValue::NoSuchObject => Ok(VarbindValue::NoSuchObject),
-        RasnVarBindValue::NoSuchInstance => Ok(VarbindValue::NoSuchInstance),
-        RasnVarBindValue::EndOfMibView => Ok(VarbindValue::EndOfMibView),
-    }
-}
-
-/// Converts a rasn-snmp wire `VarBind` to our [`Varbind`].
-fn varbind_from_rasn(varbind: VarBind) -> Result<Varbind, DecodeError> {
-    Ok(Varbind {
-        oid: oid_from_rasn(&varbind.name)?,
-        value: varbind_value_from_rasn(varbind.value)?,
-    })
-}
-
-/// Converts a list of rasn-snmp `VarBind`s into our `Vec<Varbind>`.
-fn varbinds_from_rasn(list: Vec<VarBind>) -> Result<Vec<Varbind>, DecodeError> {
-    list.into_iter().map(varbind_from_rasn).collect()
-}
+use crate::codec::ber;
+use crate::codec::ber::{TAG_GET_NEXT_REQUEST, TAG_GET_REQUEST, TAG_SET_REQUEST};
 
 // Implements: REQ-0021, REQ-0068
-/// Maps a decoded `Pdus` variant to our `InboundPdu`.
-///
-/// Shared between `decode_pdu` and `decode_v3_message` to avoid duplicating
-/// the match arms for the four inbound PDU types.
-fn pdus_to_inbound_pdu(pdus: Pdus) -> Result<InboundPdu, DecodeError> {
-    match pdus {
-        Pdus::GetRequest(RasnGetRequest(pdu)) => Ok(InboundPdu::GetRequest(GetRequest {
-            request_id: pdu.request_id,
-            varbinds: varbinds_from_rasn(pdu.variable_bindings)?,
-        })),
-        Pdus::GetNextRequest(RasnGetNextRequest(pdu)) => {
+// Converts a [`ber::pdu::DecodedPdu`] into an [`InboundPdu`].
+//
+// Shared between `decode_pdu`, `decode_v3_message`, and `decode_scoped_pdu`
+// to avoid duplicating the match arms for the four inbound PDU types.
+fn decoded_pdu_to_inbound(decoded: ber::pdu::DecodedPdu) -> Result<InboundPdu, DecodeError> {
+    match decoded {
+        ber::pdu::DecodedPdu::Standard {
+            tag: TAG_GET_REQUEST,
+            request_id,
+            error_status: _,
+            error_index: _,
+            raw_varbind_list,
+        } => {
+            let varbinds = decode_varbind_list_to_varbinds(&raw_varbind_list)?;
+            Ok(InboundPdu::GetRequest(GetRequest {
+                request_id,
+                varbinds,
+            }))
+        }
+        ber::pdu::DecodedPdu::Standard {
+            tag: TAG_GET_NEXT_REQUEST,
+            request_id,
+            error_status: _,
+            error_index: _,
+            raw_varbind_list,
+        } => {
+            let varbinds = decode_varbind_list_to_varbinds(&raw_varbind_list)?;
             Ok(InboundPdu::GetNextRequest(GetNextRequest {
-                request_id: pdu.request_id,
-                varbinds: varbinds_from_rasn(pdu.variable_bindings)?,
+                request_id,
+                varbinds,
             }))
         }
-        Pdus::GetBulkRequest(RasnGetBulkRequest(bulk)) => {
-            // RFC 3416 §4.2.3 (REQ-0028): if the wire INTEGER for non-repeaters
-            // or max-repetitions is negative, treat it as zero.  BER INTEGER is
-            // signed, but rasn decodes into u32 by reinterpreting the sign bit,
-            // so a negative value arrives here as a number greater than i32::MAX.
-            let non_repeaters = if bulk.non_repeaters > i32::MAX as u32 {
-                0
-            } else {
-                bulk.non_repeaters
-            };
-            let max_repetitions = if bulk.max_repetitions > i32::MAX as u32 {
-                0
-            } else {
-                bulk.max_repetitions
-            };
-            Ok(InboundPdu::GetBulkRequest(GetBulkRequest {
-                request_id: bulk.request_id,
-                non_repeaters,
-                max_repetitions,
-                varbinds: varbinds_from_rasn(bulk.variable_bindings)?,
+        ber::pdu::DecodedPdu::Standard {
+            tag: TAG_SET_REQUEST,
+            request_id,
+            error_status: _,
+            error_index: _,
+            raw_varbind_list,
+        } => {
+            let varbinds = decode_varbind_list_to_varbinds(&raw_varbind_list)?;
+            Ok(InboundPdu::SetRequest(SetRequest {
+                request_id,
+                varbinds,
             }))
         }
-        Pdus::SetRequest(RasnSetRequest(pdu)) => Ok(InboundPdu::SetRequest(SetRequest {
-            request_id: pdu.request_id,
-            varbinds: varbinds_from_rasn(pdu.variable_bindings)?,
-        })),
-        other => Err(DecodeError::new(
+        ber::pdu::DecodedPdu::Standard { tag, .. } => Err(DecodeError::new(
             DecodeErrorKind::UnsupportedPduType,
-            format!("unexpected outbound PDU type: {other:?}"),
+            format!("unexpected outbound PDU type: tag 0x{tag:02X}"),
         )),
+        ber::pdu::DecodedPdu::Bulk {
+            request_id,
+            non_repeaters,
+            max_repetitions,
+            raw_varbind_list,
+        } => {
+            // RFC 3416 §4.2.3 (REQ-0028): negative wire values are clamped to 0.
+            // The BER integer is i32; u32::try_from fails for negative values, which
+            // we treat as 0 per the RFC.
+            let non_repeaters_u32 = u32::try_from(non_repeaters).unwrap_or(0);
+            let max_repetitions_u32 = u32::try_from(max_repetitions).unwrap_or(0);
+            let varbinds = decode_varbind_list_to_varbinds(&raw_varbind_list)?;
+            Ok(InboundPdu::GetBulkRequest(GetBulkRequest {
+                request_id,
+                non_repeaters: non_repeaters_u32,
+                max_repetitions: max_repetitions_u32,
+                varbinds,
+            }))
+        }
     }
+}
+
+// Decodes a raw `VarBindList` SEQUENCE into a `Vec<Varbind>`.
+// Implements: REQ-0021
+fn decode_varbind_list_to_varbinds(raw_varbind_list: &[u8]) -> Result<Vec<Varbind>, DecodeError> {
+    let decoded_varbinds = ber::varbind::decode_varbind_list(raw_varbind_list).map_err(|e| {
+        DecodeError::new(DecodeErrorKind::Ber, format!("VarBind decode failed: {e}"))
+    })?;
+    decoded_varbinds
+        .into_iter()
+        .map(|decoded| {
+            let value =
+                ber::varbind::decode_varbind_value_to_value(&decoded.value).map_err(|e| {
+                    DecodeError::new(
+                        DecodeErrorKind::Ber,
+                        format!("VarBind value decode failed: {e}"),
+                    )
+                })?;
+            Ok(Varbind {
+                oid: decoded.name,
+                value,
+            })
+        })
+        .collect()
 }
 
 /// BER-decode a raw SNMP PDU byte slice into an [`InboundPdu`].
@@ -152,10 +124,9 @@ fn pdus_to_inbound_pdu(pdus: Pdus) -> Result<InboundPdu, DecodeError> {
 /// }
 /// ```
 pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
-    let pdus: Pdus = rasn::ber::decode(bytes)
+    let decoded = ber::pdu::decode_pdu(bytes)
         .map_err(|e| DecodeError::new(DecodeErrorKind::Ber, format!("BER decode failed: {e}")))?;
-
-    pdus_to_inbound_pdu(pdus)
+    decoded_pdu_to_inbound(decoded)
 }
 
 /// BER-decode an inbound `SNMPv3` message into a [`V3InboundMessage`].
@@ -175,9 +146,6 @@ pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
 /// Returns a [`DecodeError`] if:
 /// - The bytes are not valid BER.
 /// - The message version is not 3 ([`DecodeErrorKind::WrongVersion`]).
-/// - The USM security parameters bytes are not found as a contiguous
-///   substring of the raw message (e.g. constructed BER OCTET STRING).
-/// - The `auth_params` bytes are not found within the USM region.
 /// - The inner PDU type is not a recognised inbound type.
 /// - An OID or value in a varbind cannot be decoded.
 ///
@@ -199,104 +167,66 @@ pub fn decode_pdu(bytes: &[u8]) -> Result<InboundPdu, DecodeError> {
 /// }
 /// ```
 pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeError> {
-    let v3_message: V3Message = rasn::ber::decode(bytes)
-        .map_err(|e| DecodeError::new(DecodeErrorKind::Ber, format!("BER decode failed: {e}")))?;
-
-    // Verify this is indeed version 3; version 1 or 2c messages are not accepted here.
-    let version_number: i64 = v3_message.version.try_into().map_err(|_| {
-        DecodeError::new(
-            DecodeErrorKind::WrongVersion,
-            "version field too large for i64",
-        )
+    // Map version-related errors to WrongVersion; all other BER errors to Ber.
+    let envelope = ber::snmp::decode_v3_envelope(bytes).map_err(|e| {
+        if e.is_wrong_version() {
+            DecodeError::new(DecodeErrorKind::WrongVersion, e.to_string())
+        } else {
+            DecodeError::new(DecodeErrorKind::Ber, format!("BER decode failed: {e}"))
+        }
     })?;
-    if version_number != 3 {
-        return Err(DecodeError::new(
-            DecodeErrorKind::WrongVersion,
-            format!("expected SNMPv3 (version 3), got version {version_number}"),
-        ));
-    }
 
-    let msg_id: i32 =
-        v3_message.global_data.message_id.try_into().map_err(|_| {
-            DecodeError::new(DecodeErrorKind::Ber, "msgID field does not fit in i32")
-        })?;
+    let msg_id = envelope.msg_id;
+    let auth_params_offset = envelope.auth_params_offset;
+    let security_flags = envelope.security_flags;
 
-    // Extract the USM security parameters:
-    // - user_name is echoed in the response (RFC 3414 §8.2.4).
-    // - auth_engine_id is empty for engine-ID discovery probes (REQ-0093).
-    // - auth_engine_boots / auth_engine_time are used for time-window validation (REQ-0098, REQ-0099).
-    // - auth_params carries the received MAC for HMAC verification (REQ-0100).
-    // - priv_params carries the AES salt/IV for authPriv decryption (REQ-0101).
-    // Failure to decode the security parameters is treated as a BER error.
-    let usm_params: USMSecurityParameters =
-        rasn::ber::decode(v3_message.security_parameters.as_ref()).map_err(|e| {
-            DecodeError::new(DecodeErrorKind::Ber, format!("USM decode failed: {e}"))
-        })?;
-    let user_name = usm_params.user_name.to_vec();
-    let auth_params = usm_params.authentication_parameters.to_vec();
-    let priv_params = usm_params.privacy_parameters.to_vec();
-    // Values outside the u32 range are clamped to u32::MAX; they will fail
-    // time-window validation and trigger a Report PDU rather than causing a panic.
-    let usm = UsmSecurityFields {
-        auth_engine_id: usm_params.authoritative_engine_id.to_vec(),
-        auth_engine_boots: u32::try_from(&usm_params.authoritative_engine_boots)
-            .unwrap_or(u32::MAX),
-        auth_engine_time: u32::try_from(&usm_params.authoritative_engine_time).unwrap_or(u32::MAX),
-        security_flags: v3_message.global_data.flags.first().copied().unwrap_or(0),
+    // Destructure the entire UsmFields struct upfront to avoid a partial-move
+    // error: priv_params would be moved into usm_fields while engine_id is also
+    // needed in the Encrypted arm, and user_name is needed in the return value.
+    let ber::snmp::UsmFields {
+        engine_id: usm_engine_id,
+        engine_boots,
+        engine_time,
+        user_name,
+        auth_params,
+        priv_params,
+    } = envelope.usm;
+
+    // Values outside the non-negative i32 range are clamped to u32::MAX; they
+    // will fail time-window validation and trigger a Report PDU rather than panicking.
+    let auth_engine_boots = u32::try_from(engine_boots).unwrap_or(u32::MAX);
+    let auth_engine_time = u32::try_from(engine_time).unwrap_or(u32::MAX);
+    let usm_fields = UsmSecurityFields {
+        auth_engine_id: usm_engine_id.clone(),
+        auth_engine_boots,
+        auth_engine_time,
+        security_flags,
         auth_params,
         priv_params,
     };
 
-    let (engine_id, context_name, scoped_data) = match v3_message.scoped_data {
-        ScopedPduData::CleartextPdu(scoped_pdu) => {
-            let engine_id = scoped_pdu.engine_id.to_vec();
-            let context_name = scoped_pdu.name.to_vec();
-            let pdu = pdus_to_inbound_pdu(scoped_pdu.data)?;
-            (engine_id, context_name, V3ScopedData::Plaintext(pdu))
+    let (engine_id, context_name, scoped_data) = match envelope.scoped_data {
+        ber::snmp::ScopedData::Plaintext {
+            context_engine_id,
+            context_name,
+            raw_pdu,
+        } => {
+            let decoded_pdu = ber::pdu::decode_pdu(&raw_pdu).map_err(|e| {
+                DecodeError::new(DecodeErrorKind::Ber, format!("BER decode failed: {e}"))
+            })?;
+            let pdu = decoded_pdu_to_inbound(decoded_pdu)?;
+            (
+                context_engine_id,
+                context_name,
+                V3ScopedData::Plaintext(pdu),
+            )
         }
-        ScopedPduData::EncryptedPdu(ciphertext) => {
+        ber::snmp::ScopedData::Encrypted(ciphertext) => {
             // contextEngineID is inside the encrypted blob; use authoritativeEngineID from the
             // USM header as a proxy — they identify the same authoritative engine (RFC 3414 §3.1).
             // context_name is empty; it is extracted after AES decryption in dispatch.
-            (
-                usm.auth_engine_id.clone(),
-                vec![],
-                V3ScopedData::Encrypted(ciphertext.to_vec()),
-            )
+            (usm_engine_id, vec![], V3ScopedData::Encrypted(ciphertext))
         }
-    };
-
-    // Find auth_params_offset using a two-step restricted search.
-    // Step 1: locate the USM security parameters bytes within raw_message.
-    //   (These ~50+ bytes include the engine_id which is agent-controlled,
-    //   making a false match in the ScopedPDU region astronomically unlikely.)
-    // Step 2: find auth_params within that restricted region.
-    //   (Only attacker-controlled bytes within USM are user_name — validated to
-    //   match the configured user — and auth_params itself.)
-    // This avoids false matches against attacker-controlled varbind data in the ScopedPDU.
-    let usm_raw = v3_message.security_parameters.as_ref();
-    let auth_params_offset = if usm.auth_params.is_empty() {
-        None
-    } else {
-        let usm_pos = bytes
-            .windows(usm_raw.len())
-            .position(|w| w == usm_raw)
-            .ok_or_else(|| {
-                DecodeError::new(
-                    DecodeErrorKind::Ber,
-                    "USM security parameters not found as contiguous bytes in raw message",
-                )
-            })?;
-        let auth_pos = bytes[usm_pos..usm_pos + usm_raw.len()]
-            .windows(usm.auth_params.len())
-            .position(|w| w == usm.auth_params.as_slice())
-            .ok_or_else(|| {
-                DecodeError::new(
-                    DecodeErrorKind::Ber,
-                    "auth_params not found within USM security parameters region",
-                )
-            })?;
-        Some(usm_pos + auth_pos)
     };
 
     Ok(V3InboundMessage {
@@ -305,7 +235,7 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
         context_name,
         user_name,
         scoped_data,
-        usm,
+        usm: usm_fields,
         raw_message: bytes,
         auth_params_offset,
     })
@@ -323,20 +253,68 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
 /// # Requirements
 /// Implements: REQ-0101
 pub fn decode_scoped_pdu(bytes: &[u8]) -> Result<DecodedScopedPdu, DecodeError> {
-    let scoped_pdu: rasn_snmp::v3::ScopedPdu = rasn::ber::decode(bytes).map_err(|e| {
+    let scoped = ber::snmp::decode_scoped_pdu(bytes).map_err(|e| {
         DecodeError::new(
             DecodeErrorKind::Ber,
             format!("ScopedPDU decode failed: {e}"),
         )
     })?;
-    let context_engine_id = scoped_pdu.engine_id.to_vec();
-    let context_name = scoped_pdu.name.to_vec();
-    let pdu = pdus_to_inbound_pdu(scoped_pdu.data)?;
+    let decoded = ber::pdu::decode_pdu(&scoped.raw_pdu)
+        .map_err(|e| DecodeError::new(DecodeErrorKind::Ber, format!("PDU decode failed: {e}")))?;
+    let pdu = decoded_pdu_to_inbound(decoded)?;
     Ok(DecodedScopedPdu {
-        context_engine_id,
-        context_name,
+        context_engine_id: scoped.context_engine_id,
+        context_name: scoped.context_name,
         pdu,
     })
+}
+
+#[cfg(test)]
+pub(super) fn value_from_object_syntax(
+    syntax: rasn_smi::v2::ObjectSyntax,
+) -> Result<crate::codec::Value, DecodeError> {
+    use rasn_smi::v2::{ApplicationSyntax, SimpleSyntax};
+
+    fn oid_from_rasn(
+        oid: &rasn::types::ObjectIdentifier,
+    ) -> Result<crate::codec::Oid, DecodeError> {
+        let components: Vec<u32> = oid.as_ref().to_vec();
+        crate::codec::Oid::try_from(components)
+            .map_err(|e| DecodeError::new(DecodeErrorKind::InvalidOid, format!("invalid OID: {e}")))
+    }
+
+    match syntax {
+        rasn_smi::v2::ObjectSyntax::Simple(SimpleSyntax::Integer(raw_integer)) => {
+            let integer_value: i32 = raw_integer
+                .try_into()
+                .map_err(|_| DecodeError::new(DecodeErrorKind::Ber, "Integer32 out of range"))?;
+            Ok(crate::codec::Value::Integer32(integer_value))
+        }
+        rasn_smi::v2::ObjectSyntax::Simple(SimpleSyntax::String(bytes)) => {
+            Ok(crate::codec::Value::OctetString(bytes.to_vec()))
+        }
+        rasn_smi::v2::ObjectSyntax::Simple(SimpleSyntax::ObjectId(oid)) => {
+            Ok(crate::codec::Value::ObjectIdentifier(oid_from_rasn(&oid)?))
+        }
+        rasn_smi::v2::ObjectSyntax::ApplicationWide(ApplicationSyntax::Address(ip)) => {
+            Ok(crate::codec::Value::IpAddress(*ip.0))
+        }
+        rasn_smi::v2::ObjectSyntax::ApplicationWide(ApplicationSyntax::Counter(c)) => {
+            Ok(crate::codec::Value::Counter32(c.0))
+        }
+        rasn_smi::v2::ObjectSyntax::ApplicationWide(ApplicationSyntax::BigCounter(c)) => {
+            Ok(crate::codec::Value::Counter64(c.0))
+        }
+        rasn_smi::v2::ObjectSyntax::ApplicationWide(ApplicationSyntax::Unsigned(u)) => {
+            Ok(crate::codec::Value::Gauge32(u.0))
+        }
+        rasn_smi::v2::ObjectSyntax::ApplicationWide(ApplicationSyntax::Ticks(t)) => {
+            Ok(crate::codec::Value::TimeTicks(t.0))
+        }
+        rasn_smi::v2::ObjectSyntax::ApplicationWide(ApplicationSyntax::Arbitrary(o)) => {
+            Ok(crate::codec::Value::Opaque(o.as_ref().to_vec()))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -347,6 +325,7 @@ mod tests {
 
     #[test]
     fn decode_pdu_get_request() {
+        // Verifies: REQ-0021
         use rasn_snmp::v2::{GetRequest as RasnGetRequest, Pdu, VarBind, VarBindValue};
 
         // Encode a GetRequest using rasn-snmp directly, then decode via our function.
@@ -380,6 +359,7 @@ mod tests {
 
     #[test]
     fn decode_pdu_get_next_request() {
+        // Verifies: REQ-0021
         use rasn_snmp::v2::{GetNextRequest as RasnGetNextRequest, Pdu, VarBind, VarBindValue};
 
         let oid = "1.3.6.1.2.1.1.1.0".parse::<Oid>().unwrap();
@@ -398,11 +378,20 @@ mod tests {
         let encoded_response = rasn::ber::encode(&req).unwrap();
         let pdu = decode_pdu(&encoded_response).unwrap();
 
-        assert!(matches!(pdu, InboundPdu::GetNextRequest(_)));
+        match pdu {
+            InboundPdu::GetNextRequest(req) => {
+                assert_eq!(req.request_id, 7);
+                assert_eq!(req.varbinds.len(), 1);
+                assert_eq!(req.varbinds[0].oid, oid);
+                assert_eq!(req.varbinds[0].value, VarbindValue::Unspecified);
+            }
+            other => panic!("expected GetNextRequest, got {other:?}"),
+        }
     }
 
     #[test]
     fn decode_pdu_get_bulk_request() {
+        // Verifies: REQ-0021
         use rasn_snmp::v2::{BulkPdu, GetBulkRequest as RasnGetBulkRequest, VarBind, VarBindValue};
 
         let oid = "1.3.6.1.2.1.1.1.0".parse::<Oid>().unwrap();
@@ -432,6 +421,7 @@ mod tests {
 
     #[test]
     fn decode_pdu_set_request() {
+        // Verifies: REQ-0021
         use rasn_smi::v2::{ObjectSyntax, SimpleSyntax};
         use rasn_snmp::v2::{Pdu, SetRequest as RasnSetRequest, VarBind, VarBindValue};
 
@@ -467,6 +457,7 @@ mod tests {
 
     #[test]
     fn decode_pdu_invalid_bytes_returns_error() {
+        // Verifies: REQ-0021
         let decode_result = decode_pdu(&[0xFF, 0xFF, 0xFF]);
         assert!(decode_result.is_err());
         assert_eq!(decode_result.unwrap_err().kind(), &DecodeErrorKind::Ber);
@@ -474,6 +465,7 @@ mod tests {
 
     #[test]
     fn decode_pdu_rejects_outbound_pdu_type() {
+        // Verifies: REQ-0021
         use rasn_snmp::v2::{Pdu as RasnPdu, Response};
 
         // Encode a Response (outbound), expect decode_pdu to reject it.
@@ -501,6 +493,7 @@ mod tests {
         request_id: i32,
         oid_arcs: &[u32],
     ) -> Vec<u8> {
+        use rasn_snmp::v2::Pdus;
         use rasn_snmp::v2::{GetRequest as RasnGetRequest2, Pdu, VarBind, VarBindValue};
         use rasn_snmp::v3::ScopedPdu;
         use std::borrow::Cow;
@@ -617,7 +610,10 @@ mod tests {
     fn given_wrong_version_message_when_decode_v3_then_wrong_version_error() {
         // Verifies: REQ-0073
         // Build a structurally valid V3Message but with version=1 (SNMPv1).
-        // rasn decodes it successfully at the BER level, then our version check fires.
+        // The BER codec rejects it with an error message containing "version".
+        use rasn_snmp::v2::{GetRequest as RasnGetRequest2, Pdu, Pdus};
+        use rasn_snmp::v3::{Message as V3Message, ScopedPduData, USMSecurityParameters};
+
         let usm_params = USMSecurityParameters {
             authoritative_engine_id: rasn::types::OctetString::from(vec![]),
             authoritative_engine_boots: 0.into(),
@@ -630,7 +626,7 @@ mod tests {
         let scoped_pdu = rasn_snmp::v3::ScopedPdu {
             engine_id: rasn::types::OctetString::from(vec![]),
             name: rasn::types::OctetString::from(vec![]),
-            data: Pdus::GetRequest(RasnGetRequest(rasn_snmp::v2::Pdu {
+            data: Pdus::GetRequest(RasnGetRequest2(Pdu {
                 request_id: 1,
                 error_status: 0,
                 error_index: 0,
@@ -663,7 +659,7 @@ mod tests {
     fn given_encrypted_pdu_when_decode_v3_then_ciphertext_preserved() {
         // Verifies: REQ-0101
         let ciphertext = b"fake-encrypted-payload".to_vec();
-        let usm_params = USMSecurityParameters {
+        let usm_params = rasn_snmp::v3::USMSecurityParameters {
             authoritative_engine_id: rasn::types::OctetString::from(vec![]),
             authoritative_engine_boots: 0.into(),
             authoritative_engine_time: 0.into(),
@@ -672,7 +668,7 @@ mod tests {
             privacy_parameters: rasn::types::OctetString::from(vec![]),
         };
         let security_params = rasn::ber::encode(&usm_params).unwrap();
-        let v3_msg = V3Message {
+        let v3_msg = rasn_snmp::v3::Message {
             version: 3.into(),
             global_data: rasn_snmp::v3::HeaderData {
                 message_id: 1.into(),
@@ -681,9 +677,9 @@ mod tests {
                 security_model: 3.into(),
             },
             security_parameters: security_params.into(),
-            scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(
-                ciphertext.clone(),
-            )),
+            scoped_data: rasn_snmp::v3::ScopedPduData::EncryptedPdu(
+                rasn::types::OctetString::from(ciphertext.clone()),
+            ),
         };
         let encoded = rasn::ber::encode(&v3_msg).unwrap();
 
@@ -715,7 +711,7 @@ mod tests {
     fn given_authpriv_message_when_decode_v3_then_priv_params_preserved() {
         // Verifies: REQ-0101
         let expected_priv_params: Vec<u8> = vec![0xABu8; 8];
-        let usm_params = USMSecurityParameters {
+        let usm_params = rasn_snmp::v3::USMSecurityParameters {
             authoritative_engine_id: rasn::types::OctetString::from(vec![]),
             authoritative_engine_boots: 0.into(),
             authoritative_engine_time: 0.into(),
@@ -724,7 +720,7 @@ mod tests {
             privacy_parameters: rasn::types::OctetString::from(expected_priv_params.clone()),
         };
         let security_params = rasn::ber::encode(&usm_params).unwrap();
-        let v3_msg = V3Message {
+        let v3_msg = rasn_snmp::v3::Message {
             version: 3.into(),
             global_data: rasn_snmp::v3::HeaderData {
                 message_id: 2.into(),
@@ -733,9 +729,9 @@ mod tests {
                 security_model: 3.into(),
             },
             security_parameters: security_params.into(),
-            scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(
-                b"some-ciphertext".to_vec(),
-            )),
+            scoped_data: rasn_snmp::v3::ScopedPduData::EncryptedPdu(
+                rasn::types::OctetString::from(b"some-ciphertext".to_vec()),
+            ),
         };
         let encoded = rasn::ber::encode(&v3_msg).unwrap();
 
@@ -776,27 +772,61 @@ mod tests {
     }
 
     #[test]
-    fn given_getbulk_with_out_of_range_max_repetitions_when_decode_v3_then_treated_as_zero() {
+    fn given_getbulk_with_out_of_range_max_repetitions_when_decode_v3_then_ber_error() {
         // Verifies: REQ-0028
-        // max_repetitions values outside the SNMP protocol range (0..2147483647
-        // per RFC 3416 §4.2.3) must be treated as zero.  Such values arise from
-        // negative BER INTEGER wire values whose sign bit rasn reinterprets as a
-        // magnitude bit, yielding a u32 value greater than i32::MAX.
+        // max_repetitions values outside the i32 range (i32::MAX+1 = 2147483648)
+        // require 5 bytes of BER INTEGER representation, which read_integer() rejects
+        // as it cannot fit in i32.
         let encoded = snmpv3_frames::encode_get_bulk_request(
             b"\x80\x00\x1f\x88\x04test",
             b"",
             5,
             42,
             0,
-            i32::MAX as u32 + 1,
+            u32::try_from(i32::MAX).expect("i32::MAX fits in u32") + 1,
             &[1, 3, 6, 1, 2, 1, 1, 1, 0],
         );
-        let result = decode_v3_message(&encoded).expect("message must decode");
+        let result = decode_v3_message(&encoded);
+        assert!(
+            result.is_err(),
+            "out-of-range max_repetitions must fail at BER level"
+        );
+        assert_eq!(result.unwrap_err().kind(), &DecodeErrorKind::Ber);
+    }
+
+    #[test]
+    fn given_getbulk_with_negative_max_repetitions_when_decode_v3_then_clamped_to_zero() {
+        // Verifies: REQ-0028
+        // Negative wire values for max_repetitions must be clamped to 0 per RFC 3416 §4.2.3.
+        // We encode the PDU directly with our BER codec to pass a negative i32.
+        let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        let null_value = ber::varbind::encode_null_value();
+        let varbind_bytes = ber::varbind::encode_varbind(&oid, &null_value);
+        let varbind_list = ber::varbind::encode_varbind_list(&[&varbind_bytes]);
+        let bulk_pdu = ber::pdu::encode_bulk_pdu(42, 0, -1, &varbind_list);
+        let scoped_pdu = ber::snmp::encode_scoped_pdu(b"\x80\x00\x1f\x88\x04test", b"", &bulk_pdu);
+        let (frame, _) = ber::snmp::encode_v3_message(
+            5,
+            65535,
+            0x04,
+            3,
+            b"\x80\x00\x1f\x88\x04test",
+            0,
+            0,
+            b"",
+            &[],
+            &[],
+            &scoped_pdu,
+            false,
+        )
+        .unwrap();
+
+        let result = decode_v3_message(&frame).unwrap();
         match result.scoped_data {
             V3ScopedData::Plaintext(InboundPdu::GetBulkRequest(bulk)) => {
                 assert_eq!(
                     bulk.max_repetitions, 0,
-                    "out-of-range max_repetitions must be clamped to 0"
+                    "negative max_repetitions must be clamped to 0"
                 );
             }
             other => panic!("expected Plaintext(GetBulkRequest), got {other:?}"),
@@ -814,7 +844,7 @@ mod tests {
             5,
             42,
             0,
-            i32::MAX as u32,
+            u32::try_from(i32::MAX).expect("i32::MAX fits in u32"),
             &[1, 3, 6, 1, 2, 1, 1, 1, 0],
         );
         let result = decode_v3_message(&encoded).expect("message must decode");
@@ -822,7 +852,7 @@ mod tests {
             V3ScopedData::Plaintext(InboundPdu::GetBulkRequest(bulk)) => {
                 assert_eq!(
                     bulk.max_repetitions,
-                    i32::MAX as u32,
+                    u32::try_from(i32::MAX).expect("i32::MAX fits in u32"),
                     "max_repetitions at i32::MAX must not be clamped"
                 );
             }
@@ -831,26 +861,58 @@ mod tests {
     }
 
     #[test]
-    fn given_getbulk_with_out_of_range_non_repeaters_when_decode_v3_then_treated_as_zero() {
+    fn given_getbulk_with_out_of_range_non_repeaters_when_decode_v3_then_ber_error() {
         // Verifies: REQ-0028
-        // non_repeaters values outside the SNMP protocol range (0..2147483647
-        // per RFC 3416 §4.2.3) must be treated as zero — same clamping as
-        // max_repetitions.
+        // non_repeaters values outside the i32 range fail at the BER parse level.
         let encoded = snmpv3_frames::encode_get_bulk_request(
             b"\x80\x00\x1f\x88\x04test",
             b"",
             5,
             42,
-            i32::MAX as u32 + 1,
+            u32::try_from(i32::MAX).expect("i32::MAX fits in u32") + 1,
             0,
             &[1, 3, 6, 1, 2, 1, 1, 1, 0],
         );
-        let result = decode_v3_message(&encoded).expect("message must decode");
+        let result = decode_v3_message(&encoded);
+        assert!(
+            result.is_err(),
+            "out-of-range non_repeaters must fail at BER level"
+        );
+        assert_eq!(result.unwrap_err().kind(), &DecodeErrorKind::Ber);
+    }
+
+    #[test]
+    fn given_getbulk_with_negative_non_repeaters_when_decode_v3_then_clamped_to_zero() {
+        // Verifies: REQ-0028
+        // Negative wire values for non_repeaters must be clamped to 0 per RFC 3416 §4.2.3.
+        let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        let null_value = ber::varbind::encode_null_value();
+        let varbind_bytes = ber::varbind::encode_varbind(&oid, &null_value);
+        let varbind_list = ber::varbind::encode_varbind_list(&[&varbind_bytes]);
+        let bulk_pdu = ber::pdu::encode_bulk_pdu(42, -1, 10, &varbind_list);
+        let scoped_pdu = ber::snmp::encode_scoped_pdu(b"\x80\x00\x1f\x88\x04test", b"", &bulk_pdu);
+        let (frame, _) = ber::snmp::encode_v3_message(
+            5,
+            65535,
+            0x04,
+            3,
+            b"\x80\x00\x1f\x88\x04test",
+            0,
+            0,
+            b"",
+            &[],
+            &[],
+            &scoped_pdu,
+            false,
+        )
+        .unwrap();
+
+        let result = decode_v3_message(&frame).unwrap();
         match result.scoped_data {
             V3ScopedData::Plaintext(InboundPdu::GetBulkRequest(bulk)) => {
                 assert_eq!(
                     bulk.non_repeaters, 0,
-                    "out-of-range non_repeaters must be clamped to 0"
+                    "negative non_repeaters must be clamped to 0"
                 );
             }
             other => panic!("expected Plaintext(GetBulkRequest), got {other:?}"),
@@ -867,7 +929,7 @@ mod tests {
             b"",
             5,
             42,
-            i32::MAX as u32,
+            u32::try_from(i32::MAX).expect("i32::MAX fits in u32"),
             0,
             &[1, 3, 6, 1, 2, 1, 1, 1, 0],
         );
@@ -876,7 +938,7 @@ mod tests {
             V3ScopedData::Plaintext(InboundPdu::GetBulkRequest(bulk)) => {
                 assert_eq!(
                     bulk.non_repeaters,
-                    i32::MAX as u32,
+                    u32::try_from(i32::MAX).expect("i32::MAX fits in u32"),
                     "non_repeaters at i32::MAX must not be clamped"
                 );
             }
@@ -934,7 +996,9 @@ mod tests {
         use rasn_snmp::v2::{
             GetRequest as RasnGetRequest2, Pdu, Pdus as V2Pdus, VarBind, VarBindValue,
         };
-        use rasn_snmp::v3::{HeaderData, ScopedPdu, ScopedPduData as V3ScopedPduData};
+        use rasn_snmp::v3::{
+            HeaderData, ScopedPdu, ScopedPduData as V3ScopedPduData, USMSecurityParameters,
+        };
         use std::borrow::Cow;
 
         let engine_id = b"\x80\x00\x1f\x88\x04test";
@@ -966,7 +1030,7 @@ mod tests {
             name: vec![].into(),
             data: V2Pdus::GetRequest(get_request),
         };
-        let v3_msg = V3Message {
+        let v3_msg = rasn_snmp::v3::Message {
             version: 3.into(),
             global_data: HeaderData {
                 message_id: 42.into(),
@@ -1013,7 +1077,9 @@ mod tests {
         use rasn_snmp::v2::{
             GetRequest as RasnGetRequest2, Pdu, Pdus as V2Pdus, VarBind, VarBindValue,
         };
-        use rasn_snmp::v3::{HeaderData, ScopedPdu, ScopedPduData as V3ScopedPduData};
+        use rasn_snmp::v3::{
+            HeaderData, ScopedPdu, ScopedPduData as V3ScopedPduData, USMSecurityParameters,
+        };
         use std::borrow::Cow;
 
         let engine_id = b"\x80\x00\x1f\x88\x04test";
@@ -1045,7 +1111,7 @@ mod tests {
             name: vec![].into(),
             data: V2Pdus::GetRequest(get_request),
         };
-        let v3_msg = V3Message {
+        let v3_msg = rasn_snmp::v3::Message {
             version: 3.into(),
             global_data: HeaderData {
                 message_id: 42.into(),
@@ -1085,11 +1151,156 @@ mod tests {
         );
     }
 
+    #[test]
+    fn given_constructed_security_params_octet_string_when_decode_v3_then_ber_error() {
+        // Verifies: REQ-0100
+        // BER permits constructed encoding for OCTET STRING fields. When the
+        // security_parameters OCTET STRING uses constructed form, the new BER
+        // codec's read_octet_string() rejects it at the BER parse level.
+        use rasn_snmp::v2::{
+            GetRequest as RasnGetRequest2, Pdu, Pdus as V2Pdus, VarBind, VarBindValue,
+        };
+        use rasn_snmp::v3::{
+            HeaderData, ScopedPdu, ScopedPduData as V3ScopedPduData, USMSecurityParameters,
+        };
+        use std::borrow::Cow;
+
+        let engine_id = b"\x80\x00\x1f\x88\x04";
+        let auth_params: Vec<u8> = vec![0xab; 12];
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: engine_id.to_vec().into(),
+            authoritative_engine_boots: 0.into(),
+            authoritative_engine_time: 0.into(),
+            user_name: rasn::types::OctetString::from(b"alice".to_vec()),
+            authentication_parameters: rasn::types::OctetString::from(auth_params),
+            privacy_parameters: rasn::types::OctetString::from(vec![]),
+        };
+        let usm_bytes = rasn::ber::encode(&usm_params).unwrap();
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(vec![
+            1, 3, 6, 1, 2, 1, 1, 1, 0,
+        ]));
+        let get_request = RasnGetRequest2(Pdu {
+            request_id: 1,
+            error_status: 0,
+            error_index: 0,
+            variable_bindings: vec![VarBind {
+                name: rasn_oid,
+                value: VarBindValue::Unspecified,
+            }],
+        });
+        let scoped_pdu = ScopedPdu {
+            engine_id: engine_id.to_vec().into(),
+            name: vec![].into(),
+            data: V2Pdus::GetRequest(get_request),
+        };
+        let v3_msg = rasn_snmp::v3::Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 1.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x05u8]),
+                security_model: 3.into(),
+            },
+            security_parameters: usm_bytes.clone().into(),
+            scoped_data: V3ScopedPduData::CleartextPdu(scoped_pdu),
+        };
+        let valid_encoded = rasn::ber::encode(&v3_msg).unwrap();
+        assert!(
+            decode_v3_message(&valid_encoded).is_ok(),
+            "original message with primitive security_params must decode successfully"
+        );
+
+        let tampered = make_security_params_constructed_form(&valid_encoded, &usm_bytes);
+
+        let result = decode_v3_message(&tampered);
+
+        assert!(
+            result.is_err(),
+            "constructed security_params OCTET STRING must yield an error"
+        );
+        assert_eq!(
+            result.unwrap_err().kind(),
+            &DecodeErrorKind::Ber,
+            "constructed security_params OCTET STRING must yield a Ber error"
+        );
+    }
+
+    #[test]
+    fn given_constructed_auth_params_in_usm_when_decode_v3_then_ber_error() {
+        // Verifies: REQ-0100
+        // When the authentication_parameters OCTET STRING within the USM uses BER
+        // constructed encoding, the new BER codec's read_octet_string() rejects it
+        // at the BER parse level (constructed OCTET STRINGs are not permitted).
+        use rasn_snmp::v2::{
+            GetRequest as RasnGetRequest2, Pdu, Pdus as V2Pdus, VarBind, VarBindValue,
+        };
+        use rasn_snmp::v3::{HeaderData, ScopedPdu, ScopedPduData as V3ScopedPduData};
+        use std::borrow::Cow;
+
+        let engine_id = b"\x80\x00\x1f\x88\x04";
+
+        // Hand-crafted USM bytes: authentication_parameters (tag 0x24) uses constructed
+        // encoding split into two 6-byte chunks. The new BER codec rejects tag 0x24
+        // because read_octet_string() expects tag 0x04 (primitive OCTET STRING).
+        let usm_with_constructed_auth_params: Vec<u8> = vec![
+            0x30, 0x28, // SEQUENCE, length=40
+            0x04, 0x05, 0x80, 0x00, 0x1f, 0x88, 0x04, // engine_id (5 bytes)
+            0x02, 0x01, 0x00, // boots=0
+            0x02, 0x01, 0x00, // time=0
+            0x04, 0x05, 0x61, 0x6c, 0x69, 0x63, 0x65, // user_name="alice"
+            0x24, 0x10, // constructed OCTET STRING, length=16
+            0x04, 0x06, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, // chunk 1: 6 bytes
+            0x04, 0x06, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, // chunk 2: 6 bytes
+            0x04, 0x00, // priv_params (empty)
+        ];
+
+        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(vec![
+            1, 3, 6, 1, 2, 1, 1, 1, 0,
+        ]));
+        let get_request = RasnGetRequest2(Pdu {
+            request_id: 1,
+            error_status: 0,
+            error_index: 0,
+            variable_bindings: vec![VarBind {
+                name: rasn_oid,
+                value: VarBindValue::Unspecified,
+            }],
+        });
+        let scoped_pdu = ScopedPdu {
+            engine_id: engine_id.to_vec().into(),
+            name: vec![].into(),
+            data: V2Pdus::GetRequest(get_request),
+        };
+        let v3_msg = rasn_snmp::v3::Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 1.into(),
+                max_size: 65535.into(),
+                flags: rasn::types::OctetString::from(vec![0x05u8]),
+                security_model: 3.into(),
+            },
+            security_parameters: usm_with_constructed_auth_params.into(),
+            scoped_data: V3ScopedPduData::CleartextPdu(scoped_pdu),
+        };
+        let encoded = rasn::ber::encode(&v3_msg).unwrap();
+
+        let result = decode_v3_message(&encoded);
+
+        assert!(
+            result.is_err(),
+            "constructed auth_params OCTET STRING in USM must yield an error"
+        );
+        assert_eq!(
+            result.unwrap_err().kind(),
+            &DecodeErrorKind::Ber,
+            "constructed auth_params OCTET STRING must yield a Ber error"
+        );
+    }
+
     // Converts the security_parameters primitive OCTET STRING in an encoded V3 message
     // to BER constructed form by splitting the USM content into two equal chunks.
-    // Constructed-form OCTET STRINGs are valid in BER but not DER; rasn's BER decoder
-    // reassembles the fragments, but the reassembled bytes no longer appear contiguously
-    // in the raw message, breaking the window-search in decode_v3_message.
+    // Constructed-form OCTET STRINGs are valid in BER but not DER; the new hand-written
+    // BER codec rejects them immediately at the read_octet_string() level.
     //
     // Preconditions: the USM bytes appear exactly once as a contiguous substring of
     // encoded; the preceding TLV uses 1-byte length encoding; the outer SEQUENCE length
@@ -1141,153 +1352,5 @@ mod tests {
         modified.extend_from_slice(&constructed);
         modified.extend_from_slice(&encoded[sp_end..]);
         modified
-    }
-
-    #[test]
-    fn given_constructed_security_params_octet_string_when_decode_v3_then_ber_error() {
-        // Verifies: REQ-0100
-        // BER permits constructed encoding for OCTET STRING fields. When the
-        // security_parameters OCTET STRING uses constructed form, rasn reassembles
-        // the USM content from its two fragment chunks, but the reassembled byte
-        // sequence does not appear contiguously in the raw message. The window
-        // search used to locate the USM region therefore fails.
-        use rasn_snmp::v2::{
-            GetRequest as RasnGetRequest2, Pdu, Pdus as V2Pdus, VarBind, VarBindValue,
-        };
-        use rasn_snmp::v3::{HeaderData, ScopedPdu, ScopedPduData as V3ScopedPduData};
-        use std::borrow::Cow;
-
-        let engine_id = b"\x80\x00\x1f\x88\x04";
-        let auth_params: Vec<u8> = vec![0xab; 12];
-        let usm_params = USMSecurityParameters {
-            authoritative_engine_id: engine_id.to_vec().into(),
-            authoritative_engine_boots: 0.into(),
-            authoritative_engine_time: 0.into(),
-            user_name: rasn::types::OctetString::from(b"alice".to_vec()),
-            authentication_parameters: rasn::types::OctetString::from(auth_params),
-            privacy_parameters: rasn::types::OctetString::from(vec![]),
-        };
-        let usm_bytes = rasn::ber::encode(&usm_params).unwrap();
-        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(vec![
-            1, 3, 6, 1, 2, 1, 1, 1, 0,
-        ]));
-        let get_request = RasnGetRequest2(Pdu {
-            request_id: 1,
-            error_status: 0,
-            error_index: 0,
-            variable_bindings: vec![VarBind {
-                name: rasn_oid,
-                value: VarBindValue::Unspecified,
-            }],
-        });
-        let scoped_pdu = ScopedPdu {
-            engine_id: engine_id.to_vec().into(),
-            name: vec![].into(),
-            data: V2Pdus::GetRequest(get_request),
-        };
-        let v3_msg = V3Message {
-            version: 3.into(),
-            global_data: HeaderData {
-                message_id: 1.into(),
-                max_size: 65535.into(),
-                flags: rasn::types::OctetString::from(vec![0x05u8]),
-                security_model: 3.into(),
-            },
-            security_parameters: usm_bytes.clone().into(),
-            scoped_data: V3ScopedPduData::CleartextPdu(scoped_pdu),
-        };
-        let valid_encoded = rasn::ber::encode(&v3_msg).unwrap();
-        assert!(
-            decode_v3_message(&valid_encoded).is_ok(),
-            "original message with primitive security_params must decode successfully"
-        );
-
-        let tampered = make_security_params_constructed_form(&valid_encoded, &usm_bytes);
-
-        let result = decode_v3_message(&tampered);
-
-        assert!(
-            result.is_err(),
-            "constructed security_params OCTET STRING must yield an error"
-        );
-        assert_eq!(
-            result.unwrap_err().kind(),
-            &DecodeErrorKind::Ber,
-            "constructed security_params OCTET STRING must yield a Ber error"
-        );
-    }
-
-    #[test]
-    fn given_constructed_auth_params_in_usm_when_decode_v3_then_ber_error() {
-        // Verifies: REQ-0100
-        // When the authentication_parameters OCTET STRING within the USM uses BER
-        // constructed encoding, rasn reassembles the content from two 6-byte chunks
-        // into 12 consecutive 0xAB bytes. Those 12 consecutive bytes do not appear
-        // contiguously in the raw USM region (the chunks are separated by an inner
-        // TLV header), so the auth_params window search fails.
-        use rasn_snmp::v2::{
-            GetRequest as RasnGetRequest2, Pdu, Pdus as V2Pdus, VarBind, VarBindValue,
-        };
-        use rasn_snmp::v3::{HeaderData, ScopedPdu, ScopedPduData as V3ScopedPduData};
-        use std::borrow::Cow;
-
-        let engine_id = b"\x80\x00\x1f\x88\x04";
-
-        // Hand-crafted USM bytes: authentication_parameters (tag 0x24) uses constructed
-        // encoding split into two 6-byte chunks. rasn reassembles them into 12
-        // consecutive 0xAB bytes, but the raw region only contains runs of 6.
-        let usm_with_constructed_auth_params: Vec<u8> = vec![
-            0x30, 0x28, // SEQUENCE, length=40
-            0x04, 0x05, 0x80, 0x00, 0x1f, 0x88, 0x04, // engine_id (5 bytes)
-            0x02, 0x01, 0x00, // boots=0
-            0x02, 0x01, 0x00, // time=0
-            0x04, 0x05, 0x61, 0x6c, 0x69, 0x63, 0x65, // user_name="alice"
-            0x24, 0x10, // constructed OCTET STRING, length=16
-            0x04, 0x06, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, // chunk 1: 6 bytes
-            0x04, 0x06, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, // chunk 2: 6 bytes
-            0x04, 0x00, // priv_params (empty)
-        ];
-
-        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(vec![
-            1, 3, 6, 1, 2, 1, 1, 1, 0,
-        ]));
-        let get_request = RasnGetRequest2(Pdu {
-            request_id: 1,
-            error_status: 0,
-            error_index: 0,
-            variable_bindings: vec![VarBind {
-                name: rasn_oid,
-                value: VarBindValue::Unspecified,
-            }],
-        });
-        let scoped_pdu = ScopedPdu {
-            engine_id: engine_id.to_vec().into(),
-            name: vec![].into(),
-            data: V2Pdus::GetRequest(get_request),
-        };
-        let v3_msg = V3Message {
-            version: 3.into(),
-            global_data: HeaderData {
-                message_id: 1.into(),
-                max_size: 65535.into(),
-                flags: rasn::types::OctetString::from(vec![0x05u8]),
-                security_model: 3.into(),
-            },
-            security_parameters: usm_with_constructed_auth_params.into(),
-            scoped_data: V3ScopedPduData::CleartextPdu(scoped_pdu),
-        };
-        let encoded = rasn::ber::encode(&v3_msg).unwrap();
-
-        let result = decode_v3_message(&encoded);
-
-        assert!(
-            result.is_err(),
-            "constructed auth_params OCTET STRING in USM must yield an error"
-        );
-        assert_eq!(
-            result.unwrap_err().kind(),
-            &DecodeErrorKind::Ber,
-            "constructed auth_params OCTET STRING must yield a Ber error"
-        );
     }
 }

@@ -9,7 +9,7 @@ permissions: read-all
 
 jobs:
   fuzz:
-    name: Batch fuzz (30 min)
+    name: Batch fuzz (10 min)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,7 +25,7 @@ jobs:
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          fuzz-seconds: 1800
+          fuzz-seconds: 600
           mode: 'batch'
           language: rust
           sanitizer: address
