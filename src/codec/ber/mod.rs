@@ -104,13 +104,26 @@ pub(crate) const TAG_COUNTER64: u8 = 0x46;
 /// Error returned by [`BerReader`] parsing operations.
 pub(crate) struct BerError {
     message: String,
+    is_wrong_version: bool,
 }
 
 impl BerError {
     pub(crate) fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            is_wrong_version: false,
         }
+    }
+
+    pub(crate) fn wrong_version(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            is_wrong_version: true,
+        }
+    }
+
+    pub(crate) fn is_wrong_version(&self) -> bool {
+        self.is_wrong_version
     }
 }
 
@@ -124,6 +137,7 @@ impl fmt::Debug for BerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BerError")
             .field("message", &self.message)
+            .field("is_wrong_version", &self.is_wrong_version)
             .finish()
     }
 }
@@ -374,17 +388,18 @@ impl<'a> BerReader<'a> {
     pub(crate) fn read_tlv(&mut self) -> Result<(u8, &'a [u8]), BerError> {
         let tag = self.read_tag()?;
         let length = self.read_length()?;
-        let value_slice = self
-            .input
-            .get(self.position..self.position + length)
-            .ok_or_else(|| {
-                BerError::new(format!(
-                    "BER: truncated value: tag 0x{tag:02X} declared length {length} \
-                     but only {} bytes remain at offset {}",
-                    self.input.len() - self.position,
-                    self.offset()
-                ))
-            })?;
+        // Guard against overflow in `self.position + length` for absurdly large
+        // length values that fit in usize but exceed the remaining input.
+        let remaining = self.input.len() - self.position;
+        if length > remaining {
+            return Err(BerError::new(format!(
+                "BER: truncated value: length field ({length}) exceeds remaining input \
+                 ({remaining} bytes) for tag 0x{tag:02X} at offset {}",
+                self.offset()
+            )));
+        }
+        // The guard above ensures self.position + length <= self.input.len().
+        let value_slice = &self.input[self.position..self.position + length];
         self.position += length;
         Ok((tag, value_slice))
     }
@@ -973,6 +988,35 @@ mod tests {
         let ber_error = reader.read_length().unwrap_err();
         assert!(
             ber_error.to_string().contains("indefinite"),
+            "unexpected error: {ber_error}"
+        );
+    }
+
+    #[test]
+    fn given_long_form_length_exceeding_input_when_read_tlv_then_returns_error() {
+        // Verifies: REQ-0000
+        // 0x02 is INTEGER tag; 0x84 means 4 subsequent bytes encode the length.
+        // Length = 0x7FFFFFFF = 2147483647 — fits in usize on all platforms but
+        // far exceeds the 0 bytes of input remaining after the tag and length field.
+        let absurd_tlv = [0x02, 0x84, 0x7F, 0xFF, 0xFF, 0xFF];
+        let mut reader = BerReader::new(&absurd_tlv);
+        let ber_error = reader.read_tlv().unwrap_err();
+        assert!(
+            ber_error.to_string().contains("exceeds remaining input"),
+            "unexpected error: {ber_error}"
+        );
+    }
+
+    #[test]
+    fn given_long_form_length_larger_than_available_data_when_read_tlv_then_returns_error() {
+        // Verifies: REQ-0000
+        // 0x02 is INTEGER tag; 0x83 means 3 subsequent bytes encode the length = 0x0F4240 = 1000000 bytes.
+        // Only 3 value bytes follow, so the length exceeds the remaining input.
+        let large_tlv = [0x02, 0x83, 0x0F, 0x42, 0x40, 0xAA, 0xBB, 0xCC];
+        let mut reader = BerReader::new(&large_tlv);
+        let ber_error = reader.read_tlv().unwrap_err();
+        assert!(
+            ber_error.to_string().contains("exceeds remaining input"),
             "unexpected error: {ber_error}"
         );
     }

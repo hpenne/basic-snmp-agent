@@ -129,7 +129,7 @@ pub(crate) fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, 
 
     let version = msg_reader.read_integer()?;
     if version != SNMPV3_VERSION {
-        return Err(BerError::new(format!(
+        return Err(BerError::wrong_version(format!(
             "BER: expected SNMPv3 (version 3), got version {version}"
         )));
     }

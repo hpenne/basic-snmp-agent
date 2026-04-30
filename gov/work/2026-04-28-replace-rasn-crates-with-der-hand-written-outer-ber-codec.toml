@@ -53,7 +53,7 @@ ADR-0011 (Value enum as public API) remains valid and is strengthened — the de
 - ● Implement PDU encode/decode: Pdus CHOICE (context-tagged), PDU, BulkPDU
 - ● Implement VarBind encode/decode: VarBind, VarBindValue CHOICE, ObjectSyntax/SimpleSyntax/ApplicationSyntax
 - ● Implement APPLICATION-tagged types: IpAddress, Counter32, Gauge32, TimeTicks, Opaque, Counter64
-- ○ Implement SNMPv2c Message encoding (for plain trap delivery)
+- ● Implement SNMPv2c Message encoding (for plain trap delivery)
 - ○ Replace production encode.rs and decode.rs to use new codec
 - ○ Move rasn, rasn-snmp, rasn-smi to dev-dependencies only
 - ○ Verify all existing tests pass with new codec
