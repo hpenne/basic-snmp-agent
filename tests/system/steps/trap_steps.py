@@ -38,6 +38,9 @@ _TRAP_AUTH_NP_ENGINE_ID = "80001f8804747261702d617574682d6e70"
 # Engine ID for the authPriv trap test agent ("trap-auth-pr" in text format).
 _TRAP_AUTH_PRIV_ENGINE_ID = "80001f8804747261702d617574682d7072"
 
+# Engine ID for the noAuthNoPriv trap test agent ("trap-noauth" in text format).
+_TRAP_NOAUTH_ENGINE_ID = "80001f8804747261702d6e6f61757468"
+
 
 def _run_agent_docker(
     context,
@@ -352,6 +355,57 @@ def step_send_trap_auth_priv_to_two_receivers(context, user, auth_password, priv
         "USM_PRIV_PROTO": "AES-128",
         "USM_PRIV_PASS": priv_password,
         "USM_SECURITY_LEVEL": "authPriv",
+    })
+
+
+@when('the agent at noAuthNoPriv with user "{user}" sends a trap with OID "{trap_oid}"')
+def step_send_trap_no_auth_no_priv(context, user, trap_oid):
+    _run_agent_docker(context, [
+        {
+            "request_id": 1,
+            "trap_oid": trap_oid,
+            "destinations": ["snmptrapd:162"],
+            "varbinds": [],
+        }
+    ], env_vars={
+        "USM_ENGINE_ID": _TRAP_NOAUTH_ENGINE_ID,
+        "USM_USER": user,
+        "USM_SECURITY_LEVEL": "noAuthNoPriv",
+    })
+
+
+@when('the agent at noAuthNoPriv with user "{user}" sends a trap with OID "{trap_oid}" and varbinds')
+def step_send_trap_no_auth_no_priv_with_varbinds(context, user, trap_oid):
+    varbinds = _parse_varbind_table(context)
+    _run_agent_docker(context, [
+        {
+            "request_id": 1,
+            "trap_oid": trap_oid,
+            "destinations": ["snmptrapd:162"],
+            "varbinds": varbinds,
+        }
+    ], env_vars={
+        "USM_ENGINE_ID": _TRAP_NOAUTH_ENGINE_ID,
+        "USM_USER": user,
+        "USM_SECURITY_LEVEL": "noAuthNoPriv",
+    })
+
+
+@when('the agent at noAuthNoPriv with user "{user}" sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"')
+def step_send_trap_no_auth_no_priv_to_two_receivers(context, user, receiver1, receiver2, trap_oid):
+    dest1 = _receiver_dest(context, receiver1)
+    dest2 = _receiver_dest(context, receiver2)
+    _run_agent_docker(context, [
+        {
+            "request_id": 1,
+            "trap_oid": trap_oid,
+            "destinations": [dest1, dest2],
+            "varbinds": [],
+        }
+    ], env_vars={
+        "USM_ENGINE_ID": _TRAP_NOAUTH_ENGINE_ID,
+        "USM_USER": user,
+        "USM_SECURITY_LEVEL": "noAuthNoPriv",
     })
 
 

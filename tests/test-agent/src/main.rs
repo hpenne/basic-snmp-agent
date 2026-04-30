@@ -162,21 +162,18 @@ fn main() {
 
 /// Read optional USM configuration from environment variables.
 ///
-/// Returns `Some((engine_id, usm_user))` when `USM_ENGINE_ID`, `USM_USER`,
-/// `USM_AUTH_PROTO`, `USM_AUTH_PASS`, and `USM_SECURITY_LEVEL` are all set.
-/// Returns `None` when none of them are set. Exits on partial or invalid config.
+/// Returns `Some((engine_id, usm_user))` when `USM_ENGINE_ID` and `USM_USER`
+/// are set. The required additional variables depend on `USM_SECURITY_LEVEL`:
+/// - `noAuthNoPriv`: only engine ID and user name are needed.
+/// - `authNoPriv`: also requires `USM_AUTH_PROTO` and `USM_AUTH_PASS`.
+/// - `authPriv`: additionally requires `USM_PRIV_PROTO` and `USM_PRIV_PASS`.
+///
+/// Returns `None` when `USM_ENGINE_ID` is absent. Exits on partial or invalid
+/// configuration.
 fn parse_usm_env() -> Option<(Vec<u8>, UsmUser)> {
     let engine_id_hex = std::env::var("USM_ENGINE_ID").ok()?;
     let user_name = std::env::var("USM_USER").unwrap_or_else(|_| {
         eprintln!("error: USM_ENGINE_ID set but USM_USER missing");
-        process::exit(1);
-    });
-    let auth_proto_name = std::env::var("USM_AUTH_PROTO").unwrap_or_else(|_| {
-        eprintln!("error: USM_ENGINE_ID set but USM_AUTH_PROTO missing");
-        process::exit(1);
-    });
-    let auth_password = std::env::var("USM_AUTH_PASS").unwrap_or_else(|_| {
-        eprintln!("error: USM_ENGINE_ID set but USM_AUTH_PASS missing");
         process::exit(1);
     });
     let security_level = std::env::var("USM_SECURITY_LEVEL").unwrap_or_else(|_| {
@@ -186,24 +183,14 @@ fn parse_usm_env() -> Option<(Vec<u8>, UsmUser)> {
 
     let engine_id = decode_hex_engine_id(&engine_id_hex);
 
-    let auth_protocol = match auth_proto_name.as_str() {
-        "SHA-256" => AuthProtocol::HmacSha256,
-        "SHA-512" => AuthProtocol::HmacSha512,
-        other => {
-            eprintln!("error: unsupported USM_AUTH_PROTO '{other}'");
-            process::exit(1);
-        }
-    };
-
-    let auth_key = basic_snmp_agent::usm::kdf::password_to_localised_key(
-        auth_password.as_bytes(),
-        &engine_id,
-        auth_protocol,
-    );
-
     let usm_user = match security_level.as_str() {
-        "authNoPriv" => UsmUser::auth_no_priv(&user_name, auth_protocol, auth_key),
+        "noAuthNoPriv" => UsmUser::no_auth_no_priv(&user_name),
+        "authNoPriv" => {
+            let (auth_protocol, auth_key) = parse_auth_env(&engine_id);
+            UsmUser::auth_no_priv(&user_name, auth_protocol, auth_key)
+        }
         "authPriv" => {
+            let (auth_protocol, auth_key) = parse_auth_env(&engine_id);
             let priv_proto_name = std::env::var("USM_PRIV_PROTO").unwrap_or_else(|_| {
                 eprintln!("error: USM_SECURITY_LEVEL=authPriv but USM_PRIV_PROTO missing");
                 process::exit(1);
@@ -240,6 +227,39 @@ fn parse_usm_env() -> Option<(Vec<u8>, UsmUser)> {
     };
 
     Some((engine_id, usm_user))
+}
+
+/// Read `USM_AUTH_PROTO` and `USM_AUTH_PASS` from the environment, parse the
+/// authentication protocol, and derive the localised authentication key.
+///
+/// Exits the process with an error message if either variable is absent or if
+/// the protocol name is not recognised.
+fn parse_auth_env(engine_id: &[u8]) -> (AuthProtocol, SecretKey) {
+    let auth_proto_name = std::env::var("USM_AUTH_PROTO").unwrap_or_else(|_| {
+        eprintln!("error: USM_ENGINE_ID set but USM_AUTH_PROTO missing");
+        process::exit(1);
+    });
+    let auth_password = std::env::var("USM_AUTH_PASS").unwrap_or_else(|_| {
+        eprintln!("error: USM_ENGINE_ID set but USM_AUTH_PASS missing");
+        process::exit(1);
+    });
+
+    let auth_protocol = match auth_proto_name.as_str() {
+        "SHA-256" => AuthProtocol::HmacSha256,
+        "SHA-512" => AuthProtocol::HmacSha512,
+        other => {
+            eprintln!("error: unsupported USM_AUTH_PROTO '{other}'");
+            process::exit(1);
+        }
+    };
+
+    let auth_key = basic_snmp_agent::usm::kdf::password_to_localised_key(
+        auth_password.as_bytes(),
+        engine_id,
+        auth_protocol,
+    );
+
+    (auth_protocol, auth_key)
 }
 
 /// Decode a hex-encoded engine ID string (with optional `0x` prefix) into bytes.
