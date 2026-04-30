@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-04-28-004"
 title = "Replace rasn crates with hand-written BER codec"
-status = "active"
+status = "done"
 created = "2026-04-28"
 started = "2026-04-28"
+completed = "2026-04-30"
 refs = [
     "ADR-0026",
     "ADR-0027",
@@ -60,7 +61,7 @@ ADR-0011 (Value enum as public API) remains valid and is strengthened — the de
 - ● Move rasn, rasn-snmp, rasn-smi to dev-dependencies only
 - ● Remove unused `der` crate dependency
 - ● Verify all existing tests pass with new codec
-- ○ Add Behave tests for SNMPv3 noAuthNoPriv traps (similar to SNMPv2c trap scenarios)
+- ● Add Behave tests for SNMPv3 noAuthNoPriv traps (similar to SNMPv2c trap scenarios)
 - ● Write or update ADRs to record the final decision
 - ● Run clippy pedantic and govctl check"""
 
