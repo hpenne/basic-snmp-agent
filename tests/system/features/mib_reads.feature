@@ -91,4 +91,4 @@ Feature: SNMP MIB reads over plain TCP
   @REQ-0021 @REQ-0022 @REQ-0066 @REQ-0068 @REQ-0073
   Scenario: GET returns an Opaque value
     When snmpget queries OID "1.3.6.1.4.1.99999.7.0" from the agent
-    Then the SNMP response contains OID "1.3.6.1.4.1.99999.7.0" with string value "Opaque: 0xDEAD"
+    Then the SNMP response contains OID "1.3.6.1.4.1.99999.7.0" with string value "OPAQUE: DE AD"
