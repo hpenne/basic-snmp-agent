@@ -1,0 +1,33 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-05-04-001"
+title = "Add system test coverage for all SMIv2 data types in GET responses"
+status = "active"
+created = "2026-05-04"
+started = "2026-05-04"
+
+[content]
+description = """
+Describe the work to be done.
+What is the goal? What are the acceptance criteria?"""
+
+[[content.acceptance_criteria]]
+text = "Test MIB seeds one OID per missing SMIv2 type (Integer32, Counter32, Counter64, Gauge32, IpAddress, ObjectIdentifier, Opaque)"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "GET scenarios in noAuthNoPriv feature file verify every SMIv2 data type at least once"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "GETNEXT end-of-MIB scenario updated to reflect expanded MIB"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "All system tests pass"
+status = "pending"
+category = "chore"
