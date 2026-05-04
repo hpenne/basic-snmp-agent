@@ -763,6 +763,16 @@ fn decode_oid(oid_bytes: &[u8], error_offset: usize) -> Result<Oid, BerError> {
     let mut remaining = oid_bytes;
     while !remaining.is_empty() {
         let (sub_id, bytes_consumed) = decode_base128(remaining, error_offset)?;
+        // Guard against an infinite loop if decode_base128 is ever buggy in a release build.
+        debug_assert_ne!(
+            bytes_consumed, 0,
+            "decode_base128 must consume at least one byte"
+        );
+        if bytes_consumed == 0 {
+            return Err(BerError::new(format!(
+                "BER: internal error: zero bytes consumed decoding OID sub-identifier at offset {error_offset}"
+            )));
+        }
         sub_identifiers.push(sub_id);
         remaining = &remaining[bytes_consumed..];
     }
