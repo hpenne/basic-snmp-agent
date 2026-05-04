@@ -67,4 +67,14 @@ exclude_re = [
     # Both mutations are structurally undetectable through the function's output.
     "replace && with \\|\\| in handle_get_bulk",
     "replace > with >= in handle_get_bulk",
+
+    # BerWriter::with_capacity is a performance optimisation only;
+    # Default::default() produces a functionally identical empty writer.
+    "replace BerWriter::with_capacity",
+
+    # encode_signed_i32: the `value > 0 &&` guard on the sign-extension check
+    # is unreachable for value=0 because the second condition
+    # (raw_bytes[first_significant] & 0x80 != 0) is structurally false when
+    # all bytes are 0x00. Mutating > to >= has no observable effect.
+    "replace > with >= in encode_signed_i32",
 ]

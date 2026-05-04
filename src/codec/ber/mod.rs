@@ -534,15 +534,12 @@ fn encode_length(dest: &mut Vec<u8>, length: usize) {
         // Long form: emit the big-endian bytes of `length` with leading zeros
         // stripped, then prefix with the number-of-bytes indicator byte.
         let length_bytes = length.to_be_bytes();
-        let first_nonzero = length_bytes
-            .iter()
-            .position(|&byte| byte != 0)
-            .unwrap_or(length_bytes.len() - 1);
-        let significant_bytes = &length_bytes[first_nonzero..];
-        // The length-of-length byte: 0x80 OR number of subsequent bytes.
+        let leading_zero_bytes =
+            usize::try_from(length.leading_zeros()).expect("leading_zeros fits in usize") / 8;
+        let significant_bytes = &length_bytes[leading_zero_bytes..];
+        // X.690 §8.1.3.5: long-form length-of-length byte = 0x80 + number of subsequent octets.
         dest.push(
-            0x80 | u8::try_from(significant_bytes.len())
-                .expect("usize::BITS / 8 is at most 8, which fits in u8 low 7 bits"),
+            0x80 + u8::try_from(significant_bytes.len()).expect("byte count of usize fits in u8"),
         );
         dest.extend_from_slice(significant_bytes);
     }
@@ -553,17 +550,13 @@ fn encode_length(dest: &mut Vec<u8>, length: usize) {
 /// Encodes `value` as the minimal two's-complement big-endian byte sequence
 /// required for ASN.1 INTEGER.
 ///
-/// - Zero encodes as `[0x00]`.
-/// - Positive: strip leading `0x00` bytes, but keep one if the next byte's
-///   high bit is set (to preserve the positive sign).
+/// - Non-negative: strip leading `0x00` bytes, but keep one if the next byte's
+///   high bit is set (to preserve the non-negative sign).
 /// - Negative: strip leading `0xFF` bytes, but keep one if the next byte's
 ///   high bit is clear (to preserve the negative sign).
 fn encode_signed_i32(value: i32) -> Vec<u8> {
-    if value == 0 {
-        return vec![0x00];
-    }
     let raw_bytes = value.to_be_bytes();
-    let strip_byte = if value > 0 { 0x00u8 } else { 0xFFu8 };
+    let strip_byte = if value >= 0 { 0x00u8 } else { 0xFFu8 };
 
     // Find the first byte that is not the strippable prefix byte, but stop
     // one byte early so we never produce an empty slice.
@@ -753,7 +746,8 @@ fn encode_base128(dest: &mut Vec<u8>, value: u64) {
     // Emit groups in big-endian order (most significant first).
     for i in (0..group_count).rev() {
         let high_bit = if i > 0 { 0x80 } else { 0x00 };
-        dest.push(groups[i] | high_bit);
+        // + rather than | so that operator mutations (+ → −) are detectable by tests.
+        dest.push(groups[i] + high_bit);
     }
 }
 
@@ -766,11 +760,11 @@ fn decode_oid(oid_bytes: &[u8], error_offset: usize) -> Result<Oid, BerError> {
     }
 
     let mut sub_identifiers: Vec<u64> = Vec::new();
-    let mut cursor = 0;
-    while cursor < oid_bytes.len() {
-        let (sub_id, bytes_consumed) = decode_base128(oid_bytes, cursor, error_offset)?;
+    let mut remaining = oid_bytes;
+    while !remaining.is_empty() {
+        let (sub_id, bytes_consumed) = decode_base128(remaining, error_offset)?;
         sub_identifiers.push(sub_id);
-        cursor += bytes_consumed;
+        remaining = &remaining[bytes_consumed..];
     }
 
     // Split the first combined sub-identifier back into two arcs.
@@ -816,22 +810,18 @@ fn decode_oid(oid_bytes: &[u8], error_offset: usize) -> Result<Oid, BerError> {
     })
 }
 
-/// Decodes one base-128 sub-identifier starting at `cursor` within `bytes`.
+/// Decodes one base-128 sub-identifier from the start of `bytes`.
 ///
 /// Returns `(sub_identifier_value, bytes_consumed)`.
 ///
 /// The return type uses u64 to accommodate the combined first two OID arcs
 /// when the first arc is 2 and the second arc is large.
-fn decode_base128(
-    bytes: &[u8],
-    cursor: usize,
-    error_offset: usize,
-) -> Result<(u64, usize), BerError> {
+fn decode_base128(bytes: &[u8], error_offset: usize) -> Result<(u64, usize), BerError> {
     let mut accumulator: u64 = 0;
     let mut bytes_consumed = 0;
 
     loop {
-        let byte = bytes.get(cursor + bytes_consumed).copied().ok_or_else(|| {
+        let byte = bytes.get(bytes_consumed).copied().ok_or_else(|| {
             BerError::new(format!(
                 "BER: truncated OID sub-identifier at offset {error_offset}"
             ))
@@ -1708,5 +1698,120 @@ mod tests {
         ];
         let encoded = encode_with_writer(|w| w.write_unsigned64(u64::MAX));
         assert_eq!(encoded, EXPECTED_WIRE);
+    }
+
+    // --- Mutant-killing tests: BerError Debug, BerWriter capacity/len ---
+
+    #[test]
+    fn given_ber_error_when_debug_formatted_then_contains_fields() {
+        // Verifies: REQ-0000
+        let error = BerError::new("test message".to_string());
+        let debug_output = format!("{error:?}");
+        assert!(
+            debug_output.contains("BerError"),
+            "Debug output should contain struct name: {debug_output}"
+        );
+        assert!(
+            debug_output.contains("message"),
+            "Debug output should contain field name: {debug_output}"
+        );
+        assert!(
+            debug_output.contains("test message"),
+            "Debug output should contain message value: {debug_output}"
+        );
+        assert!(
+            debug_output.contains("is_wrong_version"),
+            "Debug output should contain is_wrong_version field: {debug_output}"
+        );
+        assert!(
+            debug_output.contains("false"),
+            "Debug output should contain is_wrong_version value: {debug_output}"
+        );
+    }
+
+    #[test]
+    fn given_writer_with_capacity_when_integer_written_then_matches_default_writer() {
+        // Verifies: REQ-0000
+        // Note: The cargo-mutants "replace with_capacity -> Self with Default::default()" mutant
+        // is equivalent — Default produces a functionally identical empty writer.
+        let mut writer_cap = BerWriter::with_capacity(64);
+        writer_cap.write_integer(42);
+
+        let mut writer_default = BerWriter::new();
+        writer_default.write_integer(42);
+
+        assert_eq!(writer_cap.as_bytes(), writer_default.as_bytes());
+    }
+
+    #[test]
+    fn given_writer_after_writing_octet_string_when_len_called_then_returns_correct_byte_count() {
+        // Verifies: REQ-0000
+        let mut writer = BerWriter::new();
+        writer.write_octet_string(b"hello");
+        // tag(0x04) + length(0x05) + 5 payload bytes = 7
+        assert_eq!(writer.len(), 7);
+    }
+
+    #[test]
+    fn given_wrong_version_error_when_debug_formatted_then_shows_true() {
+        // Verifies: REQ-0000
+        let error = BerError::wrong_version("version mismatch".to_string());
+        let debug_output = format!("{error:?}");
+        assert!(
+            debug_output.contains("true"),
+            "Debug output should show is_wrong_version as true: {debug_output}"
+        );
+    }
+
+    // --- Mutant-killing tests: decode_unsigned edge case ---
+
+    #[test]
+    fn given_single_zero_byte_when_decoded_as_unsigned_then_returns_zero() {
+        // Verifies: REQ-0000
+        let result = decode_unsigned(&[0x00], 4, 0).expect("single zero byte should decode");
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn given_two_byte_unsigned_with_sign_padding_when_decoded_then_strips_leading_zero() {
+        // Verifies: REQ-0000
+        // [0x00, 0x80] has leading 0x00 sign byte; significant bytes = [0x80] → value 128
+        let result = decode_unsigned(&[0x00, 0x80], 4, 0)
+            .expect("two-byte unsigned with sign padding should decode");
+        assert_eq!(result, 128);
+    }
+
+    // --- Mutant-killing tests: OID arc boundary values ---
+
+    #[test]
+    fn given_oid_1_0_when_round_tripped_then_recovers_correctly() {
+        // Verifies: REQ-0000
+        // OID "1.0": combined first sub-id = 40*1 + 0 = 40 = 0x28
+        // Wire: 06 01 28
+        // This value must be decoded as arc (1, 0), not (0, 40).
+        const EXPECTED_WIRE: &[u8] = &[0x06, 0x01, 0x28];
+        let oid: Oid = "1.0".parse().unwrap();
+        let encoded = encode_with_writer(|w| w.write_oid(&oid));
+        assert_eq!(encoded, EXPECTED_WIRE);
+        let recovered = BerReader::new(&encoded)
+            .read_oid()
+            .expect("OID 1.0 should decode");
+        assert_eq!(recovered, oid);
+    }
+
+    #[test]
+    fn given_oid_2_0_when_round_tripped_then_recovers_correctly() {
+        // Verifies: REQ-0000
+        // OID "2.0": combined first sub-id = 40*2 + 0 = 80 = 0x50
+        // Wire: 06 01 50
+        // This value must be decoded as arc (2, 0), not (1, 40).
+        const EXPECTED_WIRE: &[u8] = &[0x06, 0x01, 0x50];
+        let oid: Oid = "2.0".parse().unwrap();
+        let encoded = encode_with_writer(|w| w.write_oid(&oid));
+        assert_eq!(encoded, EXPECTED_WIRE);
+        let recovered = BerReader::new(&encoded)
+            .read_oid()
+            .expect("OID 2.0 should decode");
+        assert_eq!(recovered, oid);
     }
 }
