@@ -23,7 +23,7 @@ Feature: SNMP MIB reads over plain TCP
 
   @REQ-0021 @REQ-0022 @REQ-0024 @REQ-0025 @REQ-0068 @REQ-0073
   Scenario: GETNEXT at end of MIB returns endOfMibView
-    When snmpgetnext queries OID "1.3.6.1.2.1.1.5.0" from the agent
+    When snmpgetnext queries OID "1.3.6.1.4.1.99999.999.0" from the agent
     Then the SNMP response contains exception "No more variables left in this MIB View"
 
   @REQ-0021 @REQ-0022 @REQ-0026 @REQ-0027 @REQ-0061 @REQ-0066 @REQ-0068 @REQ-0073
@@ -57,3 +57,38 @@ Feature: SNMP MIB reads over plain TCP
   Scenario: GET without explicit engine ID succeeds after automatic engine-ID discovery
     When snmpget without explicit engine ID queries OID "1.3.6.1.2.1.1.1.0" from the agent
     Then the SNMP response contains OID "1.3.6.1.2.1.1.1.0" with string value "basic-snmp-agent test instance"
+
+  @REQ-0021 @REQ-0022 @REQ-0066 @REQ-0068 @REQ-0073
+  Scenario: GET returns an Integer32 value
+    When snmpget queries OID "1.3.6.1.4.1.99999.1.0" from the agent
+    Then the SNMP response contains OID "1.3.6.1.4.1.99999.1.0" with string value "INTEGER: 42"
+
+  @REQ-0021 @REQ-0022 @REQ-0066 @REQ-0068 @REQ-0073
+  Scenario: GET returns a Counter32 value
+    When snmpget queries OID "1.3.6.1.4.1.99999.2.0" from the agent
+    Then the SNMP response contains OID "1.3.6.1.4.1.99999.2.0" with string value "Counter32: 12345"
+
+  @REQ-0021 @REQ-0022 @REQ-0066 @REQ-0068 @REQ-0073
+  Scenario: GET returns a Counter64 value
+    When snmpget queries OID "1.3.6.1.4.1.99999.3.0" from the agent
+    Then the SNMP response contains OID "1.3.6.1.4.1.99999.3.0" with string value "Counter64: 9876543210"
+
+  @REQ-0021 @REQ-0022 @REQ-0066 @REQ-0068 @REQ-0073
+  Scenario: GET returns a Gauge32 value
+    When snmpget queries OID "1.3.6.1.4.1.99999.4.0" from the agent
+    Then the SNMP response contains OID "1.3.6.1.4.1.99999.4.0" with string value "Gauge32: 500"
+
+  @REQ-0021 @REQ-0022 @REQ-0066 @REQ-0068 @REQ-0073
+  Scenario: GET returns an IpAddress value
+    When snmpget queries OID "1.3.6.1.4.1.99999.5.0" from the agent
+    Then the SNMP response contains OID "1.3.6.1.4.1.99999.5.0" with string value "IpAddress: 10.0.0.1"
+
+  @REQ-0021 @REQ-0022 @REQ-0066 @REQ-0068 @REQ-0073
+  Scenario: GET returns an ObjectIdentifier value
+    When snmpget queries OID "1.3.6.1.4.1.99999.6.0" from the agent
+    Then the SNMP response contains OID "1.3.6.1.4.1.99999.6.0" with string value "OID: .1.3.6.1.4.1.99999"
+
+  @REQ-0021 @REQ-0022 @REQ-0066 @REQ-0068 @REQ-0073
+  Scenario: GET returns an Opaque value
+    When snmpget queries OID "1.3.6.1.4.1.99999.7.0" from the agent
+    Then the SNMP response contains OID "1.3.6.1.4.1.99999.7.0" with string value "Opaque: 0xDEAD"
