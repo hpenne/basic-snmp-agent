@@ -1791,6 +1791,21 @@ mod tests {
         assert_eq!(result, 128);
     }
 
+    #[test]
+    fn given_ber_encoded_integer_zero_when_decoded_as_unsigned32_then_returns_zero() {
+        // Verifies: REQ-0000
+        // INTEGER 0 is BER-encoded as tag=0x02, length=0x01, value=0x00.
+        // The decode_unsigned path must keep the single [0x00] byte as significant
+        // (len == 1, so len > 1 is false) rather than stripping it to empty.
+        // Both paths produce value 0, confirming the condition is semantically correct.
+        const BER_INTEGER_ZERO: &[u8] = &[0x02, 0x01, 0x00];
+        let mut reader = BerReader::new(BER_INTEGER_ZERO);
+        let decoded_value = reader
+            .read_unsigned32()
+            .expect("BER-encoded integer 0 must decode successfully");
+        assert_eq!(decoded_value, 0);
+    }
+
     // --- Mutant-killing tests: OID arc boundary values ---
 
     #[test]

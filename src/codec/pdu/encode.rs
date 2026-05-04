@@ -66,26 +66,21 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
     .map_err(|e| EncodeError::new(format!("BER encoding of GetResponse failed: {e}")))
 }
 
-// RFC 3826 §2.2: each message must use a unique salt. The counter is
-// initialised with the current time on first use so that salts do not repeat
-// across process restarts that happen within the same second.
+// RFC 3826 §2.2: each message must use a unique salt. The counter is seeded
+// with the current time so that salts do not repeat across process restarts
+// that happen within the same second.
+static PRIVACY_SALT_INIT: std::sync::Once = std::sync::Once::new();
 static PRIVACY_SALT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // Implements: REQ-0101
 fn next_privacy_salt() -> [u8; 8] {
-    // Lazy-initialise with current seconds so salts differ across restarts.
-    // The compare-exchange only runs once; subsequent calls just increment.
-    // as_secs() returns u64 directly, avoiding any truncation.
-    let _ = PRIVACY_SALT_COUNTER.compare_exchange(
-        0,
-        std::time::SystemTime::now()
+    PRIVACY_SALT_INIT.call_once(|| {
+        let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs()
-            | 1, // ensure non-zero so the CAS never fires again
-        Ordering::Relaxed,
-        Ordering::Relaxed,
-    );
+            .as_secs();
+        PRIVACY_SALT_COUNTER.store(seed, Ordering::Relaxed);
+    });
     PRIVACY_SALT_COUNTER
         .fetch_add(1, Ordering::Relaxed)
         .to_be_bytes()
@@ -1305,6 +1300,75 @@ mod tests {
             err.to_string()
                 .contains("privacy without authentication is not permitted"),
             "error message must mention RFC 3412 constraint, got: {err}"
+        );
+    }
+
+    #[test]
+    fn given_two_consecutive_priv_trap_encodes_when_encoded_then_salts_differ() {
+        // Verifies: REQ-0101
+        // The mutant replaces next_privacy_salt() with a constant value.
+        // Two consecutive encode_v3_trap calls with privacy must produce different
+        // privacy parameters (the 8-byte salt embedded in USM parameters).
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::privacy::PrivProtocol;
+
+        let engine_id = b"test-engine";
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
+        let auth_key_2 = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
+        let priv_key = SecretKey::new_from_exposed_slice(&[0xBBu8; 16]);
+        let priv_key_2 = SecretKey::new_from_exposed_slice(&[0xBBu8; 16]);
+        let trap_oid: Oid = "1.3.6.1.6.3.1.1.5.1".parse().unwrap();
+        let pdu = WireTrapPdu {
+            request_id: 1,
+            varbinds: vec![Varbind {
+                oid: trap_oid,
+                value: VarbindValue::Value(Value::TimeTicks(0)),
+            }],
+        };
+
+        let encoded_1 = encode_v3_trap(
+            1,
+            engine_id,
+            b"user",
+            b"",
+            0,
+            0,
+            Some((AuthProtocol::HmacSha256, &auth_key)),
+            Some((PrivProtocol::Aes128, &priv_key)),
+            &pdu,
+        )
+        .expect("first encoding must succeed");
+
+        let encoded_2 = encode_v3_trap(
+            2,
+            engine_id,
+            b"user",
+            b"",
+            0,
+            0,
+            Some((AuthProtocol::HmacSha256, &auth_key_2)),
+            Some((PrivProtocol::Aes128, &priv_key_2)),
+            &pdu,
+        )
+        .expect("second encoding must succeed");
+
+        let v3_msg_1: V3Message = rasn::ber::decode(&encoded_1).expect("must decode");
+        let v3_msg_2: V3Message = rasn::ber::decode(&encoded_2).expect("must decode");
+
+        let usm_1: USMSecurityParameters = rasn::ber::decode(v3_msg_1.security_parameters.as_ref())
+            .expect("USM params 1 must decode");
+        let usm_2: USMSecurityParameters = rasn::ber::decode(v3_msg_2.security_parameters.as_ref())
+            .expect("USM params 2 must decode");
+
+        let salt_1 = usm_1.privacy_parameters.to_vec();
+        let salt_2 = usm_2.privacy_parameters.to_vec();
+
+        assert_eq!(salt_1.len(), 8, "salt 1 must be 8 bytes");
+        assert_eq!(salt_2.len(), 8, "salt 2 must be 8 bytes");
+        assert_ne!(
+            salt_1, salt_2,
+            "consecutive privacy-protected trap encodes must use different salts"
         );
     }
 }

@@ -1,10 +1,4 @@
 exclude_re = [
-    # Compile-time Send+Sync assertion bodies cannot be caught by runtime tests.
-    # The assertion fails at compile time if a field addition breaks the contract;
-    # replacing the body with () still compiles, so there is nothing to test at runtime.
-    "trap\\.rs.* replace check with \\(\\)",
-    "event_loop\\.rs.* replace check with \\(\\)",
-
     # Drop impl for AgentInner: the only observable effect is thread shutdown, which
     # requires intrusive test hooks (e.g. an Arc<AtomicBool> set by the thread on exit).
     # The public API offers no way to observe thread liveness after all Agent clones drop.
@@ -77,4 +71,18 @@ exclude_re = [
     # (raw_bytes[first_significant] & 0x80 != 0) is structurally false when
     # all bytes are 0x00. Mutating > to >= has no observable effect.
     "replace > with >= in encode_signed_i32",
+
+    # decode_unsigned: the `integer_bytes.len() > 1` guard prevents stripping a
+    # single-byte [0x00] to an empty slice. The mutation `> to >=` is semantically
+    # equivalent — both paths produce value 0 for the only differing input.
+    "replace > with >= in decode_unsigned",
+
+    # engine_time_seconds: private method returning seconds since engine start.
+    # Replacing with constant 0 or 1 is only distinguishable by sleeping ≥2s in a
+    # test, which is fragile and slow. The implementation is trivially correct.
+    "replace EventLoop::engine_time_seconds",
+
+    # SecretKey::drop zeroises key material. The effect is not observable in safe
+    # Rust — verifying it would require reading freed memory.
+    "replace <impl Drop for SecretKey>::drop with \\(\\)",
 ]

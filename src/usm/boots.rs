@@ -18,6 +18,7 @@ const MAX_ENGINE_ID_LEN: usize = 32;
 ///
 /// # Requirements
 /// Implements: REQ-0095
+#[derive(Debug, PartialEq)]
 pub struct StoredBootsState {
     pub engine_id: Vec<u8>,
     pub boots: u32,
@@ -448,5 +449,183 @@ mod tests {
         use std::error::Error as _;
         let e = InitBootsError::BootsAtCeiling;
         assert!(e.source().is_none());
+    }
+
+    #[test]
+    fn given_boots_at_ceiling_error_when_debug_formatted_then_shows_variant_name() {
+        // Verifies: REQ-0097
+        let e = InitBootsError::BootsAtCeiling;
+        assert_eq!(format!("{e:?}"), "BootsAtCeiling");
+    }
+
+    #[test]
+    fn given_store_error_when_debug_formatted_then_includes_inner_error() {
+        // Verifies: REQ-0095
+        let io_err = std::io::Error::other("store failure");
+        let e = InitBootsError::Store(io_err);
+        let debug_str = format!("{e:?}");
+        assert!(
+            debug_str.starts_with("Store("),
+            "Debug output must start with Store(, got: {debug_str}"
+        );
+        assert!(
+            debug_str.contains("store failure"),
+            "Debug output must contain the inner error message, got: {debug_str}"
+        );
+    }
+
+    #[test]
+    fn given_mut_ref_to_store_when_initialise_via_ref_then_delegates_to_inner() {
+        // Verifies: REQ-0095
+        // The &mut T blanket impl delegates load/save to the inner store.
+        // This calls initialise_engine_boots with a &mut &mut MemStore, exercising
+        // the blanket impl with T = &mut MemStore.
+        let engine_id = b"myengine";
+        let mut store = MemStore::new(Some(StoredBootsState {
+            engine_id: engine_id.to_vec(),
+            boots: 7,
+        }));
+        let mut store_ref: &mut MemStore = &mut store;
+        // Passing &mut store_ref (&mut (&mut MemStore)) uses the blanket impl.
+        let boots = initialise_engine_boots(&mut store_ref, engine_id)
+            .expect("initialise via &mut ref must succeed");
+        assert_eq!(
+            boots, 8,
+            "boots must be incremented via &mut T blanket impl"
+        );
+    }
+
+    #[test]
+    fn given_mut_ref_to_store_when_save_via_ref_then_state_is_persisted() {
+        // Verifies: REQ-0095
+        // The &mut T blanket impl save delegation persists to the inner store.
+        let mut store = MemStore::new(None);
+        let mut store_ref: &mut MemStore = &mut store;
+        // Calling save through &mut store_ref exercises the blanket impl.
+        EngineBootsStore::save(&mut store_ref, b"engine", 42)
+            .expect("save via &mut ref must succeed");
+        let saved = store.state.as_ref().expect("state must be saved");
+        assert_eq!(saved.engine_id, b"engine");
+        assert_eq!(saved.boots, 42);
+    }
+
+    // ── FileEngineBootsStore tests ─────────────────────────────────────────
+
+    #[test]
+    fn given_file_store_when_no_file_then_load_returns_none() {
+        // Verifies: REQ-0096
+        let tmp_dir = std::env::temp_dir();
+        let tmp_path = tmp_dir.join(format!("boots_test_none_{}.bin", std::process::id()));
+        // Ensure file does not exist.
+        let _ = std::fs::remove_file(&tmp_path);
+        let mut store = FileEngineBootsStore::new(&tmp_path);
+        let result = store.load().expect("load from absent file must return Ok");
+        assert_eq!(result, None, "absent file must return None");
+    }
+
+    #[test]
+    fn given_file_store_when_save_then_load_round_trips_correctly() {
+        // Verifies: REQ-0096
+        let tmp_dir = std::env::temp_dir();
+        let tmp_path = tmp_dir.join(format!("boots_test_rt_{}.bin", std::process::id()));
+        let _ = std::fs::remove_file(&tmp_path);
+        let engine_id = b"\x80\x00\x1f\x88\x04myengine";
+        let boots_value = 99_u32;
+
+        let mut store = FileEngineBootsStore::new(&tmp_path);
+        store
+            .save(engine_id, boots_value)
+            .expect("save must succeed");
+
+        let loaded = store
+            .load()
+            .expect("load must succeed")
+            .expect("must be Some");
+        assert_eq!(loaded.engine_id, engine_id);
+        assert_eq!(loaded.boots, boots_value);
+
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+
+    #[test]
+    fn given_file_store_when_file_has_oversized_engine_id_len_then_load_returns_error() {
+        // Verifies: REQ-0096
+        // engine_id_len field set to MAX_ENGINE_ID_LEN + 1 = 33 (too large).
+        let tmp_dir = std::env::temp_dir();
+        let tmp_path = tmp_dir.join(format!("boots_test_oversize_{}.bin", std::process::id()));
+        let oversized_len: u32 =
+            u32::try_from(MAX_ENGINE_ID_LEN).expect("MAX_ENGINE_ID_LEN fits in u32") + 1;
+        let mut data = oversized_len.to_be_bytes().to_vec();
+        // Pad with enough bytes so the file has the oversized_len + 4 structure.
+        data.extend(vec![0u8; usize::try_from(oversized_len).unwrap() + 4]);
+        std::fs::write(&tmp_path, &data).unwrap();
+
+        let mut store = FileEngineBootsStore::new(&tmp_path);
+        let result = store.load();
+        let err = result.expect_err("oversized engine_id_len must produce an error");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+
+    #[test]
+    fn given_file_store_when_file_has_wrong_total_length_then_load_returns_error() {
+        // Verifies: REQ-0096
+        // engine_id_len = 4 but total remaining bytes != 4 + 4 = 8.
+        let tmp_dir = std::env::temp_dir();
+        let tmp_path = tmp_dir.join(format!("boots_test_wronglen_{}.bin", std::process::id()));
+        let engine_id_len: u32 = 4;
+        let mut data = engine_id_len.to_be_bytes().to_vec();
+        // Add only 3 bytes of engine_id (should be 4) + 4 bytes boots = 7, but expected 8.
+        data.extend(vec![0u8; 3]);
+        std::fs::write(&tmp_path, &data).unwrap();
+
+        let mut store = FileEngineBootsStore::new(&tmp_path);
+        let result = store.load();
+        let err = result.expect_err("wrong total length must produce an error");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+
+    #[test]
+    fn given_file_store_when_file_has_exact_max_engine_id_len_then_load_succeeds() {
+        // Verifies: REQ-0096
+        // engine_id_len == MAX_ENGINE_ID_LEN (32) must be accepted. The mutant
+        // "> with >=" would incorrectly reject this boundary value.
+        let tmp_dir = std::env::temp_dir();
+        let tmp_path = tmp_dir.join(format!("boots_test_maxlen_{}.bin", std::process::id()));
+        let engine_id = vec![0xAAu8; MAX_ENGINE_ID_LEN];
+        let boots_value: u32 = 1;
+        let mut store = FileEngineBootsStore::new(&tmp_path);
+        store
+            .save(&engine_id, boots_value)
+            .expect("save of max-length engine ID must succeed");
+
+        let loaded = store
+            .load()
+            .expect("load must succeed")
+            .expect("must be Some");
+        assert_eq!(loaded.engine_id, engine_id);
+        assert_eq!(loaded.boots, boots_value);
+
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+
+    #[test]
+    fn given_file_store_when_path_is_directory_then_load_returns_io_error() {
+        // Verifies: REQ-0096
+        // The match guard in load() must only swallow NotFound errors.
+        // When the path exists but is a directory, the read fails with a
+        // non-NotFound error that must be propagated, not silently returned
+        // as Ok(None).
+        let tmp_dir = std::env::temp_dir().join(format!("boots_test_dir_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp_dir).expect("must create temp dir");
+        let mut store = FileEngineBootsStore::new(&tmp_dir);
+        let result = store.load();
+        let err = result.expect_err("reading a directory must produce an I/O error, not Ok(None)");
+        // The error should NOT be NotFound.
+        assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
+        let _ = std::fs::remove_dir(&tmp_dir);
     }
 }

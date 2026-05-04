@@ -166,10 +166,7 @@ pub struct CommandSender {
 // any future field addition that would break the contract at compile time.
 const _: () = {
     fn assert_send_sync<T: Send + Sync>() {}
-    fn check() {
-        assert_send_sync::<CommandSender>();
-    }
-    let _ = check;
+    let _ = assert_send_sync::<CommandSender>;
 };
 
 impl CommandSender {
@@ -1167,6 +1164,16 @@ mod tests {
         assert_eq!(
             parse_ber_length(&[0x84, 0x00, 0x01, 0x00, 0x00]),
             Ok(Some((65536, 5)))
+        );
+    }
+
+    #[test]
+    fn given_ber_length_error_when_displayed_then_shows_expected_message() {
+        // Verifies: REQ-0071
+        let error = BerLengthError;
+        assert_eq!(
+            error.to_string(),
+            "invalid BER length encoding (indefinite-length or >4-octet long form)"
         );
     }
 

@@ -2,7 +2,7 @@ Run cargo-mutants and add tests as required
 
 Follow this loop (max 3 iterations):
 1. Run cargo-mutants on the project, using a 5 second timeout
-2. Use the **implementer** agent to add tests for uncaught mutants. Make note of any mutants that seem uncatchable (you'll need that for the summary). **Capture the implementer's agent ID** — you will resume it in later steps.
+2. Use the **implementer** agent to add tests for uncaught mutants. If a mutant seems unreachable consider if the logic is unnecessary and can be refactored out (such refactorings must be mentioned in the summary at the end). Make note of any mutants that seem truly uncatchable (you'll need that for the summary). **Capture the implementer's agent ID** — you will resume it in later steps.
 3. Run cargo test to verify that nothing is broken.
 4. Re-run cargo-mutants to confirm the previously missed mutants are now caught. If any remain missed, **resume** the implementer (using its agent ID) and pass only the remaining uncaught mutants — do not repeat the original task. Return to step 3.
 5. Pass the changes to the **reviewer-followup** agent (sonnet) for review. For new or untracked files, tell the reviewer which files to read. For changes to tracked files, pass the `git diff` output.

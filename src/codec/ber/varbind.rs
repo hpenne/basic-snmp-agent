@@ -271,12 +271,11 @@ pub(crate) fn decode_varbind_value_to_value(
 /// # Requirements
 /// Implements: REQ-0000
 pub(crate) fn encode_varbind_list(encoded_varbinds: &[&[u8]]) -> Vec<u8> {
-    let total_inner_len: usize = encoded_varbinds.iter().map(|vb| vb.len()).sum();
-    let mut inner_writer = BerWriter::with_capacity(total_inner_len);
+    let mut inner_writer = BerWriter::new();
     for encoded_varbind in encoded_varbinds {
         inner_writer.write_raw(encoded_varbind);
     }
-    let mut outer_writer = BerWriter::with_capacity(total_inner_len + 4);
+    let mut outer_writer = BerWriter::new();
     outer_writer.write_sequence(inner_writer.as_bytes());
     outer_writer.into_vec()
 }
@@ -291,14 +290,11 @@ pub(crate) fn encode_varbind_list(encoded_varbinds: &[&[u8]]) -> Vec<u8> {
 /// # Requirements
 /// Implements: REQ-0000
 pub(crate) fn encode_varbind(oid: &Oid, encoded_value_tlv: &[u8]) -> Vec<u8> {
-    // OID TLV is at least 3 bytes (tag + len + 1 content byte for a minimal OID).
-    // Reserve space for OID + value + SEQUENCE overhead (tag + len up to 3 bytes).
-    let estimated_capacity = 3 + oid.as_slice().len() + encoded_value_tlv.len() + 4;
-    let mut inner_writer = BerWriter::with_capacity(estimated_capacity);
+    let mut inner_writer = BerWriter::new();
     inner_writer.write_oid(oid);
     inner_writer.write_raw(encoded_value_tlv);
 
-    let mut outer_writer = BerWriter::with_capacity(inner_writer.len() + 4);
+    let mut outer_writer = BerWriter::new();
     outer_writer.write_sequence(inner_writer.as_bytes());
     outer_writer.into_vec()
 }

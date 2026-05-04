@@ -363,11 +363,8 @@ impl Default for AgentBuilder {
 
 const _: () = {
     fn assert_send_sync<T: Send + Sync>() {}
-    fn check() {
-        assert_send_sync::<crate::usm::user::UsmUser>();
-        assert_send_sync::<Agent>();
-    }
-    let _ = check;
+    let _ = assert_send_sync::<crate::usm::user::UsmUser>;
+    let _ = assert_send_sync::<Agent>;
 };
 
 #[cfg(test)]
@@ -663,5 +660,64 @@ mod tests {
             .engine_boots_store(CeilingStore)
             .build();
         assert!(matches!(result, Err(AgentError::EngineBoots(_))));
+    }
+
+    #[test]
+    fn given_usm_user_when_usm_user_called_then_agent_sends_v3_traps() {
+        // Verifies: REQ-0074, REQ-0076, REQ-0081
+        // The mutant replaces the usm_user() body with Default::default(),
+        // which resets all builder fields so usm_user stays None. Without a
+        // stored user the agent falls back to SNMPv2c (version 1). This test
+        // detects that by verifying the received datagram carries SNMP version 3.
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::user::UsmUser;
+
+        let auth_key = SecretKey::new_from_exposed_slice(&[0x11u8; 32]);
+        let user = UsmUser::auth_no_priv("testuser", AuthProtocol::HmacSha256, auth_key);
+
+        let agent = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .usm_user(user)
+            .build()
+            .expect("agent must build");
+
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let dest = receiver.local_addr().unwrap();
+
+        let pdu = TrapPdu {
+            request_id: 1,
+            trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
+            varbinds: vec![],
+        };
+        let results = agent.send_trap(&pdu, &[dest]).unwrap();
+        assert_eq!(results.len(), 1);
+        results[0].outcome.as_ref().expect("trap send must succeed");
+
+        // Verify the datagram decodes as a V3 message (not V2c). If usm_user
+        // was not stored by the builder, the agent would fall back to V2c and
+        // rasn would fail to decode the datagram as a V3 message.
+        let mut recv_buf = vec![0u8; 2048];
+        let (bytes_received, _src) = receiver
+            .recv_from(&mut recv_buf)
+            .expect("must receive a datagram");
+        let received_bytes = &recv_buf[..bytes_received];
+        let decoded: rasn_snmp::v3::Message = rasn::ber::decode(received_bytes)
+            .expect("datagram must decode as SNMPv3 Message when usm_user is set");
+        let version: i64 = decoded.version.try_into().expect("version must fit in i64");
+        assert_eq!(
+            version, 3,
+            "version must be 3 (SNMPv3) when usm_user is set"
+        );
+        // Also verify the auth flag is set, confirming the auth user was stored.
+        let flags_byte = decoded.global_data.flags.first().copied().unwrap_or(0);
+        assert_ne!(
+            flags_byte & 0x01,
+            0,
+            "authFlag must be set when an auth usm_user is configured"
+        );
     }
 }

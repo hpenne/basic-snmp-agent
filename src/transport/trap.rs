@@ -90,10 +90,7 @@ pub struct TrapSender {
 // future field addition that would break the contract at compile time.
 const _: () = {
     fn assert_send_sync<T: Send + Sync>() {}
-    fn check() {
-        assert_send_sync::<TrapSender>();
-    }
-    let _ = check;
+    let _ = assert_send_sync::<TrapSender>;
 };
 
 impl TrapSender {
@@ -686,6 +683,60 @@ mod tests {
         assert!(
             matches!(decoded.scoped_data, ScopedPduData::CleartextPdu(_)),
             "expected CleartextPdu for noAuthNoPriv trap"
+        );
+    }
+
+    #[test]
+    fn given_two_consecutive_v3_traps_when_sent_then_msg_ids_differ() {
+        // Verifies: REQ-0105
+        // The mutant replaces next_trap_msg_id() with a constant (0, 1, or -1).
+        // Two consecutive V3 trap sends must have different message IDs.
+        use crate::usm::user::UsmUser;
+        use rasn_snmp::v3::Message as V3Message;
+
+        let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
+        let user = std::sync::Arc::new(UsmUser::no_auth_no_priv("public"));
+        let sender = TrapSender::new(Instant::now(), engine_id, 0, Some(user)).unwrap();
+        let (receiver, dest) = loopback_receiver();
+        receiver
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+
+        let pdu = minimal_pdu();
+
+        // Send two traps.
+        let _ = sender.send_trap(&pdu, &[dest]);
+        let _ = sender.send_trap(&pdu, &[dest]);
+
+        // Receive both datagrams.
+        let mut recv_buf_1 = vec![0u8; TRAP_MTU_BYTES];
+        let (bytes_1, _) = receiver
+            .recv_from(&mut recv_buf_1)
+            .expect("must receive first trap datagram");
+        let mut recv_buf_2 = vec![0u8; TRAP_MTU_BYTES];
+        let (bytes_2, _) = receiver
+            .recv_from(&mut recv_buf_2)
+            .expect("must receive second trap datagram");
+
+        let decoded_1: V3Message =
+            rasn::ber::decode(&recv_buf_1[..bytes_1]).expect("first datagram must decode");
+        let decoded_2: V3Message =
+            rasn::ber::decode(&recv_buf_2[..bytes_2]).expect("second datagram must decode");
+
+        let msg_id_1: i32 = decoded_1
+            .global_data
+            .message_id
+            .try_into()
+            .expect("msg_id_1 must fit in i32");
+        let msg_id_2: i32 = decoded_2
+            .global_data
+            .message_id
+            .try_into()
+            .expect("msg_id_2 must fit in i32");
+
+        assert_ne!(
+            msg_id_1, msg_id_2,
+            "consecutive V3 traps must carry different message IDs"
         );
     }
 }
