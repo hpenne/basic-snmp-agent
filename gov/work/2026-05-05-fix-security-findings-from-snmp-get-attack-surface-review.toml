@@ -79,7 +79,7 @@ category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "F-14 — Replace non_repeaters as usize with usize::from(req.non_repeaters) in request.rs"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]

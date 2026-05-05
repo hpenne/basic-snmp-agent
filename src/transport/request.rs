@@ -146,7 +146,9 @@ pub fn handle_get_bulk(
     let varbind_count = req.varbinds.len();
 
     // Clamp non_repeaters so it cannot exceed the actual varbind count.
-    let non_repeaters = (req.non_repeaters as usize).min(varbind_count);
+    let non_repeaters = usize::try_from(req.non_repeaters)
+        .unwrap_or(usize::MAX)
+        .min(varbind_count);
 
     // Cap max_repetitions to our configurable ceiling to prevent abuse.
     let max_repetitions = req.max_repetitions.min(max_repetitions_cap);
