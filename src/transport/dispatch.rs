@@ -307,6 +307,8 @@ pub fn process_snmpv3_request(
     // If a USM user is configured and the request names a different user, increment the
     // counter and respond with a Report PDU only if the reportableFlag is set
     // (RFC 3412 §7.1.3a).
+    // Non-constant-time comparison is acceptable: user names are transmitted in cleartext
+    // on the wire (RFC 3414 §2.4), so they are not secret.
     if let Some(user) = ctx.usm_user
         && v3_msg.user_name != user.name().as_bytes()
     {
