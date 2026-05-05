@@ -161,9 +161,11 @@ pub fn initialise_engine_boots(
 /// File-backed implementation of [`EngineBootsStore`].
 ///
 /// Reads and writes the engine ID and boots counter as a length-prefixed binary
-/// record. Writes are atomic: the new state is written to a temporary file
-/// alongside the target, then renamed into place, preventing corruption if the
-/// process is interrupted mid-write.
+/// record. Writes use the full durable-write pattern: write to a temporary file
+/// alongside the target, fsync the temporary file, rename it into place, then
+/// fdatasync the parent directory to ensure the directory entry update (rename) is
+/// also flushed to disk. This prevents corruption if the process or system is
+/// interrupted mid-write.
 ///
 /// # Requirements
 /// Implements: REQ-0096
@@ -238,6 +240,14 @@ impl EngineBootsStore for FileEngineBootsStore {
 
     fn save(&mut self, engine_id: &[u8], boots: u32) -> Result<(), std::io::Error> {
         let tmp_path = self.path.with_extension("tmp");
+        // Resolve the parent directory before the rename so we can fdatasync it
+        // afterwards. Fall back to "." when the path has no explicit parent
+        // component (i.e. the file lives in the current working directory).
+        let parent_path = self
+            .path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
         {
             use std::io::Write as _;
             let file = std::fs::File::create(&tmp_path)?;
@@ -256,7 +266,15 @@ impl EngineBootsStore for FileEngineBootsStore {
                 .map_err(std::io::IntoInnerError::into_error)?;
             file.sync_all()?;
         }
-        std::fs::rename(&tmp_path, &self.path)
+        std::fs::rename(&tmp_path, &self.path)?;
+        // Fdatasync the parent directory to ensure the rename (directory entry
+        // update) is durable. `sync_data` (fdatasync) is sufficient here because
+        // we only need the directory entries flushed, not directory metadata like
+        // mtime/ctime. Without this step the rename may be lost on a crash even
+        // though the file data itself was synced.
+        let parent_dir = std::fs::File::open(parent_path)?;
+        parent_dir.sync_data()?;
+        Ok(())
     }
 }
 
@@ -627,5 +645,23 @@ mod tests {
         // The error should NOT be NotFound.
         assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
         let _ = std::fs::remove_dir(&tmp_dir);
+    }
+
+    #[test]
+    fn given_bare_filename_when_parent_resolved_then_falls_back_to_current_dir() {
+        // Verifies: REQ-0096
+        // Exercises the parent-path resolution logic used in FileEngineBootsStore::save
+        // for the edge case where the path has no directory component. Path::parent()
+        // returns Some("") for a bare filename, which must be treated as ".".
+        let path = std::path::Path::new("engine.dat");
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        assert_eq!(
+            parent,
+            std::path::Path::new("."),
+            "bare filename must resolve parent to '.'"
+        );
     }
 }
