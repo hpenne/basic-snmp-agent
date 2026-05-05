@@ -136,6 +136,12 @@ pub(crate) fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, 
 
     let mut header_reader = msg_reader.read_sequence()?;
     let msg_id = header_reader.read_integer()?;
+    // RFC 3412 §6.4: msgID is in the range [0, 2^31-1].
+    if msg_id < 0 {
+        return Err(BerError::new(
+            "BER: msgID must be non-negative per RFC 3412 §6.4",
+        ));
+    }
     let max_size = header_reader.read_integer()?;
     let flags_bytes = header_reader.read_octet_string()?;
     // RFC 3412 §6.6: msgFlags must be exactly 1 byte.
@@ -954,6 +960,42 @@ mod tests {
         assert_eq!(
             envelope.usm.engine_time, -42,
             "negative engine_time must survive encode/decode"
+        );
+    }
+
+    // ── Test 11b: Negative msgID is rejected by decode_v3_envelope ───────────
+
+    #[test]
+    fn given_negative_msg_id_when_decode_v3_envelope_then_error() {
+        // Verifies: RFC 3412 §6.4 msgID range [0, 2^31-1]
+        // encode_v3_message happily encodes any i32 including -1; the decoder
+        // must then reject it because msgID must be non-negative.
+        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
+        let (encoded, _) = encode_v3_message(
+            -1,    // msg_id: negative — invalid per RFC 3412 §6.4
+            65535, // max_size
+            0x04,  // flags_byte (reportable, noAuth, noPriv)
+            3,     // security_model (USM)
+            &[],   // engine_id
+            0,     // engine_boots
+            0,     // engine_time
+            &[],   // user_name
+            &[],   // auth_params
+            &[],   // priv_params
+            &scoped_pdu,
+            false, // not encrypted
+        )
+        .expect("encoding a negative msgID must succeed (encoder does not validate)");
+
+        let ber_error = decode_v3_envelope(&encoded).unwrap_err();
+        let error_message = ber_error.to_string();
+        assert!(
+            error_message.contains("msgID"),
+            "error must mention msgID, got: {error_message}"
+        );
+        assert!(
+            error_message.contains("non-negative") || error_message.contains("RFC 3412"),
+            "error must reference the non-negative constraint or RFC 3412, got: {error_message}"
         );
     }
 
