@@ -54,6 +54,18 @@ static DECRYPTION_ERRORS_OID: std::sync::LazyLock<crate::codec::Oid> =
             .expect("USM_STATS_DECRYPTION_ERRORS is a valid OID constant")
     });
 
+/// OID for `snmpUnknownSecurityModels.0` (RFC 3412, SNMP-MPD-MIB).
+// Implements: REQ-0000
+const SNMP_UNKNOWN_SECURITY_MODELS_OID: &str = "1.3.6.1.6.3.11.2.1.1.0";
+
+// Implements: REQ-0000
+static UNKNOWN_SECURITY_MODELS_OID: std::sync::LazyLock<crate::codec::Oid> =
+    std::sync::LazyLock::new(|| {
+        SNMP_UNKNOWN_SECURITY_MODELS_OID
+            .parse()
+            .expect("SNMP_UNKNOWN_SECURITY_MODELS_OID is a valid OID constant")
+    });
+
 /// Bit mask for the `reportableFlag` in `msgFlags` (RFC 3412 §7.1.3a).
 const REPORTABLE_FLAG: u8 = 0x04;
 
@@ -85,6 +97,9 @@ pub struct DispatchContext<'a> {
     /// Counter for `usmStatsDecryptionErrors` (REQ-0101).
     // Implements: REQ-0101
     pub decryption_errors_counter: &'a mut u32,
+    /// Counter for `snmpUnknownSecurityModels` (RFC 3412 §7.1).
+    // Implements: REQ-0000
+    pub unknown_security_models_counter: &'a mut u32,
     /// Optional configured USM user; `None` when no USM user is configured (REQ-0078, REQ-0079).
     // Implements: REQ-0078, REQ-0079
     pub usm_user: Option<&'a crate::usm::user::UsmUser>,
@@ -165,6 +180,31 @@ fn emit_unknown_engine_id_response(
     .ok()
 }
 
+/// Increment `unknown_security_models_counter` and, if `reportableFlag` is set, return a
+/// `snmpUnknownSecurityModels` Report PDU; otherwise return `None` (silent discard).
+///
+/// # Requirements
+/// Implements: REQ-0000
+fn emit_unknown_security_model_response(
+    ctx: &mut DispatchContext<'_>,
+    msg_id: i32,
+    security_flags: u8,
+) -> Option<Vec<u8>> {
+    *ctx.unknown_security_models_counter = ctx.unknown_security_models_counter.saturating_add(1);
+    if security_flags & REPORTABLE_FLAG == 0 {
+        return None;
+    }
+    crate::codec::encode_v3_report(
+        msg_id,
+        ctx.engine_id,
+        ctx.engine_boots,
+        ctx.engine_time,
+        &UNKNOWN_SECURITY_MODELS_OID,
+        *ctx.unknown_security_models_counter,
+    )
+    .ok()
+}
+
 /// Decode, validate, and dispatch a single RFC 3430 BER frame, returning
 /// the encoded response bytes on success.
 ///
@@ -195,6 +235,7 @@ fn emit_unknown_engine_id_response(
 /// let mut wrong_digests = 0u32;
 /// let mut not_in_time_windows = 0u32;
 /// let mut decryption_errors = 0u32;
+/// let mut unknown_security_models = 0u32;
 /// let mut ctx = DispatchContext {
 ///     engine_id,
 ///     engine_boots: 1,
@@ -205,6 +246,7 @@ fn emit_unknown_engine_id_response(
 ///     wrong_digests_counter: &mut wrong_digests,
 ///     not_in_time_windows_counter: &mut not_in_time_windows,
 ///     decryption_errors_counter: &mut decryption_errors,
+///     unknown_security_models_counter: &mut unknown_security_models,
 ///     usm_user: None,
 /// };
 /// // Garbage bytes produce no response (silently discarded).
@@ -223,6 +265,15 @@ pub fn process_snmpv3_request(
     // Decode as an SNMPv3 message. Non-v3 messages are silently discarded
     // per REQ-0073.
     let v3_msg = crate::codec::decode_v3_message(frame).ok()?;
+
+    // RFC 3412 §7.2 step 2: reject messages with unsupported security models.
+    if !v3_msg.security_model.is_usm() {
+        eprintln!(
+            "[dispatch] rejecting message with unsupported security model: {}",
+            v3_msg.security_model
+        );
+        return emit_unknown_security_model_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
+    }
 
     // REQ-0093: engine-ID discovery probe — the manager sent an empty
     // msgAuthoritativeEngineID. Respond with a Report PDU carrying the
@@ -487,6 +538,7 @@ mod tests {
         wrong_digests: u32,
         not_in_time_windows: u32,
         decryption_errors: u32,
+        unknown_security_models: u32,
         engine_boots: u32,
         engine_time: u32,
     }
@@ -500,6 +552,7 @@ mod tests {
                 wrong_digests: 0,
                 not_in_time_windows: 0,
                 decryption_errors: 0,
+                unknown_security_models: 0,
                 engine_boots: 1,
                 engine_time: 0,
             }
@@ -535,6 +588,11 @@ mod tests {
             self
         }
 
+        fn with_unknown_security_models(mut self, initial_count: u32) -> Self {
+            self.unknown_security_models = initial_count;
+            self
+        }
+
         fn with_boots_time(mut self, boots: u32, time: u32) -> Self {
             self.engine_boots = boots;
             self.engine_time = time;
@@ -555,6 +613,7 @@ mod tests {
                 wrong_digests_counter: &mut self.wrong_digests,
                 not_in_time_windows_counter: &mut self.not_in_time_windows,
                 decryption_errors_counter: &mut self.decryption_errors,
+                unknown_security_models_counter: &mut self.unknown_security_models,
                 usm_user,
             }
         }
@@ -2368,5 +2427,128 @@ mod tests {
             let _ = process_snmpv3_request(&frame, &mut ctx, &mib);
         }
         assert_eq!(tc.decryption_errors, u32::MAX, "counter must not overflow");
+    }
+
+    #[test]
+    fn given_security_model_not_usm_when_processed_then_returns_report_and_increments_counter() {
+        // Verifies: REQ-0000
+        let mib = crate::mib::Store::new();
+        // Build a frame with security_model=3 then patch the byte to 4.
+        // In a standard SNMPv3 frame, security_model=3 is encoded as 02 01 03.
+        // The version field is also encoded as 02 01 03 (the first occurrence),
+        // so we skip the first match and patch the second, which is the
+        // security_model in HeaderData. Replacing 03 with 04 produces
+        // security_model=4 (not USM), rejected per RFC 3412 §7.2 step 2.
+        let mut frame =
+            snmpv3_frames::encode_get_request(test_engine_id(), b"", 1, 1, test_oid_arcs());
+        // The reportable flag (0x04) is set by snmpv3_frames::encode_get_request,
+        // so patching security_model should produce a Report PDU response.
+        let security_model_tlv: &[u8] = &[0x02, 0x01, 0x03];
+        let security_model_patched: &[u8] = &[0x02, 0x01, 0x04];
+        // Skip the first occurrence (version=3) and patch the second (security_model=3).
+        let pos = frame
+            .windows(3)
+            .enumerate()
+            .filter(|(_, w)| *w == security_model_tlv)
+            .nth(1)
+            .map(|(i, _)| i)
+            .expect("security_model=3 must appear as the second 02 01 03 in the frame");
+        frame[pos..pos + 3].copy_from_slice(security_model_patched);
+
+        let mut tc = TestCtx::new();
+        let response = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        let report_bytes =
+            response.expect("should return a Report PDU for unsupported security model");
+        assert_eq!(tc.unknown_security_models, 1);
+        // Verify the Report PDU carries the snmpUnknownSecurityModels OID.
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&report_bytes)
+            .expect("report must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("report must contain a cleartext ScopedPDU");
+        };
+        let rasn_snmp::v2::Pdus::Report(report_pdu) = scoped_pdu.data else {
+            panic!("response must be a Report PDU");
+        };
+        let varbind = &report_pdu.0.variable_bindings[0];
+        let expected_oid: crate::codec::Oid = "1.3.6.1.6.3.11.2.1.1.0".parse().unwrap();
+        assert_eq!(
+            varbind.name.as_ref(),
+            expected_oid.as_slice(),
+            "Report varbind OID must be snmpUnknownSecurityModels"
+        );
+    }
+
+    #[test]
+    fn given_security_model_not_usm_and_no_reportable_flag_when_processed_then_silent_discard() {
+        // Verifies: REQ-0000
+        let mib = crate::mib::Store::new();
+        // Build frame with security_model patched to 4 AND reportable flag cleared.
+        let mut frame =
+            snmpv3_frames::encode_get_request(test_engine_id(), b"", 1, 1, test_oid_arcs());
+        let security_model_tlv: &[u8] = &[0x02, 0x01, 0x03];
+        let security_model_patched: &[u8] = &[0x02, 0x01, 0x04];
+        let pos = frame
+            .windows(3)
+            .enumerate()
+            .filter(|(_, w)| *w == security_model_tlv)
+            .nth(1)
+            .map(|(i, _)| i)
+            .expect("security_model=3 must appear as the second 02 01 03 in the frame");
+        frame[pos..pos + 3].copy_from_slice(security_model_patched);
+        // msgFlags is encoded as 04 01 <flags>; clear the reportable bit (0x04).
+        let flags_tlv: &[u8] = &[0x04, 0x01];
+        let flags_pos = frame
+            .windows(2)
+            .enumerate()
+            .find(|(_, w)| *w == flags_tlv)
+            .map(|(i, _)| i + 2)
+            .expect("msgFlags must be present in frame");
+        frame[flags_pos] &= !0x04u8;
+
+        let mut tc = TestCtx::new();
+        let response = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            response.is_none(),
+            "no reportable flag means silent discard"
+        );
+        assert_eq!(
+            tc.unknown_security_models, 1,
+            "counter must still be incremented"
+        );
+    }
+
+    #[test]
+    fn given_unknown_security_models_counter_at_max_when_incremented_then_does_not_overflow() {
+        // Verifies: REQ-0000
+        let mib = crate::mib::Store::new();
+        let mut frame =
+            snmpv3_frames::encode_get_request(test_engine_id(), b"", 1, 1, test_oid_arcs());
+        let security_model_tlv: &[u8] = &[0x02, 0x01, 0x03];
+        let security_model_patched: &[u8] = &[0x02, 0x01, 0x04];
+        let pos = frame
+            .windows(3)
+            .enumerate()
+            .filter(|(_, w)| *w == security_model_tlv)
+            .nth(1)
+            .map(|(i, _)| i)
+            .expect("security_model=3 must appear as the second 02 01 03 in the frame");
+        frame[pos..pos + 3].copy_from_slice(security_model_patched);
+
+        let mut tc = TestCtx::new().with_unknown_security_models(u32::MAX);
+        {
+            let mut ctx = tc.ctx(None);
+            let _ = process_snmpv3_request(&frame, &mut ctx, &mib);
+        }
+        assert_eq!(
+            tc.unknown_security_models,
+            u32::MAX,
+            "counter must not overflow"
+        );
     }
 }

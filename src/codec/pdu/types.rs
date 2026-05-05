@@ -275,6 +275,8 @@ pub struct UsmSecurityFields {
 pub struct V3InboundMessage<'a> {
     /// Message ID from `HeaderData`; echoed in the `SNMPv3` response.
     pub msg_id: i32,
+    /// Security model from `HeaderData` (RFC 3412 §6.6); must be [`SecurityModel::USM`].
+    pub security_model: SecurityModel,
     /// Engine ID from the `ScopedPdu`; empty for authPriv messages pending decryption.
     pub engine_id: Vec<u8>,
     /// Context name from the `ScopedPdu`; empty for authPriv messages pending decryption.
@@ -413,6 +415,45 @@ impl fmt::Display for EncodeError {
 }
 
 impl std::error::Error for EncodeError {}
+
+// ── SecurityModel ──────────────────────────────────────────────────────────
+
+/// The `msgSecurityModel` value from an `SNMPv3` `HeaderData`.
+///
+/// Wraps the raw wire integer to provide domain-specific semantics. The only
+/// value this agent supports is [`USM`](Self::USM) (3), but the newtype
+/// preserves the original wire value for diagnostic purposes.
+///
+/// # Requirements
+/// Implements: REQ-0000
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct SecurityModel(i32);
+
+impl SecurityModel {
+    /// User-Based Security Model (RFC 3414).
+    pub const USM: Self = Self(3);
+
+    /// Wrap a raw wire value.
+    #[must_use]
+    pub const fn from_wire(value: i32) -> Self {
+        Self(value)
+    }
+
+    /// Returns `true` when this is the USM security model.
+    #[must_use]
+    pub const fn is_usm(self) -> bool {
+        self.0 == Self::USM.0
+    }
+}
+
+impl fmt::Display for SecurityModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::USM => write!(f, "USM(3)"),
+            Self(value) => write!(f, "unknown({value})"),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -639,5 +680,33 @@ mod tests {
     fn encode_error_is_std_error() {
         let encode_error = EncodeError::new("test");
         let _: &dyn std::error::Error = &encode_error;
+    }
+
+    // ── SecurityModel ────────────────────────────────────────────────────────
+
+    #[test]
+    fn security_model_usm_is_usm() {
+        // Verifies: REQ-0000
+        assert_eq!(SecurityModel::USM, SecurityModel::from_wire(3));
+        assert!(SecurityModel::USM.is_usm());
+    }
+
+    #[test]
+    fn security_model_non_usm_is_not_usm() {
+        // Verifies: REQ-0000
+        assert_ne!(SecurityModel::from_wire(4), SecurityModel::USM);
+        assert!(!SecurityModel::from_wire(4).is_usm());
+    }
+
+    #[test]
+    fn security_model_display_usm() {
+        // Verifies: REQ-0000
+        assert_eq!(SecurityModel::USM.to_string(), "USM(3)");
+    }
+
+    #[test]
+    fn security_model_display_unknown() {
+        // Verifies: REQ-0000
+        assert_eq!(SecurityModel::from_wire(7).to_string(), "unknown(7)");
     }
 }

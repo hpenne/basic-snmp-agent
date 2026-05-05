@@ -353,6 +353,10 @@ pub struct EventLoop {
     /// Counter for `usmStatsDecryptionErrors`; incremented when decryption fails.
     // Implements: REQ-0101
     decryption_errors_counter: u32,
+    /// Counter for `snmpUnknownSecurityModels`; incremented when an inbound message
+    /// uses a security model other than USM (RFC 3412 §7.1).
+    // Implements: REQ-0000
+    unknown_security_models_counter: u32,
     /// Configured USM user; `None` when no USM user is configured.
     // Implements: REQ-0076
     usm_user: Option<std::sync::Arc<crate::usm::user::UsmUser>>,
@@ -451,6 +455,7 @@ impl EventLoop {
             wrong_digests_counter: 0,
             not_in_time_windows_counter: 0,
             decryption_errors_counter: 0,
+            unknown_security_models_counter: 0,
             usm_user,
         };
         let sender = CommandSender { tx, pipe_write_fd };
@@ -720,6 +725,7 @@ impl EventLoop {
                     wrong_digests_counter: &mut self.wrong_digests_counter,
                     not_in_time_windows_counter: &mut self.not_in_time_windows_counter,
                     decryption_errors_counter: &mut self.decryption_errors_counter,
+                    unknown_security_models_counter: &mut self.unknown_security_models_counter,
                     usm_user: self.usm_user.as_deref(),
                 },
                 &self.store,
@@ -1164,6 +1170,7 @@ mod tests {
             wrong_digests_counter: 0,
             not_in_time_windows_counter: 0,
             decryption_errors_counter: 0,
+            unknown_security_models_counter: 0,
             usm_user: None,
         };
 

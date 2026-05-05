@@ -1,6 +1,7 @@
 use super::types::{
     DecodeError, DecodeErrorKind, DecodedScopedPdu, GetBulkRequest, GetNextRequest, GetRequest,
-    InboundPdu, SetRequest, UsmSecurityFields, V3InboundMessage, V3ScopedData, Varbind,
+    InboundPdu, SecurityModel, SetRequest, UsmSecurityFields, V3InboundMessage, V3ScopedData,
+    Varbind,
 };
 use crate::codec::ber;
 use crate::codec::ber::{TAG_GET_NEXT_REQUEST, TAG_GET_REQUEST, TAG_SET_REQUEST};
@@ -177,6 +178,7 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
     })?;
 
     let msg_id = envelope.msg_id;
+    let security_model = SecurityModel::from_wire(envelope.security_model);
     let auth_params_offset = envelope.auth_params_offset;
     let security_flags = envelope.security_flags;
 
@@ -231,6 +233,7 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
 
     Ok(V3InboundMessage {
         msg_id,
+        security_model,
         engine_id,
         context_name,
         user_name,

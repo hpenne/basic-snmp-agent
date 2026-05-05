@@ -60,6 +60,7 @@ fuzz_target!(|request_bytes: &[u8]| {
     let mut wrong_digests_counter = 0u32;
     let mut not_in_time_windows_counter = 0u32;
     let mut decryption_errors_counter = 0u32;
+    let mut unknown_security_models_counter = 0u32;
     let mut ctx = DispatchContext {
         engine_id,
         engine_boots: 1,
@@ -70,6 +71,7 @@ fuzz_target!(|request_bytes: &[u8]| {
         wrong_digests_counter: &mut wrong_digests_counter,
         not_in_time_windows_counter: &mut not_in_time_windows_counter,
         decryption_errors_counter: &mut decryption_errors_counter,
+        unknown_security_models_counter: &mut unknown_security_models_counter,
         usm_user: None,
     };
     let _ = process_snmpv3_request(request_bytes, &mut ctx, mib());

@@ -14,67 +14,67 @@ What is the goal? What are the acceptance criteria?"""
 
 [[content.acceptance_criteria]]
 text = "F-01 — Seed privacy salt counter with random u64: on Linux read 8 bytes from /dev/urandom; on other platforms use RandomState::new().build_hasher() fed with seconds and nanoseconds from SystemTime::now()"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "F-02 — Move usmStatsUnknownEngineIDs counter increment before reportableFlag check in discovery probe path (dispatch.rs:231-236); fix test to expect counter == 1"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "F-03 — Add MAX_CONNECTIONS compile-time default (64); expose override via EventLoop builder API; reject new connections at limit with log warning"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "F-04 — Add idle connection timeout: default 5 min, reduced to 30 s when connections >= max - 5. Three named constants (normal timeout, pressure timeout, pressure headroom). All configurable via a config struct exposed through builder API. Add last_activity: Instant to ConnectionState; sweep stale connections in poll loop"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "F-05 — Reject negative msg_id in decode_v3_envelope (snmp.rs) with BerError after decoding"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "F-06 — Reject max_size < 484 in decode_v3_envelope (snmp.rs) per RFC 3412 §6.6"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "F-07 — Apply value & i32::MAX to trap message ID counter after fetch_add to prevent negative msgID values on wrap"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = 'F-08 — Introduce UserName newtype that rejects empty strings at construction (Result-returning constructor). Replace String in UsmUser with UserName; remove debug_assert\! calls from UsmUser constructors'
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "F-09 — Change password_to_localised_key to return Result<SecretKey, KdfError>; reject empty password with error instead of panic"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "F-10 — Reject passwords shorter than 8 bytes in password_to_localised_key with KdfError per RFC 3414 §11.2"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "F-11 — Use read_sequence() to structurally parse VarBindList in decode_pdu instead of remaining().to_vec(); verify no trailing bytes after VarBindList"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "F-12 — Reject OIDs with more than 128 sub-identifiers in decode_oid per RFC 2578 §3.5"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "F-13 — Validate security_model == 3 (USM) in dispatch layer; reject non-USM with appropriate Report PDU"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
@@ -139,7 +139,7 @@ category = "chore"
 
 [[content.acceptance_criteria]]
 text = 'F-24 — Add test for security_model \!= 3 rejection in dispatch (now that F-13 validates it)'
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]

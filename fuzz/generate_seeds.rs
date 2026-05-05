@@ -38,7 +38,7 @@ const SYSDESCR_OID: &[u32] = &[1, 3, 6, 1, 2, 1, 1, 1, 0];
 
 // ── DispatchCounters ─────────────────────────────────────────────────────────
 
-/// Owns the per-call USM counter variables that `DispatchContext` borrows mutably.
+/// Owns the per-call dispatch counter variables that `DispatchContext` borrows mutably.
 ///
 /// Constructing one of these per seed call avoids repeating six variable
 /// declarations and the `DispatchContext` struct literal in each loop body.
@@ -49,6 +49,7 @@ struct DispatchCounters {
     wrong_digests: u32,
     not_in_time_windows: u32,
     decryption_errors: u32,
+    unknown_security_models: u32,
 }
 
 impl DispatchCounters {
@@ -60,6 +61,7 @@ impl DispatchCounters {
             wrong_digests: 0,
             not_in_time_windows: 0,
             decryption_errors: 0,
+            unknown_security_models: 0,
         }
     }
 
@@ -77,6 +79,7 @@ impl DispatchCounters {
             wrong_digests_counter: &mut self.wrong_digests,
             not_in_time_windows_counter: &mut self.not_in_time_windows,
             decryption_errors_counter: &mut self.decryption_errors,
+            unknown_security_models_counter: &mut self.unknown_security_models,
             usm_user,
         }
     }
