@@ -51,7 +51,7 @@ pub use crate::transport::process_snmpv3_request;
 pub use crate::transport::{TrapPdu, TrapResult};
 pub use error::{AgentError, SetError, TrapError};
 
-use crate::transport::event_loop::{Command, EventLoop, EventLoopError};
+use crate::transport::event_loop::{Command, DEFAULT_MAX_CONNECTIONS, EventLoop, EventLoopError};
 use crate::transport::trap::TrapSender;
 
 // ── AgentInner ───────────────────────────────────────────────────────────────
@@ -208,6 +208,8 @@ pub struct AgentBuilder {
     // Engine-boots persistence store; `None` means boots start at 1 and are not persisted.
     // Implements: REQ-0094, REQ-0095, REQ-0096
     boots_store: Option<Box<dyn crate::usm::boots::EngineBootsStore>>,
+    // Maximum number of concurrent TCP connections; defaults to DEFAULT_MAX_CONNECTIONS.
+    max_connections: usize,
 }
 
 impl AgentBuilder {
@@ -230,6 +232,7 @@ impl AgentBuilder {
             engine_id: b"\x80\x00\x1f\x88\x04basic-snmp-agent".to_vec(),
             usm_user: None,
             boots_store: None,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
         }
     }
 
@@ -289,6 +292,16 @@ impl AgentBuilder {
         self
     }
 
+    /// Override the maximum number of concurrent TCP connections.
+    ///
+    /// Default: [`DEFAULT_MAX_CONNECTIONS`] (64). When this limit is reached,
+    /// new connections are rejected until existing ones close.
+    #[must_use]
+    pub fn max_connections(mut self, max: usize) -> Self {
+        self.max_connections = max;
+        self
+    }
+
     /// Construct and start the agent.
     ///
     /// Binds the TCP listener on [`listen_addr`][`Self::listen_addr`], creates
@@ -329,15 +342,19 @@ impl AgentBuilder {
         // own copy; the event loop takes ownership of the original.
         let trap_engine_id = self.engine_id.clone();
 
-        let (event_loop, _bound_addr, command_sender) =
-            EventLoop::new(listen_addr, self.engine_id, engine_boots, usm_user.clone()).map_err(
-                |e| match e {
-                    EventLoopError::Bind { addr, source } => AgentError::Bind { addr, source },
-                    EventLoopError::Pipe(source) | EventLoopError::Registration(source) => {
-                        AgentError::Socket(source)
-                    }
-                },
-            )?;
+        let (event_loop, _bound_addr, command_sender) = EventLoop::new(
+            listen_addr,
+            self.engine_id,
+            engine_boots,
+            usm_user.clone(),
+            self.max_connections,
+        )
+        .map_err(|e| match e {
+            EventLoopError::Bind { addr, source } => AgentError::Bind { addr, source },
+            EventLoopError::Pipe(source) | EventLoopError::Registration(source) => {
+                AgentError::Socket(source)
+            }
+        })?;
 
         let trap_sender = TrapSender::new(Instant::now(), trap_engine_id, engine_boots, usm_user)
             .map_err(AgentError::UdpSocket)?;
@@ -660,6 +677,19 @@ mod tests {
             .engine_boots_store(CeilingStore)
             .build();
         assert!(matches!(result, Err(AgentError::EngineBoots(_))));
+    }
+
+    #[test]
+    fn given_max_connections_when_build_then_agent_starts() {
+        // Verifies that the max_connections builder method is accepted and the agent starts.
+        let result = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .max_connections(10)
+            .build();
+        assert!(
+            result.is_ok(),
+            "expected agent to start with custom max_connections"
+        );
     }
 
     #[test]

@@ -44,6 +44,11 @@ pub(crate) const MAX_BULK_REPETITIONS: u32 = 100;
 /// memory exhaustion.
 const MAX_FRAME_SIZE: usize = 65_535;
 
+/// Default maximum number of concurrent TCP connections the agent will accept.
+/// When this limit is reached, new connections are rejected until existing
+/// ones close.
+pub const DEFAULT_MAX_CONNECTIONS: usize = 64;
+
 // ── EventLoopError ───────────────────────────────────────────────────────────
 
 /// Error returned when [`EventLoop::new`] fails.
@@ -147,11 +152,12 @@ pub enum Command {
 ///
 /// ```no_run
 /// use std::net::SocketAddr;
-/// use basic_snmp_agent::transport::event_loop::{Command, EventLoop};
+/// use basic_snmp_agent::transport::event_loop::{Command, DEFAULT_MAX_CONNECTIONS, EventLoop};
 ///
 /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
 /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
-/// let (event_loop, _bound_addr, sender) = EventLoop::new(addr, engine_id, 1, None).unwrap();
+/// let (event_loop, _bound_addr, sender) =
+///     EventLoop::new(addr, engine_id, 1, None, DEFAULT_MAX_CONNECTIONS).unwrap();
 /// sender.send(Command::Shutdown).unwrap();
 /// ```
 pub struct CommandSender {
@@ -231,11 +237,12 @@ struct ConnectionState {
 ///
 /// ```no_run
 /// use std::net::SocketAddr;
-/// use basic_snmp_agent::transport::event_loop::EventLoop;
+/// use basic_snmp_agent::transport::event_loop::{DEFAULT_MAX_CONNECTIONS, EventLoop};
 ///
 /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
 /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
-/// let (event_loop, bound_addr, sender) = EventLoop::new(addr, engine_id, 1, None).unwrap();
+/// let (event_loop, bound_addr, sender) =
+///     EventLoop::new(addr, engine_id, 1, None, DEFAULT_MAX_CONNECTIONS).unwrap();
 ///
 /// let handle = std::thread::spawn(move || event_loop.run());
 /// sender.send(basic_snmp_agent::transport::event_loop::Command::Shutdown).unwrap();
@@ -251,6 +258,9 @@ pub struct EventLoop {
     /// Next token value to assign to an accepted connection.
     next_token: usize,
     connections: HashMap<Token, ConnectionState>,
+    /// Maximum number of concurrent TCP connections to accept. Connections
+    /// beyond this limit are dropped at the OS level on the next poll cycle.
+    max_connections: usize,
     /// MIB store; updated by `SetValue` commands from application threads.
     store: crate::mib::Store,
     /// This agent's `SNMPv3` engine ID; inbound messages with a different engine
@@ -293,6 +303,9 @@ impl EventLoop {
     /// uses port 0 for OS-assigned allocation), and a [`CommandSender`] for
     /// sending commands from other threads.
     ///
+    /// `max_connections` caps the number of concurrently tracked TCP connections.
+    /// Pass [`DEFAULT_MAX_CONNECTIONS`] for the standard limit of 64.
+    ///
     /// # Errors
     ///
     /// Returns [`EventLoopError::Bind`] if the TCP listener cannot be bound,
@@ -306,11 +319,12 @@ impl EventLoop {
     ///
     /// ```no_run
     /// use std::net::SocketAddr;
-    /// use basic_snmp_agent::transport::event_loop::EventLoop;
+    /// use basic_snmp_agent::transport::event_loop::{DEFAULT_MAX_CONNECTIONS, EventLoop};
     ///
     /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
     /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
-    /// let (event_loop, bound_addr, sender) = EventLoop::new(addr, engine_id, 1, None).unwrap();
+    /// let (event_loop, bound_addr, sender) =
+    ///     EventLoop::new(addr, engine_id, 1, None, DEFAULT_MAX_CONNECTIONS).unwrap();
     /// println!("listening on {bound_addr}");
     /// ```
     pub fn new(
@@ -318,6 +332,7 @@ impl EventLoop {
         engine_id: Vec<u8>,
         engine_boots: u32,
         usm_user: Option<std::sync::Arc<crate::usm::user::UsmUser>>,
+        max_connections: usize,
     ) -> Result<(Self, SocketAddr, CommandSender), EventLoopError> {
         let poll = Poll::new().map_err(EventLoopError::Registration)?;
         let registry = poll.registry();
@@ -354,6 +369,7 @@ impl EventLoop {
             rx,
             next_token: FIRST_CONN_TOKEN,
             connections: HashMap::new(),
+            max_connections,
             store: crate::mib::Store::new(),
             engine_id,
             engine_boots,
@@ -422,12 +438,26 @@ impl EventLoop {
 
     /// Accept all pending connections, registering each with a unique token.
     ///
-    /// Transient accept errors (e.g. `EMFILE`, `ENFILE`, `ECONNABORTED`) are
-    /// logged and skipped rather than killing the event loop, because a single
-    /// resource-exhaustion moment should not bring down the agent.
+    /// When the connection limit is reached, the accept loop stops processing
+    /// new connections for this poll cycle. Transient accept errors (e.g.
+    /// `EMFILE`, `ENFILE`, `ECONNABORTED`) are logged and skipped rather than
+    /// killing the event loop, because a single resource-exhaustion moment
+    /// should not bring down the agent.
     // Implements: REQ-0051
     fn accept_connections(&mut self) {
         loop {
+            // Stop accepting when the connection table is at capacity so that
+            // a burst of inbound connections cannot exhaust memory. The OS
+            // kernel backlog buffers the excess; they will be accepted once
+            // existing connections close.
+            if self.connections.len() >= self.max_connections {
+                eprintln!(
+                    "[event_loop] connection limit ({}) reached, not accepting new connections",
+                    self.max_connections
+                );
+                break;
+            }
+
             match self.listener.accept() {
                 Ok((mut stream, peer_addr)) => {
                     let token = self.next_connection_token();
@@ -824,8 +854,14 @@ mod tests {
     fn given_running_event_loop_when_tcp_client_connects_then_connection_is_accepted() {
         // Verifies: REQ-0050, REQ-0051
         // Given: an event loop bound on a random loopback port.
-        let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), 1, None).unwrap();
+        let (event_loop, bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            DEFAULT_MAX_CONNECTIONS,
+        )
+        .unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         // When: a TCP client connects.
@@ -844,8 +880,14 @@ mod tests {
     fn given_running_event_loop_when_shutdown_command_sent_then_loop_exits_cleanly() {
         // Verifies: REQ-0048, REQ-0052, REQ-0053, REQ-0054
         // Given: a running event loop.
-        let (event_loop, _bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), 1, None).unwrap();
+        let (event_loop, _bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            DEFAULT_MAX_CONNECTIONS,
+        )
+        .unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         // When: Shutdown is sent.
@@ -860,8 +902,14 @@ mod tests {
     fn given_running_event_loop_when_set_value_command_sent_then_loop_drains_channel() {
         // Verifies: REQ-0052
         // Given: a running event loop.
-        let (event_loop, _bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), 1, None).unwrap();
+        let (event_loop, _bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            DEFAULT_MAX_CONNECTIONS,
+        )
+        .unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         // When: a SetValue command is followed by Shutdown.
@@ -882,8 +930,14 @@ mod tests {
     #[test]
     fn given_running_event_loop_when_set_value_sent_then_loop_remains_alive_for_shutdown() {
         // Given: a running event loop.
-        let (event_loop, _bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), 1, None).unwrap();
+        let (event_loop, _bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            DEFAULT_MAX_CONNECTIONS,
+        )
+        .unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         // When: a SetValue command is sent and the loop is given time to process it.
@@ -912,8 +966,14 @@ mod tests {
     fn given_set_value_command_when_sent_then_mib_store_is_updated() {
         // Verifies: REQ-0066
         // Given: a running event loop.
-        let (event_loop, _bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), 1, None).unwrap();
+        let (event_loop, _bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            DEFAULT_MAX_CONNECTIONS,
+        )
+        .unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -955,8 +1015,14 @@ mod tests {
     #[test]
     fn given_no_set_value_when_queried_then_mib_returns_none() {
         // Given: a running event loop with no values inserted.
-        let (event_loop, _bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), 1, None).unwrap();
+        let (event_loop, _bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            DEFAULT_MAX_CONNECTIONS,
+        )
+        .unwrap();
         let handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -1004,6 +1070,7 @@ mod tests {
             rx: mpsc::channel::<Command>().1,
             next_token: FIRST_CONN_TOKEN,
             connections: HashMap::new(),
+            max_connections: DEFAULT_MAX_CONNECTIONS,
             store: crate::mib::Store::new(),
             engine_id: test_engine_id(),
             engine_boots: 1,
@@ -1292,8 +1359,14 @@ mod tests {
     fn given_get_request_when_sent_over_tcp_then_response_is_received() {
         // Verifies: REQ-0021, REQ-0051, REQ-0066, REQ-0068, REQ-0069, REQ-0070, REQ-0071
         // Given: a running event loop with a known OID in the MIB.
-        let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), 1, None).unwrap();
+        let (event_loop, bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            DEFAULT_MAX_CONNECTIONS,
+        )
+        .unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -1330,8 +1403,14 @@ mod tests {
     fn given_partial_frame_when_split_across_reads_then_response_is_received() {
         // Verifies: REQ-0068, REQ-0071
         // Given: a running event loop with a known OID in the MIB.
-        let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), 1, None).unwrap();
+        let (event_loop, bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            DEFAULT_MAX_CONNECTIONS,
+        )
+        .unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.2.0".parse().unwrap();
@@ -1372,8 +1451,14 @@ mod tests {
     fn given_invalid_snmp_payload_in_sequence_when_received_then_connection_stays_open() {
         // Verifies: REQ-0073
         // Given: a running event loop.
-        let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), 1, None).unwrap();
+        let (event_loop, bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            DEFAULT_MAX_CONNECTIONS,
+        )
+        .unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.3.0".parse().unwrap();
@@ -1414,8 +1499,14 @@ mod tests {
     fn given_empty_sequence_frame_when_received_then_connection_stays_open() {
         // Verifies: REQ-0073
         // Given: a running event loop with a known OID in the MIB.
-        let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), 1, None).unwrap();
+        let (event_loop, bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            DEFAULT_MAX_CONNECTIONS,
+        )
+        .unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.4.0".parse().unwrap();
@@ -1454,8 +1545,14 @@ mod tests {
     fn given_wrong_engine_id_when_request_sent_then_report_pdu_returned() {
         // Verifies: REQ-0104
         // Given: a running event loop with a known OID in the MIB.
-        let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), 1, None).unwrap();
+        let (event_loop, bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            DEFAULT_MAX_CONNECTIONS,
+        )
+        .unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.5.0".parse().unwrap();
@@ -1511,8 +1608,14 @@ mod tests {
         // the connection must stay open so a subsequent valid request succeeds.
 
         // Given: a running event loop with a known OID in the MIB.
-        let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), 1, None).unwrap();
+        let (event_loop, bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            DEFAULT_MAX_CONNECTIONS,
+        )
+        .unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.6.0".parse().unwrap();
@@ -1554,8 +1657,14 @@ mod tests {
         // cause the connection to be closed, not stalled indefinitely.
 
         // Given: a running event loop.
-        let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), 1, None).unwrap();
+        let (event_loop, bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            DEFAULT_MAX_CONNECTIONS,
+        )
+        .unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
@@ -1599,8 +1708,14 @@ mod tests {
         //              loop will silently discard it but keep the connection open)
         //
         // Verification: 1 + 5 + 65529 = 65535 == MAX_FRAME_SIZE.
-        let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), 1, None).unwrap();
+        let (event_loop, bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            DEFAULT_MAX_CONNECTIONS,
+        )
+        .unwrap();
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.7.0".parse().unwrap();
@@ -1642,6 +1757,65 @@ mod tests {
             crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(42))
         );
 
+        sender.send(Command::Shutdown).unwrap();
+        loop_handle
+            .join()
+            .expect("event loop thread panicked")
+            .unwrap();
+    }
+
+    #[test]
+    fn given_max_connections_reached_when_new_connection_then_rejected() {
+        // The event loop accepts at most `max_connections` TCP connections. When
+        // the limit is full, the loop stops calling accept() for the current poll
+        // cycle; any connections the OS has buffered in the backlog are not
+        // registered and will be dropped/RST once the event loop drops the
+        // accepted-but-unregistered stream.
+
+        // Given: an event loop with a connection limit of 2.
+        let (event_loop, bound_addr, sender) =
+            EventLoop::new(any_loopback(), test_engine_id(), 1, None, 2).unwrap();
+        let loop_handle = thread::spawn(move || event_loop.run());
+
+        // When: two clients connect (filling the connection table).
+        let client_a = std::net::TcpStream::connect(bound_addr).unwrap();
+        let client_b = std::net::TcpStream::connect(bound_addr).unwrap();
+
+        // Allow the event loop time to accept both connections.
+        thread::sleep(Duration::from_millis(50));
+
+        // Then: a third client connects to the listener socket. The OS accepts
+        // the TCP handshake into the kernel backlog, but the event loop will not
+        // register it because the limit is already reached.
+        let mut client_c = std::net::TcpStream::connect(bound_addr).unwrap();
+        client_c
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+
+        // The third client receives no data — the event loop neither processes
+        // its frames nor sends any response. Attempting to read must time out
+        // (WouldBlock / TimedOut) rather than returning data.
+        let mut buf = [0u8; 1];
+        let read_result = client_c.read(&mut buf);
+        // An Ok(0) (EOF/RST) or a timeout error are both acceptable outcomes,
+        // because the connection was not registered by the event loop and the
+        // OS may close it. What must NOT happen is receiving any data.
+        match read_result {
+            Ok(bytes_read) => assert_eq!(
+                bytes_read, 0,
+                "third connection must not receive any data from the event loop"
+            ),
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
+            {
+                // Expected: the read timed out because no data was sent.
+            }
+            Err(e) => panic!("unexpected read error on third connection: {e}"),
+        }
+
+        // Clean up: close the first two clients and shut down.
+        drop(client_a);
+        drop(client_b);
         sender.send(Command::Shutdown).unwrap();
         loop_handle
             .join()
