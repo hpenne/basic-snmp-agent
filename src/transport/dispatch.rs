@@ -229,11 +229,11 @@ pub fn process_snmpv3_request(
     // usmStatsUnknownEngineIDs counter and our authoritative engine state
     // so the manager can learn our engine ID, boots, and approximate time.
     if v3_msg.usm.auth_engine_id.is_empty() {
+        *ctx.unknown_engine_ids_counter = ctx.unknown_engine_ids_counter.saturating_add(1);
         // RFC 3412 §7.1.3a: if the reportableFlag is not set, discard without response.
         if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
             return None;
         }
-        *ctx.unknown_engine_ids_counter = ctx.unknown_engine_ids_counter.saturating_add(1);
         return crate::codec::encode_v3_report(
             v3_msg.msg_id,
             ctx.engine_id,
@@ -665,8 +665,8 @@ mod tests {
             "probe without reportableFlag must be silently discarded"
         );
         assert_eq!(
-            tc.unknown_engine_ids, 0,
-            "counter must not be incremented for non-reportable probe"
+            tc.unknown_engine_ids, 1,
+            "counter must be incremented even for non-reportable probe"
         );
     }
 
