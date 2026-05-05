@@ -29,7 +29,9 @@ static TRAP_MSG_ID_COUNTER: AtomicI32 = AtomicI32::new(1);
 
 // Implements: REQ-0105
 fn next_trap_msg_id() -> i32 {
-    TRAP_MSG_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
+    // Clear the sign bit so the counter wraps from i32::MAX back to 0
+    // rather than producing negative values that violate RFC 3412 §6.2.
+    TRAP_MSG_ID_COUNTER.fetch_add(1, Ordering::Relaxed) & i32::MAX
 }
 
 /// Per-destination outcome of a single trap send attempt.
@@ -738,5 +740,19 @@ mod tests {
             msg_id_1, msg_id_2,
             "consecutive V3 traps must carry different message IDs"
         );
+    }
+
+    #[test]
+    fn given_counter_near_max_when_next_trap_msg_id_then_stays_non_negative() {
+        // Verifies: RFC 3412 §6.2
+        // Set the counter to i32::MAX - 1, then call next_trap_msg_id() several times
+        // and verify all returned values are non-negative.
+        TRAP_MSG_ID_COUNTER.store(i32::MAX - 1, Ordering::Relaxed);
+        for _ in 0..5 {
+            let msg_id = next_trap_msg_id();
+            assert!(msg_id >= 0, "msgID must never be negative, got {msg_id}");
+        }
+        // Reset counter to avoid affecting other tests
+        TRAP_MSG_ID_COUNTER.store(1, Ordering::Relaxed);
     }
 }
