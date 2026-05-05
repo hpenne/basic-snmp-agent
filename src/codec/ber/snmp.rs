@@ -143,6 +143,12 @@ pub(crate) fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, 
         ));
     }
     let max_size = header_reader.read_integer()?;
+    // RFC 3412 §6.6: msgMaxSize must be at least 484.
+    if max_size < 484 {
+        return Err(BerError::new(
+            "BER: msgMaxSize must be at least 484 per RFC 3412 §6.6",
+        ));
+    }
     let flags_bytes = header_reader.read_octet_string()?;
     // RFC 3412 §6.6: msgFlags must be exactly 1 byte.
     if flags_bytes.len() != 1 {
@@ -997,6 +1003,110 @@ mod tests {
             error_message.contains("non-negative") || error_message.contains("RFC 3412"),
             "error must reference the non-negative constraint or RFC 3412, got: {error_message}"
         );
+    }
+
+    // ── Test 11c: msgMaxSize below 484 is rejected by decode_v3_envelope ──────
+
+    #[test]
+    fn given_max_size_zero_when_decode_v3_envelope_then_error() {
+        // Verifies: RFC 3412 §6.6 msgMaxSize minimum value 484
+        // encode_v3_message encodes any i32 for max_size; the decoder must
+        // reject 0 because msgMaxSize must be at least 484.
+        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
+        let (encoded, _) = encode_v3_message(
+            1,    // msg_id
+            0,    // max_size: 0 — invalid per RFC 3412 §6.6
+            0x04, // flags_byte (reportable, noAuth, noPriv)
+            3,    // security_model (USM)
+            &[],  // engine_id
+            0,    // engine_boots
+            0,    // engine_time
+            &[],  // user_name
+            &[],  // auth_params
+            &[],  // priv_params
+            &scoped_pdu,
+            false, // not encrypted
+        )
+        .expect("encoding max_size=0 must succeed (encoder does not validate)");
+
+        let ber_error = decode_v3_envelope(&encoded).unwrap_err();
+        let error_message = ber_error.to_string();
+        assert!(
+            error_message.contains("msgMaxSize"),
+            "error must mention msgMaxSize, got: {error_message}"
+        );
+        assert!(
+            error_message.contains("484") || error_message.contains("RFC 3412"),
+            "error must reference 484 or RFC 3412, got: {error_message}"
+        );
+    }
+
+    #[test]
+    fn given_max_size_483_when_decode_v3_envelope_then_error() {
+        // Verifies: RFC 3412 §6.6 msgMaxSize minimum value 484
+        // 483 is one below the minimum; the decoder must reject it.
+        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
+        let (encoded, _) = encode_v3_message(
+            1,    // msg_id
+            483,  // max_size: 483 — one below the minimum per RFC 3412 §6.6
+            0x04, // flags_byte (reportable, noAuth, noPriv)
+            3,    // security_model (USM)
+            &[],  // engine_id
+            0,    // engine_boots
+            0,    // engine_time
+            &[],  // user_name
+            &[],  // auth_params
+            &[],  // priv_params
+            &scoped_pdu,
+            false, // not encrypted
+        )
+        .expect("encoding max_size=483 must succeed (encoder does not validate)");
+
+        let ber_error = decode_v3_envelope(&encoded).unwrap_err();
+        let error_message = ber_error.to_string();
+        assert!(
+            error_message.contains("msgMaxSize"),
+            "error must mention msgMaxSize, got: {error_message}"
+        );
+        assert!(
+            error_message.contains("484") || error_message.contains("RFC 3412"),
+            "error must reference 484 or RFC 3412, got: {error_message}"
+        );
+    }
+
+    #[test]
+    fn given_max_size_484_when_decode_v3_envelope_then_accepted() {
+        // Verifies: RFC 3412 §6.6 msgMaxSize minimum value 484
+        // 484 is the minimum allowed value; the decoder must not reject it
+        // for the max_size check (it may succeed fully or fail for other reasons).
+        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
+        let (encoded, _) = encode_v3_message(
+            1,    // msg_id
+            484,  // max_size: exactly the minimum per RFC 3412 §6.6
+            0x04, // flags_byte (reportable, noAuth, noPriv)
+            3,    // security_model (USM)
+            &[],  // engine_id
+            0,    // engine_boots
+            0,    // engine_time
+            &[],  // user_name
+            &[],  // auth_params
+            &[],  // priv_params
+            &scoped_pdu,
+            false, // not encrypted
+        )
+        .expect("encode must succeed");
+
+        // The decode must either succeed completely or fail for a reason other
+        // than the max_size check — never with an error mentioning msgMaxSize.
+        match decode_v3_envelope(&encoded) {
+            Ok(_) => {} // fully valid message — max_size check passed
+            Err(ber_error) => {
+                assert!(
+                    !ber_error.to_string().contains("msgMaxSize"),
+                    "decode must not reject max_size=484 with a msgMaxSize error, got: {ber_error}"
+                );
+            }
+        }
     }
 
     // ── Test 12: msgFlags validation — wrong length returns error ─────────────
