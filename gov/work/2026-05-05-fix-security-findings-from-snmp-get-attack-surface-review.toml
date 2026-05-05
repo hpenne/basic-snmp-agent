@@ -1,0 +1,128 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-05-05-002"
+title = "Fix security findings from SNMP GET attack surface review"
+status = "active"
+created = "2026-05-05"
+started = "2026-05-05"
+
+[content]
+description = """
+Describe the work to be done.
+What is the goal? What are the acceptance criteria?"""
+
+[[content.acceptance_criteria]]
+text = "F-01 — Seed privacy salt counter with random u64: on Linux read 8 bytes from /dev/urandom; on other platforms use RandomState::new().build_hasher() fed with seconds and nanoseconds from SystemTime::now()"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-02 — Move usmStatsUnknownEngineIDs counter increment before reportableFlag check in discovery probe path (dispatch.rs:231-236); fix test to expect counter == 1"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-03 — Add MAX_CONNECTIONS compile-time default (64); expose override via EventLoop builder API; reject new connections at limit with log warning"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-04 — Add idle connection timeout: default 5 min, reduced to 30 s when connections >= max - 5. Three named constants (normal timeout, pressure timeout, pressure headroom). All configurable via a config struct exposed through builder API. Add last_activity: Instant to ConnectionState; sweep stale connections in poll loop"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-05 — Reject negative msg_id in decode_v3_envelope (snmp.rs) with BerError after decoding"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-06 — Reject max_size < 484 in decode_v3_envelope (snmp.rs) per RFC 3412 §6.6"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-07 — Apply value & i32::MAX to trap message ID counter after fetch_add to prevent negative msgID values on wrap"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = 'F-08 — Introduce UserName newtype that rejects empty strings at construction (Result-returning constructor). Replace String in UsmUser with UserName; remove debug_assert\! calls from UsmUser constructors'
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-09 — Change password_to_localised_key to return Result<SecretKey, KdfError>; reject empty password with error instead of panic"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-10 — Reject passwords shorter than 8 bytes in password_to_localised_key with KdfError per RFC 3414 §11.2"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-11 — Use read_sequence() to structurally parse VarBindList in decode_pdu instead of remaining().to_vec(); verify no trailing bytes after VarBindList"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-12 — Reject OIDs with more than 128 sub-identifiers in decode_oid per RFC 2578 §3.5"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-13 — Validate security_model == 3 (USM) in dispatch layer; reject non-USM with appropriate Report PDU"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-14 — Replace non_repeaters as usize with usize::from(req.non_repeaters) in request.rs"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-15 — Add comment at dispatch.rs user name comparison explaining constant-time is unnecessary because SNMP user names are not secret (transmitted in cleartext)"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-16 — Add comment in decode_unsigned documenting that non-minimal BER integer encoding is intentionally accepted per SNMP's use of BER (not DER)"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-17 — Reject non-minimal OID sub-identifier encoding in decode_base128: error if first byte is 0x80 (leading zero in base-128) per X.690 §8.19.2"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-18 — Restrict read_length extra_byte_count to size_of::<usize>(); reject 0xFF initial length byte per X.690 §8.1.3.5"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-19 — Add fsync on parent directory after rename in FileEngineBootsStore::save for full write durability"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-20 — Add comment at privacy salt fetch_add explaining why Relaxed ordering is safe: Once::call_once provides happens-before for seed, fetch_add atomicity guarantees unique values"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "F-21 — Replace hardcoded max_size 65535 in encode_v3_message with reference to MAX_FRAME_SIZE; add comment linking the value to RFC 3412 §6.4"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "All fixes have corresponding unit tests"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"
