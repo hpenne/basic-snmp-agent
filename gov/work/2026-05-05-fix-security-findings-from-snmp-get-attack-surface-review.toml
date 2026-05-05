@@ -126,3 +126,23 @@ category = "chore"
 text = "govctl check passes"
 status = "pending"
 category = "chore"
+
+[[content.acceptance_criteria]]
+text = "F-22 — Replace byte-pattern search in test helpers (dispatch.rs:1530-1535, encode.rs:466-489) with structural auth_params_offset from the BER encoder"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "F-23 — Add test verifying MAC computed with wrong key is rejected by verify_mac"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = 'F-24 — Add test for security_model \!= 3 rejection in dispatch (now that F-13 validates it)'
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "F-25 — Add OID round-trip test for u32::MAX as second arc under first arc 2 (i.e. 2.4294967295)"
+status = "pending"
+category = "chore"
