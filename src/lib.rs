@@ -606,8 +606,8 @@ mod tests {
     #[test]
     fn given_usm_user_when_build_then_agent_starts() {
         // Verifies: REQ-0074, REQ-0076
-        use crate::usm::user::UsmUser;
-        let user = UsmUser::no_auth_no_priv("public");
+        use crate::usm::user::{UserName, UsmUser};
+        let user = UsmUser::no_auth_no_priv(UserName::new("public").unwrap());
         let result = AgentBuilder::new()
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .usm_user(user)
@@ -741,10 +741,14 @@ mod tests {
         // detects that by verifying the received datagram carries SNMP version 3.
         use crate::usm::auth::AuthProtocol;
         use crate::usm::keys::SecretKey;
-        use crate::usm::user::UsmUser;
+        use crate::usm::user::{UserName, UsmUser};
 
         let auth_key = SecretKey::new_from_exposed_slice(&[0x11u8; 32]);
-        let user = UsmUser::auth_no_priv("testuser", AuthProtocol::HmacSha256, auth_key);
+        let user = UsmUser::auth_no_priv(
+            UserName::new("testuser").unwrap(),
+            AuthProtocol::HmacSha256,
+            auth_key,
+        );
 
         let agent = AgentBuilder::new()
             .listen_addr("127.0.0.1:0".parse().unwrap())

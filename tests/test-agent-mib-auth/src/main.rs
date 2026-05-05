@@ -21,7 +21,7 @@ fn main() {
         AuthProtocol::HmacSha256,
     );
     let usm_user = basic_snmp_agent::usm::user::UsmUser::auth_no_priv(
-        "authuser",
+        basic_snmp_agent::usm::user::UserName::new("authuser").unwrap(),
         AuthProtocol::HmacSha256,
         auth_key,
     );

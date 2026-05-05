@@ -541,14 +541,18 @@ mod tests {
         // Verifies: REQ-0105
         use crate::usm::auth::AuthProtocol;
         use crate::usm::keys::SecretKey;
-        use crate::usm::user::UsmUser;
+        use crate::usm::user::{UserName, UsmUser};
         use rasn_snmp::v3::{Message as V3Message, USMSecurityParameters};
 
         let auth_key = SecretKey::new_from_exposed_slice(&[0x42u8; 32]);
         let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42u8; 32]);
         let auth_protocol = AuthProtocol::HmacSha256;
         let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
-        let user = Arc::new(UsmUser::auth_no_priv("trapauth", auth_protocol, auth_key));
+        let user = Arc::new(UsmUser::auth_no_priv(
+            UserName::new("trapauth").unwrap(),
+            auth_protocol,
+            auth_key,
+        ));
         let sender = TrapSender::new(Instant::now(), engine_id, 1, Some(user)).unwrap();
         let (receiver, dest) = loopback_receiver();
         receiver
@@ -598,14 +602,14 @@ mod tests {
         use crate::usm::auth::AuthProtocol;
         use crate::usm::keys::SecretKey;
         use crate::usm::privacy::PrivProtocol;
-        use crate::usm::user::UsmUser;
+        use crate::usm::user::{UserName, UsmUser};
         use rasn_snmp::v3::{Message as V3Message, ScopedPduData, USMSecurityParameters};
 
         let auth_key = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
         let priv_key = SecretKey::new_from_exposed_slice(&[0xBBu8; 16]);
         let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
         let user = Arc::new(UsmUser::auth_priv(
-            "trappriv",
+            UserName::new("trappriv").unwrap(),
             AuthProtocol::HmacSha256,
             auth_key,
             PrivProtocol::Aes128,
@@ -651,11 +655,11 @@ mod tests {
     #[test]
     fn given_no_auth_no_priv_user_when_send_trap_then_v3_message_without_security() {
         // Verifies: REQ-0106
-        use crate::usm::user::UsmUser;
+        use crate::usm::user::{UserName, UsmUser};
         use rasn_snmp::v3::{Message as V3Message, ScopedPduData};
 
         let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
-        let user = Arc::new(UsmUser::no_auth_no_priv("public"));
+        let user = Arc::new(UsmUser::no_auth_no_priv(UserName::new("public").unwrap()));
         let sender = TrapSender::new(Instant::now(), engine_id, 0, Some(user)).unwrap();
         let (receiver, dest) = loopback_receiver();
         receiver
@@ -693,11 +697,11 @@ mod tests {
         // Verifies: REQ-0105
         // The mutant replaces next_trap_msg_id() with a constant (0, 1, or -1).
         // Two consecutive V3 trap sends must have different message IDs.
-        use crate::usm::user::UsmUser;
+        use crate::usm::user::{UserName, UsmUser};
         use rasn_snmp::v3::Message as V3Message;
 
         let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
-        let user = std::sync::Arc::new(UsmUser::no_auth_no_priv("public"));
+        let user = std::sync::Arc::new(UsmUser::no_auth_no_priv(UserName::new("public").unwrap()));
         let sender = TrapSender::new(Instant::now(), engine_id, 0, Some(user)).unwrap();
         let (receiver, dest) = loopback_receiver();
         receiver

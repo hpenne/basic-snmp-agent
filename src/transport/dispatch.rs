@@ -850,7 +850,9 @@ mod tests {
     fn given_matching_user_name_when_process_then_proceeds() {
         // Verifies: REQ-0078
         let mib = crate::mib::Store::new();
-        let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
+        let alice = crate::usm::user::UsmUser::no_auth_no_priv(
+            crate::usm::user::UserName::new("alice").unwrap(),
+        );
         let frame = snmpv3_frames::encode_get_request_with_user(
             test_engine_id(),
             b"alice",
@@ -891,7 +893,9 @@ mod tests {
     fn given_mismatched_user_name_when_process_then_returns_report_and_increments_counter() {
         // Verifies: REQ-0078, REQ-0080
         let mib = crate::mib::Store::new();
-        let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
+        let alice = crate::usm::user::UsmUser::no_auth_no_priv(
+            crate::usm::user::UserName::new("alice").unwrap(),
+        );
         // Frame sent by "eve" but agent is configured for "alice".
         let frame = snmpv3_frames::encode_get_request_with_user(
             test_engine_id(),
@@ -943,7 +947,9 @@ mod tests {
      {
         // Verifies: REQ-0078 — no Report when reportableFlag is not set, but counter still increments
         let mib = crate::mib::Store::new();
-        let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
+        let alice = crate::usm::user::UsmUser::no_auth_no_priv(
+            crate::usm::user::UserName::new("alice").unwrap(),
+        );
         // Frame sent by "eve" with reportableFlag cleared — agent must not send a Report.
         let frame = snmpv3_frames::encode_get_request_with_user_no_report(
             test_engine_id(),
@@ -972,7 +978,9 @@ mod tests {
     fn given_counter_at_max_when_mismatched_user_name_then_counter_does_not_overflow() {
         // Verifies: REQ-0078 — saturating_add prevents overflow
         let mib = crate::mib::Store::new();
-        let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
+        let alice = crate::usm::user::UsmUser::no_auth_no_priv(
+            crate::usm::user::UserName::new("alice").unwrap(),
+        );
         let frame = snmpv3_frames::encode_get_request_with_user(
             test_engine_id(),
             b"eve",
@@ -995,7 +1003,9 @@ mod tests {
     fn given_matching_security_level_when_process_then_proceeds() {
         // Verifies: REQ-0079, REQ-0103
         let mib = crate::mib::Store::new();
-        let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
+        let alice = crate::usm::user::UsmUser::no_auth_no_priv(
+            crate::usm::user::UserName::new("alice").unwrap(),
+        );
         // flags 0x04 = reportableFlag only → noAuthNoPriv security level
         let frame = snmpv3_frames::encode_get_request_with_user(
             test_engine_id(),
@@ -1034,7 +1044,9 @@ mod tests {
     fn given_mismatched_security_level_when_process_then_returns_report_and_increments_counter() {
         // Verifies: REQ-0079
         let mib = crate::mib::Store::new();
-        let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
+        let alice = crate::usm::user::UsmUser::no_auth_no_priv(
+            crate::usm::user::UserName::new("alice").unwrap(),
+        );
         // flags 0x05 = authFlag + reportableFlag → authNoPriv; configured user is noAuthNoPriv
         let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
             test_engine_id(),
@@ -1115,7 +1127,9 @@ mod tests {
      {
         // Verifies: REQ-0079
         let mib = crate::mib::Store::new();
-        let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
+        let alice = crate::usm::user::UsmUser::no_auth_no_priv(
+            crate::usm::user::UserName::new("alice").unwrap(),
+        );
         // flags 0x01 = authFlag only (no reportableFlag) → authNoPriv, not reportable
         let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
             test_engine_id(),
@@ -1174,7 +1188,9 @@ mod tests {
     fn given_counter_at_max_when_mismatched_security_level_then_counter_does_not_overflow() {
         // Verifies: REQ-0079 — saturating_add prevents overflow
         let mib = crate::mib::Store::new();
-        let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
+        let alice = crate::usm::user::UsmUser::no_auth_no_priv(
+            crate::usm::user::UserName::new("alice").unwrap(),
+        );
         let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
             test_engine_id(),
             b"alice",
@@ -1201,7 +1217,9 @@ mod tests {
      {
         // Verifies: REQ-0079 — privFlag=1, authFlag=0 (0x06) is invalid and treated as a mismatch
         let mib = crate::mib::Store::new();
-        let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
+        let alice = crate::usm::user::UsmUser::no_auth_no_priv(
+            crate::usm::user::UserName::new("alice").unwrap(),
+        );
         // flags 0x06 = privFlag set, reportableFlag set, authFlag clear → invalid combination
         let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
             test_engine_id(),
@@ -1247,7 +1265,7 @@ mod tests {
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42u8; 32];
         let alice = crate::usm::user::UsmUser::auth_no_priv(
-            "alice",
+            crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
         );
@@ -1285,7 +1303,7 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let alice = crate::usm::user::UsmUser::auth_no_priv(
-            "alice",
+            crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&[0x42u8; 32]),
         );
@@ -1353,7 +1371,7 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let alice = crate::usm::user::UsmUser::auth_no_priv(
-            "alice",
+            crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&[0x42u8; 32]),
         );
@@ -1392,7 +1410,7 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let alice = crate::usm::user::UsmUser::auth_no_priv(
-            "alice",
+            crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&[0x42u8; 32]),
         );
@@ -1430,7 +1448,7 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let alice = crate::usm::user::UsmUser::auth_no_priv(
-            "alice",
+            crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&[0x42u8; 32]),
         );
@@ -1556,7 +1574,7 @@ mod tests {
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42u8; 32];
         let alice = crate::usm::user::UsmUser::auth_no_priv(
-            "alice",
+            crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
         );
@@ -1595,7 +1613,7 @@ mod tests {
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42u8; 32];
         let alice = crate::usm::user::UsmUser::auth_no_priv(
-            "alice",
+            crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
         );
@@ -1673,7 +1691,7 @@ mod tests {
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42u8; 32];
         let alice = crate::usm::user::UsmUser::auth_no_priv(
-            "alice",
+            crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
         );
@@ -1706,7 +1724,7 @@ mod tests {
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42u8; 32];
         let alice = crate::usm::user::UsmUser::auth_no_priv(
-            "alice",
+            crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
         );
@@ -1729,7 +1747,9 @@ mod tests {
     fn given_no_auth_user_when_process_then_time_window_check_skipped() {
         // Verifies: REQ-0098
         let mib = crate::mib::Store::new();
-        let alice = crate::usm::user::UsmUser::no_auth_no_priv("alice");
+        let alice = crate::usm::user::UsmUser::no_auth_no_priv(
+            crate::usm::user::UserName::new("alice").unwrap(),
+        );
         // noAuthNoPriv user: time-window check must be skipped regardless of boots/time
         let frame = snmpv3_frames::encode_get_request_with_user(
             test_engine_id(),
@@ -1765,7 +1785,7 @@ mod tests {
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42u8; 32];
         let alice = crate::usm::user::UsmUser::auth_no_priv(
-            "alice",
+            crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
         );
@@ -1957,7 +1977,7 @@ mod tests {
         let auth_key_bytes = [0x42u8; 32];
         let priv_key_bytes = [0xAAu8; 16];
         let alice = crate::usm::user::UsmUser::auth_priv(
-            "alice",
+            crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
@@ -2085,7 +2105,7 @@ mod tests {
         let priv_key_bytes = [0xAAu8; 16];
         let wrong_priv_key_bytes = [0xBBu8; 16];
         let alice = crate::usm::user::UsmUser::auth_priv(
-            "alice",
+            crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
@@ -2152,7 +2172,7 @@ mod tests {
         let time = 0u32;
 
         let alice = crate::usm::user::UsmUser::auth_priv(
-            "alice",
+            crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
@@ -2254,7 +2274,7 @@ mod tests {
         let time = 0u32;
 
         let alice = crate::usm::user::UsmUser::auth_priv(
-            "alice",
+            crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
@@ -2325,7 +2345,7 @@ mod tests {
         let priv_key_bytes = [0xAAu8; 16];
         let wrong_priv_key_bytes = [0xBBu8; 16];
         let alice = crate::usm::user::UsmUser::auth_priv(
-            "alice",
+            crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,

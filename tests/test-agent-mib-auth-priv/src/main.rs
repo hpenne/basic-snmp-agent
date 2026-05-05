@@ -32,7 +32,7 @@ fn main() {
         &priv_key_full.as_bytes()[..PrivProtocol::Aes128.key_len()],
     );
     let usm_user = basic_snmp_agent::usm::user::UsmUser::auth_priv(
-        "privuser",
+        basic_snmp_agent::usm::user::UserName::new("privuser").unwrap(),
         AuthProtocol::HmacSha256,
         auth_key,
         PrivProtocol::Aes128,

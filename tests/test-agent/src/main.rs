@@ -27,7 +27,7 @@ use std::process;
 use basic_snmp_agent::usm::auth::AuthProtocol;
 use basic_snmp_agent::usm::keys::SecretKey;
 use basic_snmp_agent::usm::privacy::PrivProtocol;
-use basic_snmp_agent::usm::user::UsmUser;
+use basic_snmp_agent::usm::user::{UserName, UsmUser};
 use basic_snmp_agent::{AgentBuilder, Oid, TrapPdu, Value, Varbind, VarbindValue};
 
 // ── Deserialisation types ─────────────────────────────────────────────────────
@@ -183,11 +183,15 @@ fn parse_usm_env() -> Option<(Vec<u8>, UsmUser)> {
 
     let engine_id = decode_hex_engine_id(&engine_id_hex);
 
+    let parsed_user_name = UserName::new(user_name).unwrap_or_else(|_| {
+        eprintln!("error: USM_USER must not be empty");
+        process::exit(1);
+    });
     let usm_user = match security_level.as_str() {
-        "noAuthNoPriv" => UsmUser::no_auth_no_priv(&user_name),
+        "noAuthNoPriv" => UsmUser::no_auth_no_priv(parsed_user_name),
         "authNoPriv" => {
             let (auth_protocol, auth_key) = parse_auth_env(&engine_id);
-            UsmUser::auth_no_priv(&user_name, auth_protocol, auth_key)
+            UsmUser::auth_no_priv(parsed_user_name, auth_protocol, auth_key)
         }
         "authPriv" => {
             let (auth_protocol, auth_key) = parse_auth_env(&engine_id);
@@ -218,7 +222,13 @@ fn parse_usm_env() -> Option<(Vec<u8>, UsmUser)> {
                 &priv_key_full.as_bytes()[..priv_protocol.key_len()],
             );
 
-            UsmUser::auth_priv(&user_name, auth_protocol, auth_key, priv_protocol, priv_key)
+            UsmUser::auth_priv(
+                parsed_user_name,
+                auth_protocol,
+                auth_key,
+                priv_protocol,
+                priv_key,
+            )
         }
         other => {
             eprintln!("error: unsupported USM_SECURITY_LEVEL '{other}'");
