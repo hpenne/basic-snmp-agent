@@ -82,11 +82,7 @@ pub(crate) fn decode_pdu(raw_pdu_bytes: &[u8]) -> Result<DecodedPdu, BerError> {
         TAG_GET_BULK_REQUEST => {
             let non_repeaters = pdu_reader.read_integer()?;
             let max_repetitions = pdu_reader.read_integer()?;
-            // VarBindList is mandatory per RFC 3416 §3.
-            if pdu_reader.is_empty() {
-                return Err(BerError::new("BER: PDU missing VarBindList"));
-            }
-            let raw_varbind_list = pdu_reader.remaining().to_vec();
+            let raw_varbind_list = read_validated_varbind_list(&mut pdu_reader)?;
             Ok(DecodedPdu::Bulk {
                 request_id,
                 non_repeaters,
@@ -98,11 +94,7 @@ pub(crate) fn decode_pdu(raw_pdu_bytes: &[u8]) -> Result<DecodedPdu, BerError> {
         | TAG_INFORM_REQUEST | TAG_TRAP | TAG_REPORT => {
             let error_status = pdu_reader.read_integer()?;
             let error_index = pdu_reader.read_integer()?;
-            // VarBindList is mandatory per RFC 3416 §3.
-            if pdu_reader.is_empty() {
-                return Err(BerError::new("BER: PDU missing VarBindList"));
-            }
-            let raw_varbind_list = pdu_reader.remaining().to_vec();
+            let raw_varbind_list = read_validated_varbind_list(&mut pdu_reader)?;
             Ok(DecodedPdu::Standard {
                 tag: pdu_tag,
                 request_id,
@@ -115,6 +107,26 @@ pub(crate) fn decode_pdu(raw_pdu_bytes: &[u8]) -> Result<DecodedPdu, BerError> {
             "BER: unrecognised PDU tag 0x{pdu_tag:02X}"
         ))),
     }
+}
+
+// Validates that the VarBindList is present, captures its raw bytes, and
+// confirms there are no trailing bytes after it inside the PDU envelope.
+// Implements: REQ-0000
+fn read_validated_varbind_list(pdu_reader: &mut BerReader) -> Result<Vec<u8>, BerError> {
+    // VarBindList is mandatory per RFC 3416 §3.
+    if pdu_reader.is_empty() {
+        return Err(BerError::new("BER: PDU missing VarBindList"));
+    }
+    // Capture raw bytes before read_sequence() advances the cursor.
+    // The trailing-bytes check below ensures this is exactly the SEQUENCE TLV.
+    let raw_varbind_list = pdu_reader.remaining().to_vec();
+    let _varbind_list_reader = pdu_reader.read_sequence()?;
+    if !pdu_reader.is_empty() {
+        return Err(BerError::new(
+            "BER: trailing bytes after VarBindList in PDU",
+        ));
+    }
+    Ok(raw_varbind_list)
 }
 
 // ── Valid standard PDU tags ───────────────────────────────────────────────────
@@ -669,5 +681,45 @@ mod tests {
             }
             DecodedPdu::Standard { .. } => panic!("expected Bulk variant"),
         }
+    }
+
+    // ── Test: Trailing bytes inside PDU after VarBindList (Standard) ─────────
+
+    #[test]
+    fn given_pdu_with_trailing_bytes_after_varbindlist_when_decoded_then_returns_error() {
+        // Verifies: REQ-0000
+        // GetRequest-PDU with valid VarBindList followed by a trailing byte
+        // still inside the PDU envelope.
+        let raw_bytes = [
+            0xA0, 0x0C, // GetRequest-PDU, length 12
+            0x02, 0x01, 0x01, // INTEGER 1
+            0x02, 0x01, 0x00, // INTEGER 0
+            0x02, 0x01, 0x00, // INTEGER 0
+            0x30, 0x00, // empty VarBindList
+            0xFF, // trailing byte inside PDU
+        ];
+        let ber_error = decode_pdu(&raw_bytes).unwrap_err();
+        assert_eq!(
+            ber_error.to_string(),
+            "BER: trailing bytes after VarBindList in PDU"
+        );
+    }
+
+    #[test]
+    fn given_bulk_pdu_with_trailing_bytes_after_varbindlist_when_decoded_then_returns_error() {
+        // Verifies: REQ-0000
+        let raw_bytes = [
+            0xA5, 0x0C, // GetBulkRequest-PDU, length 12
+            0x02, 0x01, 0x01, // INTEGER 1
+            0x02, 0x01, 0x00, // INTEGER 0
+            0x02, 0x01, 0x00, // INTEGER 0
+            0x30, 0x00, // empty VarBindList
+            0xFF, // trailing byte inside PDU
+        ];
+        let ber_error = decode_pdu(&raw_bytes).unwrap_err();
+        assert_eq!(
+            ber_error.to_string(),
+            "BER: trailing bytes after VarBindList in PDU"
+        );
     }
 }

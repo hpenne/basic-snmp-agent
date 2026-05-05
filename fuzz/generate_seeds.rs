@@ -163,7 +163,7 @@ fn main() {
     let auth_key_for_mac =
         basic_snmp_agent::usm::keys::SecretKey::new_from_exposed_slice(&[0xAB; 32]);
     let auth_user = basic_snmp_agent::usm::user::UsmUser::auth_no_priv(
-        "fuzz-user",
+        basic_snmp_agent::usm::user::UserName::new("fuzz-user").expect("valid user name"),
         basic_snmp_agent::usm::auth::AuthProtocol::HmacSha256,
         auth_key_for_user,
     );

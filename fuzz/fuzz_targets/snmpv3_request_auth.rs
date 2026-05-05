@@ -8,7 +8,7 @@ use basic_snmp_agent::mib::Store;
 use basic_snmp_agent::transport::dispatch::DispatchContext;
 use basic_snmp_agent::usm::auth::AuthProtocol;
 use basic_snmp_agent::usm::keys::SecretKey;
-use basic_snmp_agent::usm::user::UsmUser;
+use basic_snmp_agent::usm::user::{UserName, UsmUser};
 use basic_snmp_agent::{Oid, Value, process_snmpv3_request};
 use libfuzzer_sys::fuzz_target;
 
@@ -57,7 +57,7 @@ fn mib() -> &'static Store {
 fn user() -> &'static UsmUser {
     USER.get_or_init(|| {
         let auth_key = SecretKey::new_from_exposed_slice(&[0xAB; 32]);
-        UsmUser::auth_no_priv("fuzz-user", AuthProtocol::HmacSha256, auth_key)
+        UsmUser::auth_no_priv(UserName::new("fuzz-user").expect("valid user name"), AuthProtocol::HmacSha256, auth_key)
     })
 }
 
