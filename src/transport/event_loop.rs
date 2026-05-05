@@ -18,6 +18,7 @@ use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::{Duration, Instant};
 
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
@@ -48,6 +49,17 @@ const MAX_FRAME_SIZE: usize = 65_535;
 /// When this limit is reached, new connections are rejected until existing
 /// ones close.
 pub const DEFAULT_MAX_CONNECTIONS: usize = 64;
+
+/// Default idle timeout for connections under normal conditions.
+pub const NORMAL_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Reduced idle timeout when the connection count is near the maximum.
+pub const PRESSURE_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How many free connection slots trigger "pressure" mode.
+/// When `connections >= max_connections - PRESSURE_HEADROOM`, the shorter
+/// timeout applies.
+pub const PRESSURE_HEADROOM: usize = 5;
 
 // ── EventLoopError ───────────────────────────────────────────────────────────
 
@@ -152,12 +164,15 @@ pub enum Command {
 ///
 /// ```no_run
 /// use std::net::SocketAddr;
-/// use basic_snmp_agent::transport::event_loop::{Command, DEFAULT_MAX_CONNECTIONS, EventLoop};
+/// use basic_snmp_agent::transport::event_loop::{
+///     Command, ConnectionTimeoutConfig, DEFAULT_MAX_CONNECTIONS, EventLoop,
+/// };
 ///
 /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
 /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
 /// let (event_loop, _bound_addr, sender) =
-///     EventLoop::new(addr, engine_id, 1, None, DEFAULT_MAX_CONNECTIONS).unwrap();
+///     EventLoop::new(addr, engine_id, 1, None, DEFAULT_MAX_CONNECTIONS,
+///                    ConnectionTimeoutConfig::default()).unwrap();
 /// sender.send(Command::Shutdown).unwrap();
 /// ```
 pub struct CommandSender {
@@ -213,6 +228,47 @@ impl Clone for CommandSender {
     }
 }
 
+// ── ConnectionTimeoutConfig ───────────────────────────────────────────────────
+
+/// Configuration for idle-connection sweeping.
+///
+/// When the connection count stays below `max_connections - pressure_headroom`,
+/// idle connections are closed after `normal_timeout`. Once the count reaches
+/// that threshold, `pressure_timeout` applies instead.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// use basic_snmp_agent::transport::event_loop::ConnectionTimeoutConfig;
+///
+/// let config = ConnectionTimeoutConfig {
+///     normal_timeout: Duration::from_secs(120),
+///     pressure_timeout: Duration::from_secs(10),
+///     pressure_headroom: 3,
+/// };
+/// assert_eq!(config.normal_timeout, Duration::from_secs(120));
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct ConnectionTimeoutConfig {
+    /// Idle timeout under normal conditions.
+    pub normal_timeout: Duration,
+    /// Idle timeout when connection count is near the limit.
+    pub pressure_timeout: Duration,
+    /// Number of free slots below `max_connections` that triggers pressure mode.
+    pub pressure_headroom: usize,
+}
+
+impl Default for ConnectionTimeoutConfig {
+    fn default() -> Self {
+        Self {
+            normal_timeout: NORMAL_IDLE_TIMEOUT,
+            pressure_timeout: PRESSURE_IDLE_TIMEOUT,
+            pressure_headroom: PRESSURE_HEADROOM,
+        }
+    }
+}
+
 // ── ConnectionState ──────────────────────────────────────────────────────────
 
 /// Per-connection state held in the event loop's connection map.
@@ -220,6 +276,8 @@ struct ConnectionState {
     stream: mio::net::TcpStream,
     /// Accumulates partially-received bytes until a complete RFC 3430 BER frame arrives.
     read_buf: Vec<u8>,
+    /// Instant of the last successful read; used to detect and close idle connections.
+    last_activity: Instant,
 }
 
 // ── EventLoop ────────────────────────────────────────────────────────────────
@@ -237,12 +295,15 @@ struct ConnectionState {
 ///
 /// ```no_run
 /// use std::net::SocketAddr;
-/// use basic_snmp_agent::transport::event_loop::{DEFAULT_MAX_CONNECTIONS, EventLoop};
+/// use basic_snmp_agent::transport::event_loop::{
+///     ConnectionTimeoutConfig, DEFAULT_MAX_CONNECTIONS, EventLoop,
+/// };
 ///
 /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
 /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
 /// let (event_loop, bound_addr, sender) =
-///     EventLoop::new(addr, engine_id, 1, None, DEFAULT_MAX_CONNECTIONS).unwrap();
+///     EventLoop::new(addr, engine_id, 1, None, DEFAULT_MAX_CONNECTIONS,
+///                    ConnectionTimeoutConfig::default()).unwrap();
 ///
 /// let handle = std::thread::spawn(move || event_loop.run());
 /// sender.send(basic_snmp_agent::transport::event_loop::Command::Shutdown).unwrap();
@@ -261,6 +322,8 @@ pub struct EventLoop {
     /// Maximum number of concurrent TCP connections to accept. Connections
     /// beyond this limit are dropped at the OS level on the next poll cycle.
     max_connections: usize,
+    /// Idle-connection sweep parameters.
+    timeout_config: ConnectionTimeoutConfig,
     /// MIB store; updated by `SetValue` commands from application threads.
     store: crate::mib::Store,
     /// This agent's `SNMPv3` engine ID; inbound messages with a different engine
@@ -271,7 +334,7 @@ pub struct EventLoop {
     engine_boots: u32,
     /// Instant at which the engine started; used to compute `snmpEngineTime`.
     // Implements: REQ-0094
-    engine_start: std::time::Instant,
+    engine_start: Instant,
     /// Counter for `usmStatsUnknownEngineIDs`; incremented for each discovery probe.
     // Implements: REQ-0093
     unknown_engine_ids_counter: u32,
@@ -306,6 +369,9 @@ impl EventLoop {
     /// `max_connections` caps the number of concurrently tracked TCP connections.
     /// Pass [`DEFAULT_MAX_CONNECTIONS`] for the standard limit of 64.
     ///
+    /// `timeout_config` controls how long idle connections are kept before being
+    /// swept. Pass [`ConnectionTimeoutConfig::default`] for the standard timeouts.
+    ///
     /// # Errors
     ///
     /// Returns [`EventLoopError::Bind`] if the TCP listener cannot be bound,
@@ -319,12 +385,15 @@ impl EventLoop {
     ///
     /// ```no_run
     /// use std::net::SocketAddr;
-    /// use basic_snmp_agent::transport::event_loop::{DEFAULT_MAX_CONNECTIONS, EventLoop};
+    /// use basic_snmp_agent::transport::event_loop::{
+    ///     ConnectionTimeoutConfig, DEFAULT_MAX_CONNECTIONS, EventLoop,
+    /// };
     ///
     /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
     /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
     /// let (event_loop, bound_addr, sender) =
-    ///     EventLoop::new(addr, engine_id, 1, None, DEFAULT_MAX_CONNECTIONS).unwrap();
+    ///     EventLoop::new(addr, engine_id, 1, None, DEFAULT_MAX_CONNECTIONS,
+    ///                    ConnectionTimeoutConfig::default()).unwrap();
     /// println!("listening on {bound_addr}");
     /// ```
     pub fn new(
@@ -333,6 +402,7 @@ impl EventLoop {
         engine_boots: u32,
         usm_user: Option<std::sync::Arc<crate::usm::user::UsmUser>>,
         max_connections: usize,
+        timeout_config: ConnectionTimeoutConfig,
     ) -> Result<(Self, SocketAddr, CommandSender), EventLoopError> {
         let poll = Poll::new().map_err(EventLoopError::Registration)?;
         let registry = poll.registry();
@@ -370,10 +440,11 @@ impl EventLoop {
             next_token: FIRST_CONN_TOKEN,
             connections: HashMap::new(),
             max_connections,
+            timeout_config,
             store: crate::mib::Store::new(),
             engine_id,
             engine_boots,
-            engine_start: std::time::Instant::now(),
+            engine_start: Instant::now(),
             unknown_engine_ids_counter: 0,
             unknown_user_names_counter: 0,
             unsupported_sec_levels_counter: 0,
@@ -410,8 +481,10 @@ impl EventLoop {
         let mut events = Events::with_capacity(128);
 
         'outer: loop {
-            // Block until at least one event is ready.
-            self.poll.poll(&mut events, None)?;
+            // Use a 30-second timeout so idle-connection sweeping happens even
+            // when no network events arrive, preventing connections that become
+            // idle during a quiet period from being held open indefinitely.
+            self.poll.poll(&mut events, Some(Duration::from_secs(30)))?;
 
             for event in &events {
                 match event.token() {
@@ -430,6 +503,10 @@ impl EventLoop {
                     }
                 }
             }
+
+            // Sweep idle connections after every batch of events (including
+            // on poll timeout when no events arrived).
+            self.sweep_idle_connections();
         }
 
         Ok(())
@@ -479,6 +556,7 @@ impl EventLoop {
                         ConnectionState {
                             stream,
                             read_buf: Vec::new(),
+                            last_activity: Instant::now(),
                         },
                     );
                 }
@@ -563,6 +641,9 @@ impl EventLoop {
                 }
                 Ok(bytes_read) => {
                     conn.read_buf.extend_from_slice(&chunk[..bytes_read]);
+                    // Record activity so the idle-connection sweep does not
+                    // evict a connection that is actively receiving data.
+                    conn.last_activity = Instant::now();
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) => {
@@ -675,6 +756,35 @@ impl EventLoop {
         store: &crate::mib::Store,
     ) -> Option<Vec<u8>> {
         crate::transport::dispatch::process_snmpv3_request(ber_frame, ctx, store)
+    }
+
+    /// Close connections that have been idle longer than the configured timeout.
+    ///
+    /// Under pressure (connection count near maximum), a shorter timeout applies
+    /// to free slots for new clients more aggressively.
+    fn sweep_idle_connections(&mut self) {
+        let now = Instant::now();
+        let under_pressure =
+            self.connections.len() + self.timeout_config.pressure_headroom >= self.max_connections;
+        let timeout = if under_pressure {
+            self.timeout_config.pressure_timeout
+        } else {
+            self.timeout_config.normal_timeout
+        };
+
+        let stale_tokens: Vec<Token> = self
+            .connections
+            .iter()
+            .filter(|(_, conn)| now.duration_since(conn.last_activity) >= timeout)
+            .map(|(token, _)| *token)
+            .collect();
+
+        for token in stale_tokens {
+            if let Some(mut conn) = self.connections.remove(&token) {
+                let _ = self.poll.registry().deregister(&mut conn.stream);
+                eprintln!("[event_loop] closed idle connection (token {token:?})");
+            }
+        }
     }
 
     /// Allocate the next unique connection token, skipping reserved values.
@@ -814,6 +924,20 @@ mod tests {
         TEST_ENGINE_ID.to_vec()
     }
 
+    /// Create an event loop with default timeout config for tests that do not
+    /// exercise idle-connection sweeping.
+    fn new_test_event_loop(max_connections: usize) -> (EventLoop, SocketAddr, CommandSender) {
+        EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            max_connections,
+            ConnectionTimeoutConfig::default(),
+        )
+        .unwrap()
+    }
+
     /// Set an OID in the MIB and block until the event loop has processed it.
     ///
     /// Sends `SetValue` followed by a `QueryValue` on a rendezvous channel.
@@ -854,14 +978,7 @@ mod tests {
     fn given_running_event_loop_when_tcp_client_connects_then_connection_is_accepted() {
         // Verifies: REQ-0050, REQ-0051
         // Given: an event loop bound on a random loopback port.
-        let (event_loop, bound_addr, sender) = EventLoop::new(
-            any_loopback(),
-            test_engine_id(),
-            1,
-            None,
-            DEFAULT_MAX_CONNECTIONS,
-        )
-        .unwrap();
+        let (event_loop, bound_addr, sender) = new_test_event_loop(DEFAULT_MAX_CONNECTIONS);
         let handle = thread::spawn(move || event_loop.run());
 
         // When: a TCP client connects.
@@ -880,14 +997,7 @@ mod tests {
     fn given_running_event_loop_when_shutdown_command_sent_then_loop_exits_cleanly() {
         // Verifies: REQ-0048, REQ-0052, REQ-0053, REQ-0054
         // Given: a running event loop.
-        let (event_loop, _bound_addr, sender) = EventLoop::new(
-            any_loopback(),
-            test_engine_id(),
-            1,
-            None,
-            DEFAULT_MAX_CONNECTIONS,
-        )
-        .unwrap();
+        let (event_loop, _bound_addr, sender) = new_test_event_loop(DEFAULT_MAX_CONNECTIONS);
         let handle = thread::spawn(move || event_loop.run());
 
         // When: Shutdown is sent.
@@ -902,14 +1012,7 @@ mod tests {
     fn given_running_event_loop_when_set_value_command_sent_then_loop_drains_channel() {
         // Verifies: REQ-0052
         // Given: a running event loop.
-        let (event_loop, _bound_addr, sender) = EventLoop::new(
-            any_loopback(),
-            test_engine_id(),
-            1,
-            None,
-            DEFAULT_MAX_CONNECTIONS,
-        )
-        .unwrap();
+        let (event_loop, _bound_addr, sender) = new_test_event_loop(DEFAULT_MAX_CONNECTIONS);
         let handle = thread::spawn(move || event_loop.run());
 
         // When: a SetValue command is followed by Shutdown.
@@ -930,14 +1033,7 @@ mod tests {
     #[test]
     fn given_running_event_loop_when_set_value_sent_then_loop_remains_alive_for_shutdown() {
         // Given: a running event loop.
-        let (event_loop, _bound_addr, sender) = EventLoop::new(
-            any_loopback(),
-            test_engine_id(),
-            1,
-            None,
-            DEFAULT_MAX_CONNECTIONS,
-        )
-        .unwrap();
+        let (event_loop, _bound_addr, sender) = new_test_event_loop(DEFAULT_MAX_CONNECTIONS);
         let handle = thread::spawn(move || event_loop.run());
 
         // When: a SetValue command is sent and the loop is given time to process it.
@@ -966,14 +1062,7 @@ mod tests {
     fn given_set_value_command_when_sent_then_mib_store_is_updated() {
         // Verifies: REQ-0066
         // Given: a running event loop.
-        let (event_loop, _bound_addr, sender) = EventLoop::new(
-            any_loopback(),
-            test_engine_id(),
-            1,
-            None,
-            DEFAULT_MAX_CONNECTIONS,
-        )
-        .unwrap();
+        let (event_loop, _bound_addr, sender) = new_test_event_loop(DEFAULT_MAX_CONNECTIONS);
         let handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -1015,14 +1104,7 @@ mod tests {
     #[test]
     fn given_no_set_value_when_queried_then_mib_returns_none() {
         // Given: a running event loop with no values inserted.
-        let (event_loop, _bound_addr, sender) = EventLoop::new(
-            any_loopback(),
-            test_engine_id(),
-            1,
-            None,
-            DEFAULT_MAX_CONNECTIONS,
-        )
-        .unwrap();
+        let (event_loop, _bound_addr, sender) = new_test_event_loop(DEFAULT_MAX_CONNECTIONS);
         let handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -1071,10 +1153,11 @@ mod tests {
             next_token: FIRST_CONN_TOKEN,
             connections: HashMap::new(),
             max_connections: DEFAULT_MAX_CONNECTIONS,
+            timeout_config: ConnectionTimeoutConfig::default(),
             store: crate::mib::Store::new(),
             engine_id: test_engine_id(),
             engine_boots: 1,
-            engine_start: std::time::Instant::now(),
+            engine_start: Instant::now(),
             unknown_engine_ids_counter: 0,
             unknown_user_names_counter: 0,
             unsupported_sec_levels_counter: 0,
@@ -1092,6 +1175,7 @@ mod tests {
             ConnectionState {
                 stream: dummy_stream,
                 read_buf: Vec::new(),
+                last_activity: Instant::now(),
             },
         );
 
@@ -1359,14 +1443,7 @@ mod tests {
     fn given_get_request_when_sent_over_tcp_then_response_is_received() {
         // Verifies: REQ-0021, REQ-0051, REQ-0066, REQ-0068, REQ-0069, REQ-0070, REQ-0071
         // Given: a running event loop with a known OID in the MIB.
-        let (event_loop, bound_addr, sender) = EventLoop::new(
-            any_loopback(),
-            test_engine_id(),
-            1,
-            None,
-            DEFAULT_MAX_CONNECTIONS,
-        )
-        .unwrap();
+        let (event_loop, bound_addr, sender) = new_test_event_loop(DEFAULT_MAX_CONNECTIONS);
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
@@ -1403,14 +1480,7 @@ mod tests {
     fn given_partial_frame_when_split_across_reads_then_response_is_received() {
         // Verifies: REQ-0068, REQ-0071
         // Given: a running event loop with a known OID in the MIB.
-        let (event_loop, bound_addr, sender) = EventLoop::new(
-            any_loopback(),
-            test_engine_id(),
-            1,
-            None,
-            DEFAULT_MAX_CONNECTIONS,
-        )
-        .unwrap();
+        let (event_loop, bound_addr, sender) = new_test_event_loop(DEFAULT_MAX_CONNECTIONS);
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.2.0".parse().unwrap();
@@ -1451,14 +1521,7 @@ mod tests {
     fn given_invalid_snmp_payload_in_sequence_when_received_then_connection_stays_open() {
         // Verifies: REQ-0073
         // Given: a running event loop.
-        let (event_loop, bound_addr, sender) = EventLoop::new(
-            any_loopback(),
-            test_engine_id(),
-            1,
-            None,
-            DEFAULT_MAX_CONNECTIONS,
-        )
-        .unwrap();
+        let (event_loop, bound_addr, sender) = new_test_event_loop(DEFAULT_MAX_CONNECTIONS);
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.3.0".parse().unwrap();
@@ -1499,14 +1562,7 @@ mod tests {
     fn given_empty_sequence_frame_when_received_then_connection_stays_open() {
         // Verifies: REQ-0073
         // Given: a running event loop with a known OID in the MIB.
-        let (event_loop, bound_addr, sender) = EventLoop::new(
-            any_loopback(),
-            test_engine_id(),
-            1,
-            None,
-            DEFAULT_MAX_CONNECTIONS,
-        )
-        .unwrap();
+        let (event_loop, bound_addr, sender) = new_test_event_loop(DEFAULT_MAX_CONNECTIONS);
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.4.0".parse().unwrap();
@@ -1545,14 +1601,7 @@ mod tests {
     fn given_wrong_engine_id_when_request_sent_then_report_pdu_returned() {
         // Verifies: REQ-0104
         // Given: a running event loop with a known OID in the MIB.
-        let (event_loop, bound_addr, sender) = EventLoop::new(
-            any_loopback(),
-            test_engine_id(),
-            1,
-            None,
-            DEFAULT_MAX_CONNECTIONS,
-        )
-        .unwrap();
+        let (event_loop, bound_addr, sender) = new_test_event_loop(DEFAULT_MAX_CONNECTIONS);
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.5.0".parse().unwrap();
@@ -1608,14 +1657,7 @@ mod tests {
         // the connection must stay open so a subsequent valid request succeeds.
 
         // Given: a running event loop with a known OID in the MIB.
-        let (event_loop, bound_addr, sender) = EventLoop::new(
-            any_loopback(),
-            test_engine_id(),
-            1,
-            None,
-            DEFAULT_MAX_CONNECTIONS,
-        )
-        .unwrap();
+        let (event_loop, bound_addr, sender) = new_test_event_loop(DEFAULT_MAX_CONNECTIONS);
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.6.0".parse().unwrap();
@@ -1657,14 +1699,7 @@ mod tests {
         // cause the connection to be closed, not stalled indefinitely.
 
         // Given: a running event loop.
-        let (event_loop, bound_addr, sender) = EventLoop::new(
-            any_loopback(),
-            test_engine_id(),
-            1,
-            None,
-            DEFAULT_MAX_CONNECTIONS,
-        )
-        .unwrap();
+        let (event_loop, bound_addr, sender) = new_test_event_loop(DEFAULT_MAX_CONNECTIONS);
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
@@ -1708,14 +1743,7 @@ mod tests {
         //              loop will silently discard it but keep the connection open)
         //
         // Verification: 1 + 5 + 65529 = 65535 == MAX_FRAME_SIZE.
-        let (event_loop, bound_addr, sender) = EventLoop::new(
-            any_loopback(),
-            test_engine_id(),
-            1,
-            None,
-            DEFAULT_MAX_CONNECTIONS,
-        )
-        .unwrap();
+        let (event_loop, bound_addr, sender) = new_test_event_loop(DEFAULT_MAX_CONNECTIONS);
         let loop_handle = thread::spawn(move || event_loop.run());
 
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.7.0".parse().unwrap();
@@ -1773,8 +1801,7 @@ mod tests {
         // accepted-but-unregistered stream.
 
         // Given: an event loop with a connection limit of 2.
-        let (event_loop, bound_addr, sender) =
-            EventLoop::new(any_loopback(), test_engine_id(), 1, None, 2).unwrap();
+        let (event_loop, bound_addr, sender) = new_test_event_loop(2);
         let loop_handle = thread::spawn(move || event_loop.run());
 
         // When: two clients connect (filling the connection table).
@@ -1816,6 +1843,171 @@ mod tests {
         // Clean up: close the first two clients and shut down.
         drop(client_a);
         drop(client_b);
+        sender.send(Command::Shutdown).unwrap();
+        loop_handle
+            .join()
+            .expect("event loop thread panicked")
+            .unwrap();
+    }
+
+    // ── idle connection sweep tests ───────────────────────────────────────────
+
+    #[test]
+    fn given_idle_connection_when_timeout_elapses_then_connection_is_closed() {
+        // Verifies that sweep_idle_connections() closes connections that have
+        // been idle longer than the configured timeout.
+
+        // Given: an event loop with a 1 ms idle timeout so the sweep fires almost
+        // immediately after the connection is accepted.
+        let short_timeout = ConnectionTimeoutConfig {
+            normal_timeout: Duration::from_millis(1),
+            pressure_timeout: Duration::from_millis(1),
+            pressure_headroom: PRESSURE_HEADROOM,
+        };
+        let (event_loop, bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            DEFAULT_MAX_CONNECTIONS,
+            short_timeout,
+        )
+        .unwrap();
+        let loop_handle = thread::spawn(move || event_loop.run());
+
+        // When: a client connects and then sends nothing (remains idle).
+        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+
+        // Wait long enough for the timeout to elapse, then wake the event loop
+        // so the sweep runs. Sending a Shutdown command wakes the poll and also
+        // causes the loop to exit, which is fine — we will check EOF first.
+        thread::sleep(Duration::from_millis(50));
+        sender.send(Command::Shutdown).unwrap();
+
+        // Then: the client sees EOF because the event loop swept the idle connection.
+        let mut read_buf = [0u8; 1];
+        let bytes_read = client.read(&mut read_buf).expect("read must not error");
+        assert_eq!(bytes_read, 0, "idle connection must be closed by the sweep");
+
+        loop_handle
+            .join()
+            .expect("event loop thread panicked")
+            .unwrap();
+    }
+
+    #[test]
+    fn given_pressure_headroom_exceeded_when_sweep_then_pressure_timeout_applies() {
+        // Verifies that when the number of connections reaches max_connections -
+        // pressure_headroom, the pressure timeout is used instead of the normal one.
+        //
+        // Strategy: use a max of 3, headroom of 2, normal timeout of 1 hour, and
+        // pressure timeout of 1 ms. With 2 connections open the count (2) satisfies
+        // 2 + 2 >= 3, so pressure mode must activate and the 1 ms timeout fires.
+
+        let max_conns = 3usize;
+        let pressure_config = ConnectionTimeoutConfig {
+            normal_timeout: Duration::from_secs(3600), // long enough never to fire
+            pressure_timeout: Duration::from_millis(1),
+            pressure_headroom: 2,
+        };
+        let (event_loop, bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            max_conns,
+            pressure_config,
+        )
+        .unwrap();
+        let loop_handle = thread::spawn(move || event_loop.run());
+
+        // When: two clients connect, putting the agent into pressure mode.
+        let mut client_a = std::net::TcpStream::connect(bound_addr).unwrap();
+        let mut client_b = std::net::TcpStream::connect(bound_addr).unwrap();
+        client_a
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        client_b
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+
+        // Wait for the pressure timeout to elapse, then trigger a sweep.
+        thread::sleep(Duration::from_millis(50));
+        sender.send(Command::Shutdown).unwrap();
+
+        // Then: both clients are closed by the pressure-mode sweep.
+        let mut buf = [0u8; 1];
+        let a_read = client_a
+            .read(&mut buf)
+            .expect("client_a read must not error");
+        let b_read = client_b
+            .read(&mut buf)
+            .expect("client_b read must not error");
+        assert_eq!(a_read, 0, "client_a must be closed under pressure mode");
+        assert_eq!(b_read, 0, "client_b must be closed under pressure mode");
+
+        loop_handle
+            .join()
+            .expect("event loop thread panicked")
+            .unwrap();
+    }
+
+    #[test]
+    fn given_active_connection_when_sweep_then_not_closed() {
+        // Verifies that sweep_idle_connections() does NOT close a connection that
+        // has received data recently (i.e., last_activity is fresh).
+
+        // Given: an event loop with a 50 ms normal timeout and a very short
+        // pressure timeout. We use a large max_connections so pressure mode is
+        // never triggered, isolating the normal-timeout behaviour.
+        let config = ConnectionTimeoutConfig {
+            normal_timeout: Duration::from_millis(500),
+            pressure_timeout: Duration::from_millis(1),
+            pressure_headroom: PRESSURE_HEADROOM,
+        };
+        let (event_loop, bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            DEFAULT_MAX_CONNECTIONS,
+            config,
+        )
+        .unwrap();
+        let loop_handle = thread::spawn(move || event_loop.run());
+
+        let oid: crate::codec::Oid = "1.3.6.1.2.1.1.8.0".parse().unwrap();
+        set_and_wait(&sender, &oid, crate::codec::Value::Integer32(7));
+
+        // When: a client sends a valid request and receives a response, then
+        // immediately sends another request after only a brief pause (well within
+        // the normal timeout).
+        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+        client
+            .write_all(&framed_get_request(50, 50, &oid))
+            .expect("first request write must succeed");
+        let first_response = read_framed_response(&mut client);
+        let first = decode_v3_response_payload(&first_response);
+        assert_eq!(first.request_id, 50);
+
+        // Only wait 20 ms — well below the 500 ms normal timeout.
+        thread::sleep(Duration::from_millis(20));
+        client
+            .write_all(&framed_get_request(51, 51, &oid))
+            .expect("second request write must succeed");
+
+        // Then: the second request still receives a response, proving the connection
+        // was not swept between the two requests.
+        let second_response = read_framed_response(&mut client);
+        let second = decode_v3_response_payload(&second_response);
+        assert_eq!(
+            second.request_id, 51,
+            "connection must remain open for an active client"
+        );
+
         sender.send(Command::Shutdown).unwrap();
         loop_handle
             .join()

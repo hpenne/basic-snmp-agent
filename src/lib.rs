@@ -47,6 +47,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 pub use crate::codec::{Oid, Value, Varbind, VarbindValue};
+pub use crate::transport::event_loop::ConnectionTimeoutConfig;
 pub use crate::transport::process_snmpv3_request;
 pub use crate::transport::{TrapPdu, TrapResult};
 pub use error::{AgentError, SetError, TrapError};
@@ -210,6 +211,8 @@ pub struct AgentBuilder {
     boots_store: Option<Box<dyn crate::usm::boots::EngineBootsStore>>,
     // Maximum number of concurrent TCP connections; defaults to DEFAULT_MAX_CONNECTIONS.
     max_connections: usize,
+    // Idle-connection sweep configuration; defaults to ConnectionTimeoutConfig::default().
+    timeout_config: ConnectionTimeoutConfig,
 }
 
 impl AgentBuilder {
@@ -233,6 +236,7 @@ impl AgentBuilder {
             usm_user: None,
             boots_store: None,
             max_connections: DEFAULT_MAX_CONNECTIONS,
+            timeout_config: ConnectionTimeoutConfig::default(),
         }
     }
 
@@ -302,6 +306,21 @@ impl AgentBuilder {
         self
     }
 
+    /// Override the idle-connection timeout configuration.
+    ///
+    /// Controls how long a TCP connection may remain idle before it is closed.
+    /// Two timeouts are supported: a normal timeout that applies when the
+    /// connection count is well below the maximum, and a shorter pressure timeout
+    /// that applies when the count nears the limit.
+    ///
+    /// Default: [`ConnectionTimeoutConfig::default`] (300 s normal, 30 s pressure,
+    /// headroom of 5).
+    #[must_use]
+    pub fn connection_timeout_config(mut self, config: ConnectionTimeoutConfig) -> Self {
+        self.timeout_config = config;
+        self
+    }
+
     /// Construct and start the agent.
     ///
     /// Binds the TCP listener on [`listen_addr`][`Self::listen_addr`], creates
@@ -348,6 +367,7 @@ impl AgentBuilder {
             engine_boots,
             usm_user.clone(),
             self.max_connections,
+            self.timeout_config,
         )
         .map_err(|e| match e {
             EventLoopError::Bind { addr, source } => AgentError::Bind { addr, source },
@@ -689,6 +709,26 @@ mod tests {
         assert!(
             result.is_ok(),
             "expected agent to start with custom max_connections"
+        );
+    }
+
+    #[test]
+    fn given_connection_timeout_config_when_build_then_agent_starts() {
+        // Verifies that the connection_timeout_config builder method is accepted and
+        // the agent starts with a custom timeout configuration.
+        use std::time::Duration;
+        let config = ConnectionTimeoutConfig {
+            normal_timeout: Duration::from_secs(60),
+            pressure_timeout: Duration::from_secs(10),
+            pressure_headroom: 3,
+        };
+        let result = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .connection_timeout_config(config)
+            .build();
+        assert!(
+            result.is_ok(),
+            "expected agent to start with custom connection timeout config"
         );
     }
 
