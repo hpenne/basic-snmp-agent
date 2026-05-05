@@ -119,6 +119,11 @@ fn next_privacy_salt() -> [u8; 8] {
     PRIVACY_SALT_INIT.call_once(|| {
         PRIVACY_SALT_COUNTER.store(random_u64() | 1, Ordering::Relaxed);
     });
+    // Relaxed is sufficient here for two reasons:
+    // 1. `Once::call_once` provides the happens-before edge guaranteeing that any thread
+    //    reaching this point has already observed the initialised seed stored above.
+    // 2. The atomicity of `fetch_add` guarantees that no two callers receive the same
+    //    return value; we need uniqueness, not ordering between counter increments.
     PRIVACY_SALT_COUNTER
         .fetch_add(1, Ordering::Relaxed)
         .to_be_bytes()
