@@ -614,32 +614,56 @@ fn encode_unsigned_bytes(raw_bytes: &[u8]) -> Vec<u8> {
 
 // ----- Integer decoding helpers ---------------------------------------------
 
-/// Decodes a minimal two's-complement INTEGER byte sequence into an `i32`.
+/// Decodes a two's-complement INTEGER byte sequence into an `i32`.
+///
+/// Non-minimal encodings are accepted: BER permits redundant leading 0x00 bytes
+/// for positive values and redundant leading 0xFF bytes for negative values.
+/// These are stripped before checking the byte count, ensuring interoperability
+/// with peer implementations that do not produce minimal encodings.
 fn decode_signed_i32(integer_bytes: &[u8], error_offset: usize) -> Result<i32, BerError> {
     if integer_bytes.is_empty() {
         return Err(BerError::new(format!(
             "BER: INTEGER value has zero length at offset {error_offset}"
         )));
     }
-    if integer_bytes.len() > 4 {
+    // Strip redundant padding bytes before the length check.
+    // A leading 0x00 is redundant when the next byte has bit 7 clear (positive sign preserved).
+    // A leading 0xFF is redundant when the next byte has bit 7 set (negative sign preserved).
+    let is_negative = integer_bytes[0] & 0x80 != 0;
+    let significant = if integer_bytes.len() > 1 {
+        let redundant_byte = if is_negative { 0xFF } else { 0x00 };
+        let sign_bit_of_next = if is_negative { 0x80 } else { 0x00 };
+        let first_significant = integer_bytes
+            .windows(2)
+            .position(|pair| pair[0] != redundant_byte || (pair[1] & 0x80) != sign_bit_of_next)
+            .unwrap_or(integer_bytes.len() - 1);
+        &integer_bytes[first_significant..]
+    } else {
+        integer_bytes
+    };
+    if significant.len() > 4 {
         return Err(BerError::new(format!(
             "BER: INTEGER value too large for i32 ({} bytes) at offset {error_offset}",
-            integer_bytes.len()
+            significant.len()
         )));
     }
     // Sign-extend the leading byte into a 4-byte buffer.
-    let sign_byte = if integer_bytes[0] & 0x80 != 0 {
+    let sign_byte = if significant[0] & 0x80 != 0 {
         0xFF
     } else {
         0x00
     };
     let mut word = [sign_byte; 4];
-    let start = 4 - integer_bytes.len();
-    word[start..].copy_from_slice(integer_bytes);
+    let start = 4 - significant.len();
+    word[start..].copy_from_slice(significant);
     Ok(i32::from_be_bytes(word))
 }
 
 /// Shared unsigned INTEGER decoder for up to `max_width` significant bytes.
+///
+/// Non-minimal encodings (redundant leading zero bytes) are accepted. BER permits
+/// them; only DER requires minimal encoding. SNMP uses BER, so interoperability
+/// demands that we tolerate any number of leading zeroes from peer implementations.
 ///
 /// Returns the decoded value as `u64`; callers narrow to the target type.
 fn decode_unsigned(
@@ -659,10 +683,16 @@ fn decode_unsigned(
             "BER: negative INTEGER cannot be decoded as unsigned at offset {error_offset}"
         )));
     }
-    // A leading 0x00 sign byte is valid for unsigned values whose high bit is set;
-    // strip it before checking the byte count.
-    let significant = if integer_bytes[0] == 0x00 && integer_bytes.len() > 1 {
-        &integer_bytes[1..]
+    // BER permits any number of redundant leading 0x00 sign bytes; strip all of them
+    // before checking the byte count so that non-minimal encodings from peer
+    // implementations are accepted.  When every byte is 0x00 we keep the last one so
+    // that the value zero is represented by [0x00] rather than an empty slice.
+    let significant = if integer_bytes.len() > 1 {
+        let first_nonzero = integer_bytes
+            .iter()
+            .position(|&b| b != 0x00)
+            .unwrap_or(integer_bytes.len() - 1);
+        &integer_bytes[first_nonzero..]
     } else {
         integer_bytes
     };
@@ -670,7 +700,7 @@ fn decode_unsigned(
         return Err(BerError::new(format!(
             "BER: INTEGER value too large for u{} ({} bytes) at offset {error_offset}",
             max_width * 8,
-            integer_bytes.len()
+            significant.len()
         )));
     }
     let mut word = [0u8; 8];
@@ -1804,6 +1834,65 @@ mod tests {
             .read_unsigned32()
             .expect("BER-encoded integer 0 must decode successfully");
         assert_eq!(decoded_value, 0);
+    }
+
+    #[test]
+    fn given_multiple_redundant_leading_zeroes_when_decoded_as_unsigned_then_strips_all() {
+        // Verifies: REQ-0000
+
+        // [0x00, 0x00, 0x00, 0x01] → 1 (three redundant sign bytes)
+        let result = decode_unsigned(&[0x00, 0x00, 0x00, 0x01], 4, 0)
+            .expect("three leading zeroes before 0x01 should decode");
+        assert_eq!(result, 1);
+
+        // [0x00, 0x00, 0x00, 0x00, 0x00, 0x80] → 128 (five leading zeroes, one significant byte)
+        let result = decode_unsigned(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x80], 4, 0)
+            .expect("five leading zeroes before 0x80 should decode");
+        assert_eq!(result, 128);
+
+        // [0x00, 0x00, 0x00, 0x00, 0x00] → 0 (all zeroes; last byte preserved as value)
+        let result = decode_unsigned(&[0x00, 0x00, 0x00, 0x00, 0x00], 4, 0)
+            .expect("all-zero bytes should decode as 0");
+        assert_eq!(result, 0);
+
+        // [0x00, 0x00, 0x01, 0x02, 0x03, 0x04]: two leading zeroes then four significant
+        // bytes; must succeed for max_width=4.
+        let result = decode_unsigned(&[0x00, 0x00, 0x01, 0x02, 0x03, 0x04], 4, 0)
+            .expect("two leading zeroes before four significant bytes should decode");
+        assert_eq!(result, 0x0102_0304);
+
+        // [0x00, 0x01, 0x02, 0x03, 0x04, 0x05]: one leading zero then five significant
+        // bytes; must fail for max_width=4.
+        decode_unsigned(&[0x00, 0x01, 0x02, 0x03, 0x04, 0x05], 4, 0)
+            .expect_err("five significant bytes must exceed max_width=4");
+    }
+
+    #[test]
+    fn given_multiple_redundant_leading_bytes_when_decoded_as_signed_then_strips_all() {
+        // Verifies: REQ-0000
+
+        // [0x00, 0x00, 0x00, 0x01] encodes +1 with three redundant 0x00 sign bytes.
+        let result = decode_signed_i32(&[0x00, 0x00, 0x00, 0x01], 0)
+            .expect("three leading zeroes before 0x01 should decode as +1");
+        assert_eq!(result, 1);
+
+        // [0xFF, 0xFF, 0xFF, 0xFF] encodes -1 with three redundant 0xFF sign bytes.
+        let result = decode_signed_i32(&[0xFF, 0xFF, 0xFF, 0xFF], 0)
+            .expect("three leading 0xFF bytes should decode as -1");
+        assert_eq!(result, -1);
+
+        // [0xFF, 0x80] encodes -128: 0xFF is redundant (next byte 0x80 has high bit set).
+        let result = decode_signed_i32(&[0xFF, 0x80], 0).expect("0xFF 0x80 should decode as -128");
+        assert_eq!(result, -128);
+
+        // [0x00, 0x7F] encodes +127: 0x00 is redundant (next byte 0x7F has high bit clear).
+        let result = decode_signed_i32(&[0x00, 0x7F], 0).expect("0x00 0x7F should decode as +127");
+        assert_eq!(result, 127);
+
+        // [0xFF, 0xFF, 0x80, 0x00, 0x00, 0x00, 0x01]: two redundant 0xFF bytes, then five
+        // significant bytes — must fail because 5 > max i32 width of 4.
+        decode_signed_i32(&[0xFF, 0xFF, 0x80, 0x00, 0x00, 0x00, 0x01], 0)
+            .expect_err("five significant bytes must exceed i32 capacity");
     }
 
     // --- Mutant-killing tests: OID arc boundary values ---
