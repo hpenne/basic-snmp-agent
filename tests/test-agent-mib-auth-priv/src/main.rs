@@ -22,12 +22,20 @@ fn main() {
         b"authpassword",
         ENGINE_ID,
         AuthProtocol::HmacSha256,
-    );
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("error: failed to derive auth key: {e}");
+        std::process::exit(1);
+    });
     let priv_key_full = basic_snmp_agent::usm::kdf::password_to_localised_key(
         b"privpassword",
         ENGINE_ID,
         AuthProtocol::HmacSha256,
-    );
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("error: failed to derive priv key: {e}");
+        std::process::exit(1);
+    });
     let priv_key = SecretKey::new_from_exposed_slice(
         &priv_key_full.as_bytes()[..PrivProtocol::Aes128.key_len()],
     );

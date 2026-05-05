@@ -19,7 +19,11 @@ fn main() {
         b"authpassword",
         ENGINE_ID,
         AuthProtocol::HmacSha256,
-    );
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("error: failed to derive auth key: {e}");
+        std::process::exit(1);
+    });
     let usm_user = basic_snmp_agent::usm::user::UsmUser::auth_no_priv(
         basic_snmp_agent::usm::user::UserName::new("authuser").unwrap(),
         AuthProtocol::HmacSha256,

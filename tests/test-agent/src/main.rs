@@ -217,7 +217,11 @@ fn parse_usm_env() -> Option<(Vec<u8>, UsmUser)> {
                 priv_password.as_bytes(),
                 &engine_id,
                 auth_protocol,
-            );
+            )
+            .unwrap_or_else(|e| {
+                eprintln!("error: failed to derive priv key: {e}");
+                process::exit(1);
+            });
             let priv_key = SecretKey::new_from_exposed_slice(
                 &priv_key_full.as_bytes()[..priv_protocol.key_len()],
             );
@@ -267,7 +271,11 @@ fn parse_auth_env(engine_id: &[u8]) -> (AuthProtocol, SecretKey) {
         auth_password.as_bytes(),
         engine_id,
         auth_protocol,
-    );
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("error: failed to derive auth key: {e}");
+        process::exit(1);
+    });
 
     (auth_protocol, auth_key)
 }
