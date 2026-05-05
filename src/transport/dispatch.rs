@@ -268,10 +268,6 @@ pub fn process_snmpv3_request(
 
     // RFC 3412 §7.2 step 2: reject messages with unsupported security models.
     if !v3_msg.security_model.is_usm() {
-        eprintln!(
-            "[dispatch] rejecting message with unsupported security model: {}",
-            v3_msg.security_model
-        );
         return emit_unknown_security_model_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
     }
 
