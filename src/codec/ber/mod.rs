@@ -706,6 +706,13 @@ fn decode_unsigned_u64(integer_bytes: &[u8], error_offset: usize) -> Result<u64,
 /// is 2 and the second arc is large (e.g., `2.999999999`).
 fn encode_oid(oid: &Oid) -> Vec<u8> {
     let arcs = oid.as_slice();
+    // Defence-in-depth: Oid construction enforces this limit, but guard
+    // against any future bypass that would produce a malformed encoding.
+    debug_assert!(
+        arcs.len() <= MAX_OID_SUB_IDENTIFIERS,
+        "OID has {} sub-identifiers (max {MAX_OID_SUB_IDENTIFIERS} per RFC 2578 §3.5)",
+        arcs.len()
+    );
     // Validated OIDs always have at least two arcs.
     let first_combined = u64::from(arcs[0]) * 40 + u64::from(arcs[1]);
     let remaining_arcs = &arcs[2..];
@@ -720,6 +727,9 @@ fn encode_oid(oid: &Oid) -> Vec<u8> {
 
 // ceil(u64::BITS / 7) = ceil(64/7) = 10
 const MAX_BASE128_GROUPS: usize = 10;
+
+/// Maximum number of sub-identifiers in an OID per RFC 2578 §3.5.
+const MAX_OID_SUB_IDENTIFIERS: usize = 128;
 
 /// Appends the base-128 variable-length encoding of `value` to `dest`.
 ///
@@ -811,6 +821,13 @@ fn decode_oid(oid_bytes: &[u8], error_offset: usize) -> Result<Oid, BerError> {
             ))
         })?;
         arcs.push(arc_u32);
+    }
+
+    if arcs.len() > MAX_OID_SUB_IDENTIFIERS {
+        return Err(BerError::new(format!(
+            "BER: OID has {} sub-identifiers (max {MAX_OID_SUB_IDENTIFIERS} per RFC 2578 §3.5) at offset {error_offset}",
+            arcs.len()
+        )));
     }
 
     Oid::try_from(arcs).map_err(|oid_error| {
@@ -1838,5 +1855,50 @@ mod tests {
             .read_oid()
             .expect("OID 2.0 should decode");
         assert_eq!(recovered, oid);
+    }
+
+    #[test]
+    fn given_oid_with_129_sub_identifiers_when_decoded_then_returns_error() {
+        // Verifies: REQ-0000
+        // First BER byte 0x00 encodes arcs (0, 0), then 127 more single-byte
+        // sub-identifiers (0x01 each), giving 2 + 127 = 129 total arcs.
+        let mut oid_value = vec![0x00u8]; // arcs 0.0
+        oid_value.extend(std::iter::repeat_n(0x01u8, 127));
+        // Total OID value length = 128 bytes
+        // Wrap in OID TLV: tag 0x06, length 128 (long form: 0x81 0x80)
+        let mut tlv = vec![0x06, 0x81, 0x80];
+        tlv.extend(&oid_value);
+        let mut reader = BerReader::new(&tlv);
+        let ber_error = reader.read_oid().unwrap_err();
+        let error_message = ber_error.to_string();
+        assert!(
+            error_message.contains("129 sub-identifiers"),
+            "error must report the actual count 129, got: {error_message}"
+        );
+        assert!(
+            error_message.contains("max 128"),
+            "error must report the limit 128, got: {error_message}"
+        );
+    }
+
+    #[test]
+    fn given_oid_with_128_sub_identifiers_when_decoded_then_succeeds() {
+        // Verifies: REQ-0000
+        // First BER byte 0x00 encodes arcs (0, 0), then 126 more single-byte
+        // sub-identifiers (0x01 each), giving 2 + 126 = 128 total arcs.
+        let mut oid_value = vec![0x00u8]; // arcs 0.0
+        oid_value.extend(std::iter::repeat_n(0x01u8, 126));
+        // Total OID value length = 127 bytes
+        // Wrap in OID TLV: tag 0x06, length 127 (short form: 0x7F)
+        let mut tlv = vec![0x06, 0x7F];
+        tlv.extend(&oid_value);
+        let mut reader = BerReader::new(&tlv);
+        let oid = reader
+            .read_oid()
+            .expect("128 sub-identifiers should succeed");
+        assert_eq!(oid.as_slice().len(), 128);
+        assert_eq!(oid.as_slice()[0], 0);
+        assert_eq!(oid.as_slice()[1], 0);
+        assert_eq!(oid.as_slice()[127], 1);
     }
 }
