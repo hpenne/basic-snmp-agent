@@ -99,7 +99,7 @@ category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "F-18 — Restrict read_length extra_byte_count to size_of::<usize>(); reject 0xFF initial length byte per X.690 §8.1.3.5"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]

@@ -344,12 +344,30 @@ impl<'a> BerReader<'a> {
             return Ok(usize::from(first_byte));
         }
 
+        // X.690 §8.1.3.5: 0xFF is a reserved value and must never appear as the
+        // initial length octet.
+        if first_byte == 0xFF {
+            return Err(BerError::new(format!(
+                "BER: reserved length byte 0xFF at offset {}",
+                self.offset()
+            )));
+        }
+
         // Long form: low seven bits are the number of subsequent length bytes.
         let extra_byte_count = usize::from(first_byte & 0x7F);
         if extra_byte_count == 0 {
             // Indefinite-length encoding — BER allows it but SNMP forbids it.
             return Err(BerError::new(format!(
                 "BER: indefinite-length encoding is not permitted in SNMP at offset {}",
+                self.offset()
+            )));
+        }
+
+        // A length-of-length exceeding size_of::<usize>() bytes cannot represent a
+        // valid usize value; reject early to avoid pointless work.
+        if extra_byte_count > std::mem::size_of::<usize>() {
+            return Err(BerError::new(format!(
+                "BER: length field too large ({extra_byte_count} bytes) at offset {}",
                 self.offset()
             )));
         }
@@ -1032,6 +1050,54 @@ mod tests {
             ber_error.to_string().contains("indefinite"),
             "unexpected error: {ber_error}"
         );
+    }
+
+    #[test]
+    fn given_reserved_0xff_length_byte_when_read_length_then_returns_error() {
+        // Verifies: REQ-0000
+        // X.690 §8.1.3.5 reserves 0xFF as a length-byte value; it must never be used.
+        let reserved = [0xFF];
+        let mut reader = BerReader::new(&reserved);
+        let ber_error = reader.read_length().unwrap_err();
+        assert_eq!(
+            ber_error.to_string(),
+            "BER: reserved length byte 0xFF at offset 1"
+        );
+    }
+
+    #[test]
+    fn given_extra_byte_count_exceeds_usize_width_when_read_length_then_returns_error() {
+        // Verifies: REQ-0000
+        // On a 64-bit platform size_of::<usize>() == 8, so 0x89 (9 extra bytes) exceeds it.
+        // We use size_of::<usize>() + 1 to remain platform-independent.
+        let byte_count = u8::try_from(std::mem::size_of::<usize>() + 1)
+            .expect("size_of::<usize>() + 1 fits in u8 on any realistic platform");
+        let oversized = [0x80 | byte_count];
+        let mut reader = BerReader::new(&oversized);
+        let ber_error = reader.read_length().unwrap_err();
+        assert_eq!(
+            ber_error.to_string(),
+            format!(
+                "BER: length field too large ({} bytes) at offset 1",
+                std::mem::size_of::<usize>() + 1
+            )
+        );
+    }
+
+    #[test]
+    fn given_extra_byte_count_equals_usize_width_when_read_length_then_succeeds() {
+        // Verifies: REQ-0000
+        // Exactly size_of::<usize>() extra bytes is the maximum accepted; verify it decodes.
+        let width = std::mem::size_of::<usize>();
+        let mut input = vec![0x80 | u8::try_from(width).unwrap()];
+        // Encode length value 1 in `width` bytes (big-endian).
+        input.extend(std::iter::repeat_n(0x00, width - 1));
+        input.push(0x01);
+        let mut reader = BerReader::new(&input);
+        let length = reader
+            .read_length()
+            .expect("exactly usize-width bytes must be accepted");
+        assert_eq!(length, 1);
     }
 
     #[test]
