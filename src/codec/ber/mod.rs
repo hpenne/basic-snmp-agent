@@ -706,13 +706,6 @@ fn decode_unsigned_u64(integer_bytes: &[u8], error_offset: usize) -> Result<u64,
 /// is 2 and the second arc is large (e.g., `2.999999999`).
 fn encode_oid(oid: &Oid) -> Vec<u8> {
     let arcs = oid.as_slice();
-    // Defence-in-depth: Oid construction enforces this limit, but guard
-    // against any future bypass that would produce a malformed encoding.
-    debug_assert!(
-        arcs.len() <= MAX_OID_SUB_IDENTIFIERS,
-        "OID has {} sub-identifiers (max {MAX_OID_SUB_IDENTIFIERS} per RFC 2578 §3.5)",
-        arcs.len()
-    );
     // Validated OIDs always have at least two arcs.
     let first_combined = u64::from(arcs[0]) * 40 + u64::from(arcs[1]);
     let remaining_arcs = &arcs[2..];
@@ -727,9 +720,6 @@ fn encode_oid(oid: &Oid) -> Vec<u8> {
 
 // ceil(u64::BITS / 7) = ceil(64/7) = 10
 const MAX_BASE128_GROUPS: usize = 10;
-
-/// Maximum number of sub-identifiers in an OID per RFC 2578 §3.5.
-const MAX_OID_SUB_IDENTIFIERS: usize = 128;
 
 /// Appends the base-128 variable-length encoding of `value` to `dest`.
 ///
@@ -821,13 +811,6 @@ fn decode_oid(oid_bytes: &[u8], error_offset: usize) -> Result<Oid, BerError> {
             ))
         })?;
         arcs.push(arc_u32);
-    }
-
-    if arcs.len() > MAX_OID_SUB_IDENTIFIERS {
-        return Err(BerError::new(format!(
-            "BER: OID has {} sub-identifiers (max {MAX_OID_SUB_IDENTIFIERS} per RFC 2578 §3.5) at offset {error_offset}",
-            arcs.len()
-        )));
     }
 
     Oid::try_from(arcs).map_err(|oid_error| {
@@ -1872,12 +1855,12 @@ mod tests {
         let ber_error = reader.read_oid().unwrap_err();
         let error_message = ber_error.to_string();
         assert!(
-            error_message.contains("129 sub-identifiers"),
-            "error must report the actual count 129, got: {error_message}"
+            error_message.contains("too many sub-identifiers"),
+            "error must mention sub-identifier limit, got: {error_message}"
         );
         assert!(
-            error_message.contains("max 128"),
-            "error must report the limit 128, got: {error_message}"
+            error_message.contains("129"),
+            "error must report the actual count, got: {error_message}"
         );
     }
 

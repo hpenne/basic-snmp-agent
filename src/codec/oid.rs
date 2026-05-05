@@ -3,6 +3,9 @@
 use std::fmt;
 use std::str::FromStr;
 
+/// Maximum number of sub-identifiers in an OID per RFC 2578 §3.5.
+pub(crate) const MAX_OID_SUB_IDENTIFIERS: usize = 128;
+
 /// An SNMP Object Identifier represented as a sequence of unsigned 32-bit components.
 ///
 /// OIDs are compared lexicographically, component by component, with shorter prefixes
@@ -19,6 +22,7 @@ use std::str::FromStr;
 ///   beyond the `u32::MAX` cap.  BER encodes the combined first-two-arc value
 ///   (`40 * first + second`) as a base-128 variable-length integer (X.690 §8.19.4),
 ///   so large second arcs like `2.999` (used in X.660 examples) are perfectly valid.
+/// - It must have at most 128 sub-identifiers (RFC 2578 §3.5).
 ///
 /// The infallible constructor [`Oid::from_slice`] enforces these rules with `assert!`
 /// panics.  [`TryFrom<Vec<u32>>`] and [`FromStr`] return a [`ParseOidError`] instead.
@@ -52,6 +56,7 @@ impl Oid {
     /// - If the first element is `0` or `1`, the second element must be `≤ 39`.
     /// - If the first element is `2`, any `u32` value is accepted for the second
     ///   element (e.g. `[2, 999]` is valid).
+    /// - The slice must have at most 128 elements (RFC 2578 §3.5).
     ///
     /// # Examples
     ///
@@ -93,6 +98,7 @@ impl TryFrom<Vec<u32>> for Oid {
     /// - fewer than two components
     /// - first arc > 2
     /// - second arc > 39 when first arc is 0 or 1
+    /// - more than 128 components (RFC 2578 §3.5)
     ///
     /// When first arc is 2, any `u32` value is accepted for the second arc.
     ///
@@ -207,6 +213,7 @@ impl ParseOidError {
             OidErrorKind::TooFewComponents(_) => OidErrorCategory::TooFewComponents,
             OidErrorKind::InvalidFirstArc(_) => OidErrorCategory::InvalidFirstArc,
             OidErrorKind::InvalidSecondArc { .. } => OidErrorCategory::InvalidSecondArc,
+            OidErrorKind::TooManySubIdentifiers(_) => OidErrorCategory::TooManySubIdentifiers,
             OidErrorKind::InvalidComponent { .. } => OidErrorCategory::InvalidComponent,
         }
     }
@@ -247,6 +254,8 @@ pub enum OidErrorCategory {
     InvalidFirstArc,
     /// The second arc was `> 39` when the first arc was `0` or `1`.
     InvalidSecondArc,
+    /// The OID had more than 128 sub-identifiers.
+    TooManySubIdentifiers,
     /// A component could not be parsed as a `u32`.
     InvalidComponent,
 }
@@ -267,6 +276,7 @@ enum OidErrorKind {
         first: u32,
         second: u32,
     },
+    TooManySubIdentifiers(usize),
     InvalidComponent {
         part: String,
         source: std::num::ParseIntError,
@@ -294,6 +304,10 @@ impl fmt::Display for OidErrorKind {
             Self::InvalidSecondArc { first, second } => write!(
                 f,
                 "invalid OID: second OID component must be ≤ 39 when first is {first}, got {second}"
+            ),
+            Self::TooManySubIdentifiers(n) => write!(
+                f,
+                "invalid OID: too many sub-identifiers ({n}, max {MAX_OID_SUB_IDENTIFIERS} per RFC 2578 §3.5)"
             ),
             Self::InvalidComponent { part, source } => {
                 write!(f, "invalid OID: invalid component {part:?}: {source}")
@@ -329,6 +343,9 @@ fn validate_oid_components(components: &[u32]) -> Result<(), OidErrorKind> {
     // single-byte limit; any u32 value is valid.
     if first <= 1 && second > 39 {
         return Err(OidErrorKind::InvalidSecondArc { first, second });
+    }
+    if components.len() > MAX_OID_SUB_IDENTIFIERS {
+        return Err(OidErrorKind::TooManySubIdentifiers(components.len()));
     }
     Ok(())
 }
@@ -701,5 +718,59 @@ mod tests {
         // 40 exceeds the maximum valid second arc of 39 when first is 1.
         let err = "1.40.1".parse::<Oid>().unwrap_err();
         assert_eq!(err.category(), OidErrorCategory::InvalidSecondArc);
+    }
+
+    #[test]
+    fn given_oid_with_129_components_when_try_from_then_returns_error() {
+        // Verifies: REQ-0000
+        let mut components = vec![1u32, 3];
+        components.extend(std::iter::repeat_n(1u32, 127));
+        assert_eq!(components.len(), 129);
+        let parse_error = Oid::try_from(components).unwrap_err();
+        assert_eq!(
+            parse_error.category(),
+            OidErrorCategory::TooManySubIdentifiers
+        );
+        assert!(
+            parse_error.to_string().contains("129"),
+            "error must report the actual count, got: {parse_error}"
+        );
+    }
+
+    #[test]
+    fn given_oid_with_128_components_when_try_from_then_succeeds() {
+        // Verifies: REQ-0000
+        let mut components = vec![1u32, 3];
+        components.extend(std::iter::repeat_n(1u32, 126));
+        assert_eq!(components.len(), 128);
+        let oid = Oid::try_from(components).expect("128 sub-identifiers should succeed");
+        assert_eq!(oid.as_slice().len(), 128);
+    }
+
+    #[test]
+    #[should_panic(expected = "too many sub-identifiers")]
+    fn given_oid_with_129_components_when_from_slice_then_panics() {
+        // Verifies: REQ-0000
+        let mut components = vec![1u32, 3];
+        components.extend(std::iter::repeat_n(1u32, 127));
+        let _ = Oid::from_slice(&components);
+    }
+
+    #[test]
+    fn given_oid_string_with_129_components_when_parsed_then_returns_error() {
+        // Verifies: REQ-0000
+        let oid_string = std::iter::once("1".to_string())
+            .chain(std::iter::repeat_n("1".to_string(), 128))
+            .collect::<Vec<_>>()
+            .join(".");
+        let parse_error = oid_string.parse::<Oid>().unwrap_err();
+        assert_eq!(
+            parse_error.category(),
+            OidErrorCategory::TooManySubIdentifiers
+        );
+        assert!(
+            parse_error.to_string().contains("129"),
+            "error must report the actual count, got: {parse_error}"
+        );
     }
 }
