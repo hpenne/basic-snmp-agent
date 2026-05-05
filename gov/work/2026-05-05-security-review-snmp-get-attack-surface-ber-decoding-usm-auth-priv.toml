@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-05-05-001"
 title = "Security review: SNMP GET attack surface (BER decoding, USM auth/priv)"
-status = "active"
+status = "done"
 created = "2026-05-05"
 started = "2026-05-05"
+completed = "2026-05-05"
 
 [content]
 description = """
@@ -14,35 +15,35 @@ What is the goal? What are the acceptance criteria?"""
 
 [[content.acceptance_criteria]]
 text = "Survey of SNMP GET attack surface complete"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "Security review plan created and documented"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "BER/ASN.1 decoding reviewed for memory safety and DoS"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "USM authentication (authNoPriv) reviewed for bypass vulnerabilities"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "USM privacy (authPriv) reviewed for encryption bypass"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "SNMP message processing pipeline reviewed for input validation"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "All findings documented with severity and remediation"
-status = "pending"
+status = "done"
 category = "chore"
