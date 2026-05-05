@@ -13,6 +13,13 @@ const SNMPV3_VERSION: i32 = 3;
 /// `SNMPv2c` message version field value (RFC 1901 §3).
 const SNMPV2C_VERSION: i32 = 1;
 
+/// Maximum `SNMPv3` message size (in bytes) advertised in outbound messages.
+///
+/// RFC 3412 §6.4 defines `msgMaxSize` as the maximum message size the sender
+/// can accept. 65535 is the conventional maximum for UDP-transported SNMP and
+/// the value this agent advertises as its receive capability.
+pub(crate) const MSG_MAX_SIZE_UDP: i32 = 65535;
+
 // ── Intermediate types ────────────────────────────────────────────────────────
 
 /// Decoded `SNMPv3` message envelope. The inner PDU is left as raw bytes.
@@ -478,7 +485,7 @@ mod tests {
     #[test]
     fn given_header_data_fields_when_encoded_then_matches_wire_vector() {
         // Verifies: REQ-0000
-        let encoded = encode_header_data(1, 65535, 0x04, 3);
+        let encoded = encode_header_data(1, MSG_MAX_SIZE_UDP, 0x04, 3);
         assert_eq!(encoded, HEADER_DATA_WIRE);
     }
 
@@ -493,7 +500,7 @@ mod tests {
         let security_model = reader.read_integer().expect("securityModel must parse");
 
         assert_eq!(msg_id, 1);
-        assert_eq!(max_size, 65535);
+        assert_eq!(max_size, MSG_MAX_SIZE_UDP);
         assert_eq!(flags_bytes, &[0x04]);
         assert_eq!(security_model, 3);
     }
@@ -641,16 +648,16 @@ mod tests {
         // Verifies: REQ-0000
         let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
         let (encoded, auth_offset) = encode_v3_message(
-            1,     // msg_id
-            65535, // max_size
-            0x04,  // flags_byte (reportable, noAuth, noPriv)
-            3,     // security_model (USM)
-            &[],   // engine_id
-            0,     // engine_boots
-            0,     // engine_time
-            &[],   // user_name
-            &[],   // auth_params
-            &[],   // priv_params
+            1,                // msg_id
+            MSG_MAX_SIZE_UDP, // max_size
+            0x04,             // flags_byte (reportable, noAuth, noPriv)
+            3,                // security_model (USM)
+            &[],              // engine_id
+            0,                // engine_boots
+            0,                // engine_time
+            &[],              // user_name
+            &[],              // auth_params
+            &[],              // priv_params
             &scoped_pdu,
             false, // not encrypted
         )
@@ -669,7 +676,7 @@ mod tests {
         let envelope = decode_v3_envelope(V3_DISCOVERY_WIRE).expect("must decode");
 
         assert_eq!(envelope.msg_id, 1);
-        assert_eq!(envelope.max_size, 65535);
+        assert_eq!(envelope.max_size, MSG_MAX_SIZE_UDP);
         assert_eq!(envelope.security_flags, 0x04);
         assert_eq!(envelope.security_model, 3);
         assert_eq!(envelope.usm.engine_id, b"");
@@ -704,7 +711,7 @@ mod tests {
         let scoped_pdu = encode_scoped_pdu(&[0x01], b"", &[0xA0, 0x00]);
         let (encoded, auth_offset) = encode_v3_message(
             2,
-            65535,
+            MSG_MAX_SIZE_UDP,
             0x01, // authNoPriv
             3,
             &[0x80, 0x00, 0x01],
@@ -735,7 +742,7 @@ mod tests {
         let scoped_pdu = encode_scoped_pdu(&[0x01], b"", &[0xA0, 0x00]);
         let (encoded, _) = encode_v3_message(
             3,
-            65535,
+            MSG_MAX_SIZE_UDP,
             0x01,
             3,
             &[0x80, 0x00, 0x01],
@@ -768,7 +775,7 @@ mod tests {
         let ciphertext = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02];
         let (encoded, _) = encode_v3_message(
             4,
-            65535,
+            MSG_MAX_SIZE_UDP,
             0x03, // authPriv
             3,
             &[0x80, 0x00, 0x01],
@@ -804,7 +811,7 @@ mod tests {
         let scoped_pdu = encode_scoped_pdu(&[0x80, 0x00, 0x01], b"", &[0xA0, 0x00]);
         let (encoded, auth_offset) = encode_v3_message(
             5,
-            65535,
+            MSG_MAX_SIZE_UDP,
             0x03, // authPriv
             3,
             &[0x80, 0x00, 0x01],
@@ -944,7 +951,7 @@ mod tests {
         let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
         let (encoded, _) = encode_v3_message(
             6,
-            65535,
+            MSG_MAX_SIZE_UDP,
             0x04,
             3,
             &[],
@@ -978,16 +985,16 @@ mod tests {
         // must then reject it because msgID must be non-negative.
         let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
         let (encoded, _) = encode_v3_message(
-            -1,    // msg_id: negative — invalid per RFC 3412 §6.4
-            65535, // max_size
-            0x04,  // flags_byte (reportable, noAuth, noPriv)
-            3,     // security_model (USM)
-            &[],   // engine_id
-            0,     // engine_boots
-            0,     // engine_time
-            &[],   // user_name
-            &[],   // auth_params
-            &[],   // priv_params
+            -1,               // msg_id: negative — invalid per RFC 3412 §6.4
+            MSG_MAX_SIZE_UDP, // max_size
+            0x04,             // flags_byte (reportable, noAuth, noPriv)
+            3,                // security_model (USM)
+            &[],              // engine_id
+            0,                // engine_boots
+            0,                // engine_time
+            &[],              // user_name
+            &[],              // auth_params
+            &[],              // priv_params
             &scoped_pdu,
             false, // not encrypted
         )
@@ -1118,7 +1125,7 @@ mod tests {
         // and embed it in a minimal V3 envelope to exercise the validation path.
         let mut inner = BerWriter::new();
         inner.write_integer(1); // msgID
-        inner.write_integer(65535); // maxSize
+        inner.write_integer(MSG_MAX_SIZE_UDP); // maxSize
         inner.write_octet_string(&[0x04, 0x00]); // msgFlags: 2 bytes — invalid
         inner.write_integer(3); // securityModel
 

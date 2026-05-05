@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::types::{EncodeError, GetResponse, Varbind, VarbindValue, WireTrapPdu};
 use crate::codec::ber;
+use crate::codec::ber::snmp::MSG_MAX_SIZE_UDP;
 use crate::codec::{Oid, Value};
 
 // Implements: REQ-0000
@@ -199,7 +200,7 @@ fn encode_v3_envelope(
 
     let (mut encoded_message, auth_params_offset) = ber::snmp::encode_v3_message(
         msg_id,
-        65535,
+        MSG_MAX_SIZE_UDP,
         flags_byte,
         3,
         engine_id,

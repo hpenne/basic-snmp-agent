@@ -114,7 +114,7 @@ category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "F-21 — Replace hardcoded max_size 65535 in encode_v3_message with reference to MAX_FRAME_SIZE; add comment linking the value to RFC 3412 §6.4"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
