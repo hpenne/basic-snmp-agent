@@ -94,7 +94,7 @@ category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "F-17 — Reject non-minimal OID sub-identifier encoding in decode_base128: error if first byte is 0x80 (leading zero in base-128) per X.690 §8.19.2"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
