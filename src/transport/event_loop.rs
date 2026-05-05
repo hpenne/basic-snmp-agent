@@ -51,7 +51,7 @@ const MAX_FRAME_SIZE: usize = 65_535;
 pub const DEFAULT_MAX_CONNECTIONS: usize = 64;
 
 /// Default idle timeout for connections under normal conditions.
-pub const NORMAL_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+pub const NORMAL_IDLE_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Reduced idle timeout when the connection count is near the maximum.
 pub const PRESSURE_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -1916,7 +1916,7 @@ mod tests {
 
         let max_conns = 3usize;
         let pressure_config = ConnectionTimeoutConfig {
-            normal_timeout: Duration::from_secs(3600), // long enough never to fire
+            normal_timeout: Duration::from_hours(1), // long enough never to fire
             pressure_timeout: Duration::from_millis(1),
             pressure_headroom: 2,
         };
