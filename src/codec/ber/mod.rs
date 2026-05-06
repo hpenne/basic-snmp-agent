@@ -1030,7 +1030,6 @@ mod tests {
 
     #[test]
     fn given_indefinite_length_encoding_when_read_length_then_returns_error() {
-        // Verifies: REQ-0000
         // 0x80 with zero extra-byte count means indefinite length (forbidden in SNMP).
         let indefinite = [0x80];
         let mut reader = BerReader::new(&indefinite);
@@ -1043,7 +1042,6 @@ mod tests {
 
     #[test]
     fn given_reserved_0xff_length_byte_when_read_length_then_returns_error() {
-        // Verifies: REQ-0000
         // X.690 §8.1.3.5 reserves 0xFF as a length-byte value; it must never be used.
         let reserved = [0xFF];
         let mut reader = BerReader::new(&reserved);
@@ -1056,7 +1054,6 @@ mod tests {
 
     #[test]
     fn given_extra_byte_count_exceeds_usize_width_when_read_length_then_returns_error() {
-        // Verifies: REQ-0000
         // On a 64-bit platform size_of::<usize>() == 8, so 0x89 (9 extra bytes) exceeds it.
         // We use size_of::<usize>() + 1 to remain platform-independent.
         let byte_count = u8::try_from(std::mem::size_of::<usize>() + 1)
@@ -1075,7 +1072,6 @@ mod tests {
 
     #[test]
     fn given_extra_byte_count_equals_usize_width_when_read_length_then_succeeds() {
-        // Verifies: REQ-0000
         // Exactly size_of::<usize>() extra bytes is the maximum accepted; verify it decodes.
         let width = std::mem::size_of::<usize>();
         let mut input = vec![0x80 | u8::try_from(width).unwrap()];
@@ -1091,7 +1087,6 @@ mod tests {
 
     #[test]
     fn given_long_form_length_exceeding_input_when_read_tlv_then_returns_error() {
-        // Verifies: REQ-0000
         // 0x02 is INTEGER tag; 0x84 means 4 subsequent bytes encode the length.
         // Length = 0x7FFFFFFF = 2147483647 — fits in usize on all platforms but
         // far exceeds the 0 bytes of input remaining after the tag and length field.
@@ -1106,7 +1101,6 @@ mod tests {
 
     #[test]
     fn given_long_form_length_larger_than_available_data_when_read_tlv_then_returns_error() {
-        // Verifies: REQ-0000
         // 0x02 is INTEGER tag; 0x83 means 3 subsequent bytes encode the length = 0x0F4240 = 1000000 bytes.
         // Only 3 value bytes follow, so the length exceeds the remaining input.
         let large_tlv = [0x02, 0x83, 0x0F, 0x42, 0x40, 0xAA, 0xBB, 0xCC];
@@ -1283,7 +1277,6 @@ mod tests {
 
     #[test]
     fn given_standard_snmp_oid_when_round_tripped_then_recovers_oid() {
-        // Verifies: REQ-0000
         // 1.3.6.1.2.1.1.1.0
         // Combined first: 40*1+3 = 43 = 0x2B
         // Remaining arcs: 6, 1, 2, 1, 1, 1, 0 — all single-byte base-128
@@ -1301,7 +1294,6 @@ mod tests {
 
     #[test]
     fn given_oid_with_large_arc_when_round_tripped_then_recovers_oid() {
-        // Verifies: REQ-0000
         // 1.3.6.1.4.1.99999
         // Combined first: 43 = 0x2B
         // Remaining: 6(0x06), 1(0x01), 4(0x04), 1(0x01), 99999
@@ -1321,7 +1313,6 @@ mod tests {
 
     #[test]
     fn given_arc_zero_oid_when_round_tripped_then_recovers() {
-        // Verifies: REQ-0000
         // 0.0 → combined first sub-id = 40*0+0 = 0x00
         // Wire: 06 01 00
         const EXPECTED_WIRE: &[u8] = &[0x06, 0x01, 0x00];
@@ -1336,7 +1327,6 @@ mod tests {
 
     #[test]
     fn given_arc_two_oid_with_large_second_arc_when_round_tripped_then_recovers() {
-        // Verifies: REQ-0000
         // 2.999 → combined = 40*2+999 = 1079 = 0x437
         // Base-128: 0x437 groups from LSB: 0x37, 0x08 → with cont. bits: [0x88, 0x37]
         // Wire: 06 02 88 37
@@ -1352,7 +1342,6 @@ mod tests {
 
     #[test]
     fn given_oid_with_max_u32_arc_when_round_tripped_then_recovers() {
-        // Verifies: REQ-0000
         // 1.3.4294967295 → combined first = 40*1+3 = 43 = 0x2B
         // 4294967295 = 0xFFFFFFFF
         // Base-128 of 0xFFFFFFFF (from LSB): 0x7F,0x7F,0x7F,0x7F,0x0F
@@ -1370,7 +1359,6 @@ mod tests {
 
     #[test]
     fn given_arc_two_oid_with_max_u32_second_arc_when_round_tripped_then_recovers() {
-        // Verifies: REQ-0000
         // 2.4294967295: combined first-two-arc value = 2*40 + 4294967295 = 4294967375 = 0x1_0000_004F
         // This exceeds u32::MAX, so it must be encoded as a 5-byte base-128 value.
         // 7-bit groups of 0x1_0000_004F (MSB first): 0x10, 0x00, 0x00, 0x00, 0x4F
@@ -1408,7 +1396,6 @@ mod tests {
 
     #[test]
     fn given_integer_42_when_encoded_then_matches_expected_wire() {
-        // Verifies: REQ-0000
         // INTEGER 42: tag=0x02, len=0x01, value=0x2A
         const EXPECTED_WIRE: &[u8] = &[0x02, 0x01, 0x2A];
         let encoded = encode_with_writer(|w| w.write_integer(42));
@@ -1626,7 +1613,6 @@ mod tests {
 
     #[test]
     fn given_negative_integer_when_read_unsigned32_then_returns_error() {
-        // Verifies: REQ-0000
         // INTEGER encoding of -1: 02 01 FF
         const NEGATIVE_ONE: &[u8] = &[0x02, 0x01, 0xFF];
         let mut reader = BerReader::new(NEGATIVE_ONE);
@@ -1639,7 +1625,6 @@ mod tests {
 
     #[test]
     fn given_negative_integer_when_read_unsigned64_then_returns_error() {
-        // Verifies: REQ-0000
         const NEGATIVE_ONE: &[u8] = &[0x02, 0x01, 0xFF];
         let mut reader = BerReader::new(NEGATIVE_ONE);
         let ber_error = reader.read_unsigned64().unwrap_err();
@@ -1651,7 +1636,6 @@ mod tests {
 
     #[test]
     fn given_null_with_nonzero_length_when_read_null_then_returns_error() {
-        // Verifies: REQ-0000
         // NULL tag with length 1 and a junk byte — this is malformed.
         const MALFORMED_NULL: &[u8] = &[0x05, 0x01, 0x00];
         let mut reader = BerReader::new(MALFORMED_NULL);
@@ -1664,7 +1648,6 @@ mod tests {
 
     #[test]
     fn given_reader_with_two_tlvs_when_first_consumed_then_remaining_returns_second() {
-        // Verifies: REQ-0000
         // Two NULLs: 05 00 05 00
         const TWO_NULLS: &[u8] = &[0x05, 0x00, 0x05, 0x00];
         let mut reader = BerReader::new(TWO_NULLS);
@@ -1674,7 +1657,6 @@ mod tests {
 
     #[test]
     fn given_writer_when_write_raw_called_then_bytes_appended_verbatim() {
-        // Verifies: REQ-0000
         let mut writer = BerWriter::new();
         writer.write_raw(&[0x01, 0x02, 0x03]);
         assert_eq!(writer.as_bytes(), &[0x01, 0x02, 0x03]);
@@ -1682,7 +1664,6 @@ mod tests {
 
     #[test]
     fn given_tagged_unsigned32_when_round_tripped_then_recovers() {
-        // Verifies: REQ-0000
         // Counter32 tag 0x41, value 1000 = 0x03E8
         // Wire: 41 02 03 E8
         const EXPECTED_WIRE: &[u8] = &[0x41, 0x02, 0x03, 0xE8];
@@ -1698,7 +1679,6 @@ mod tests {
 
     #[test]
     fn given_tagged_unsigned64_when_round_tripped_then_recovers() {
-        // Verifies: REQ-0000
         // Counter64 tag 0x46, value 0x0100000000 = 4294967296
         // Encoded unsigned bytes: [0x01, 0x00, 0x00, 0x00, 0x00] (no sign byte needed, high bit clear)
         // Wire: 46 05 01 00 00 00 00
@@ -1717,7 +1697,6 @@ mod tests {
 
     #[test]
     fn given_zero_length_integer_when_read_integer_then_returns_error() {
-        // Verifies: REQ-0000
         // INTEGER with length 0: 02 00
         const ZERO_LENGTH_INTEGER: &[u8] = &[0x02, 0x00];
         let mut reader = BerReader::new(ZERO_LENGTH_INTEGER);
@@ -1730,7 +1709,6 @@ mod tests {
 
     #[test]
     fn given_five_byte_integer_when_read_integer_then_returns_error() {
-        // Verifies: REQ-0000
         // INTEGER with 5 value bytes: 02 05 01 02 03 04 05
         const OVERSIZED_INTEGER: &[u8] = &[0x02, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05];
         let mut reader = BerReader::new(OVERSIZED_INTEGER);
@@ -1743,7 +1721,6 @@ mod tests {
 
     #[test]
     fn given_unsigned_too_large_for_u32_when_read_unsigned32_then_returns_error() {
-        // Verifies: REQ-0000
         // Unsigned value 0x0100000000 (fits in u64 but not u32):
         // Sign byte 0x00 + 5 significant bytes → total 6 value bytes
         // 02 06 00 01 00 00 00 00
@@ -1758,7 +1735,6 @@ mod tests {
 
     #[test]
     fn given_counter32_when_read_as_gauge32_then_returns_error() {
-        // Verifies: REQ-0000
         // Counter32 tag 0x41, value 1: 41 01 01
         const COUNTER32_ONE: &[u8] = &[0x41, 0x01, 0x01];
         let mut reader = BerReader::new(COUNTER32_ONE);
@@ -1771,7 +1747,6 @@ mod tests {
 
     #[test]
     fn given_zero_length_oid_when_read_oid_then_returns_error() {
-        // Verifies: REQ-0000
         // OID tag with zero length: 06 00
         const EMPTY_OID: &[u8] = &[0x06, 0x00];
         let mut reader = BerReader::new(EMPTY_OID);
@@ -1784,7 +1759,6 @@ mod tests {
 
     #[test]
     fn given_oid_with_overflowing_sub_identifier_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         // An OID value where the first sub-id is valid (0x2B = 43 → arc 1.3)
         // then a second sub-id with 11 continuation bytes that overflows u64.
         // Each byte has continuation bit set (0x80+) except the last.
@@ -1805,7 +1779,6 @@ mod tests {
 
     #[test]
     fn given_unsigned32_max_when_encoded_then_matches_expected_wire() {
-        // Verifies: REQ-0000
         // u32::MAX = 0xFFFFFFFF, high bit set → prepend 0x00 sign byte
         // INTEGER tag 0x02, length 5, value 00 FF FF FF FF
         const EXPECTED_WIRE: &[u8] = &[0x02, 0x05, 0x00, 0xFF, 0xFF, 0xFF, 0xFF];
@@ -1815,7 +1788,6 @@ mod tests {
 
     #[test]
     fn given_unsigned64_max_when_encoded_then_matches_expected_wire() {
-        // Verifies: REQ-0000
         // u64::MAX, high bit set → prepend 0x00
         // INTEGER tag 0x02, length 9, value 00 FF FF FF FF FF FF FF FF
         const EXPECTED_WIRE: &[u8] = &[
@@ -1829,7 +1801,6 @@ mod tests {
 
     #[test]
     fn given_ber_error_when_debug_formatted_then_contains_fields() {
-        // Verifies: REQ-0000
         let error = BerError::new("test message".to_string());
         let debug_output = format!("{error:?}");
         assert!(
@@ -1856,7 +1827,6 @@ mod tests {
 
     #[test]
     fn given_writer_with_capacity_when_integer_written_then_matches_default_writer() {
-        // Verifies: REQ-0000
         // Note: The cargo-mutants "replace with_capacity -> Self with Default::default()" mutant
         // is equivalent — Default produces a functionally identical empty writer.
         let mut writer_cap = BerWriter::with_capacity(64);
@@ -1870,7 +1840,6 @@ mod tests {
 
     #[test]
     fn given_writer_after_writing_octet_string_when_len_called_then_returns_correct_byte_count() {
-        // Verifies: REQ-0000
         let mut writer = BerWriter::new();
         writer.write_octet_string(b"hello");
         // tag(0x04) + length(0x05) + 5 payload bytes = 7
@@ -1879,7 +1848,6 @@ mod tests {
 
     #[test]
     fn given_wrong_version_error_when_debug_formatted_then_shows_true() {
-        // Verifies: REQ-0000
         let error = BerError::wrong_version("version mismatch".to_string());
         let debug_output = format!("{error:?}");
         assert!(
@@ -1892,14 +1860,12 @@ mod tests {
 
     #[test]
     fn given_single_zero_byte_when_decoded_as_unsigned_then_returns_zero() {
-        // Verifies: REQ-0000
         let result = decode_unsigned(&[0x00], 4, 0).expect("single zero byte should decode");
         assert_eq!(result, 0);
     }
 
     #[test]
     fn given_two_byte_unsigned_with_sign_padding_when_decoded_then_strips_leading_zero() {
-        // Verifies: REQ-0000
         // [0x00, 0x80] has leading 0x00 sign byte; significant bytes = [0x80] → value 128
         let result = decode_unsigned(&[0x00, 0x80], 4, 0)
             .expect("two-byte unsigned with sign padding should decode");
@@ -1908,7 +1874,6 @@ mod tests {
 
     #[test]
     fn given_ber_encoded_integer_zero_when_decoded_as_unsigned32_then_returns_zero() {
-        // Verifies: REQ-0000
         // INTEGER 0 is BER-encoded as tag=0x02, length=0x01, value=0x00.
         // The decode_unsigned path must keep the single [0x00] byte as significant
         // (len == 1, so len > 1 is false) rather than stripping it to empty.
@@ -1923,8 +1888,6 @@ mod tests {
 
     #[test]
     fn given_multiple_redundant_leading_zeroes_when_decoded_as_unsigned_then_strips_all() {
-        // Verifies: REQ-0000
-
         // [0x00, 0x00, 0x00, 0x01] → 1 (three redundant sign bytes)
         let result = decode_unsigned(&[0x00, 0x00, 0x00, 0x01], 4, 0)
             .expect("three leading zeroes before 0x01 should decode");
@@ -1954,8 +1917,6 @@ mod tests {
 
     #[test]
     fn given_multiple_redundant_leading_bytes_when_decoded_as_signed_then_strips_all() {
-        // Verifies: REQ-0000
-
         // [0x00, 0x00, 0x00, 0x01] encodes +1 with three redundant 0x00 sign bytes.
         let result = decode_signed_i32(&[0x00, 0x00, 0x00, 0x01], 0)
             .expect("three leading zeroes before 0x01 should decode as +1");
@@ -1984,7 +1945,6 @@ mod tests {
 
     #[test]
     fn given_oid_1_0_when_round_tripped_then_recovers_correctly() {
-        // Verifies: REQ-0000
         // OID "1.0": combined first sub-id = 40*1 + 0 = 40 = 0x28
         // Wire: 06 01 28
         // This value must be decoded as arc (1, 0), not (0, 40).
@@ -2000,7 +1960,6 @@ mod tests {
 
     #[test]
     fn given_oid_2_0_when_round_tripped_then_recovers_correctly() {
-        // Verifies: REQ-0000
         // OID "2.0": combined first sub-id = 40*2 + 0 = 80 = 0x50
         // Wire: 06 01 50
         // This value must be decoded as arc (2, 0), not (1, 40).
@@ -2016,7 +1975,6 @@ mod tests {
 
     #[test]
     fn given_oid_with_129_sub_identifiers_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         // First BER byte 0x00 encodes arcs (0, 0), then 127 more single-byte
         // sub-identifiers (0x01 each), giving 2 + 127 = 129 total arcs.
         let mut oid_value = vec![0x00u8]; // arcs 0.0
@@ -2040,7 +1998,6 @@ mod tests {
 
     #[test]
     fn given_oid_with_128_sub_identifiers_when_decoded_then_succeeds() {
-        // Verifies: REQ-0000
         // First BER byte 0x00 encodes arcs (0, 0), then 126 more single-byte
         // sub-identifiers (0x01 each), giving 2 + 126 = 128 total arcs.
         let mut oid_value = vec![0x00u8]; // arcs 0.0

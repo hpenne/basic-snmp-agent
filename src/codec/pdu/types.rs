@@ -423,9 +423,6 @@ impl std::error::Error for EncodeError {}
 /// Wraps the raw wire integer to provide domain-specific semantics. The only
 /// value this agent supports is [`USM`](Self::USM) (3), but the newtype
 /// preserves the original wire value for diagnostic purposes.
-///
-/// # Requirements
-/// Implements: REQ-0000
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct SecurityModel(i32);
 
@@ -686,27 +683,23 @@ mod tests {
 
     #[test]
     fn security_model_usm_is_usm() {
-        // Verifies: REQ-0000
         assert_eq!(SecurityModel::USM, SecurityModel::from_wire(3));
         assert!(SecurityModel::USM.is_usm());
     }
 
     #[test]
     fn security_model_non_usm_is_not_usm() {
-        // Verifies: REQ-0000
         assert_ne!(SecurityModel::from_wire(4), SecurityModel::USM);
         assert!(!SecurityModel::from_wire(4).is_usm());
     }
 
     #[test]
     fn security_model_display_usm() {
-        // Verifies: REQ-0000
         assert_eq!(SecurityModel::USM.to_string(), "USM(3)");
     }
 
     #[test]
     fn security_model_display_unknown() {
-        // Verifies: REQ-0000
         assert_eq!(SecurityModel::from_wire(7).to_string(), "unknown(7)");
     }
 }

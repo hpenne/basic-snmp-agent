@@ -722,7 +722,6 @@ mod tests {
 
     #[test]
     fn given_oid_with_129_components_when_try_from_then_returns_error() {
-        // Verifies: REQ-0000
         let mut components = vec![1u32, 3];
         components.extend(std::iter::repeat_n(1u32, 127));
         assert_eq!(components.len(), 129);
@@ -739,7 +738,6 @@ mod tests {
 
     #[test]
     fn given_oid_with_128_components_when_try_from_then_succeeds() {
-        // Verifies: REQ-0000
         let mut components = vec![1u32, 3];
         components.extend(std::iter::repeat_n(1u32, 126));
         assert_eq!(components.len(), 128);
@@ -750,7 +748,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "too many sub-identifiers")]
     fn given_oid_with_129_components_when_from_slice_then_panics() {
-        // Verifies: REQ-0000
         let mut components = vec![1u32, 3];
         components.extend(std::iter::repeat_n(1u32, 127));
         let _ = Oid::from_slice(&components);
@@ -758,7 +755,6 @@ mod tests {
 
     #[test]
     fn given_oid_string_with_129_components_when_parsed_then_returns_error() {
-        // Verifies: REQ-0000
         let oid_string = std::iter::once("1".to_string())
             .chain(std::iter::repeat_n("1".to_string(), 128))
             .collect::<Vec<_>>()

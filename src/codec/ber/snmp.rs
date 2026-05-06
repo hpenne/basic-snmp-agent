@@ -23,9 +23,6 @@ pub(crate) const MSG_MAX_SIZE_UDP: i32 = 65535;
 // ── Intermediate types ────────────────────────────────────────────────────────
 
 /// Decoded `SNMPv3` message envelope. The inner PDU is left as raw bytes.
-///
-/// # Requirements
-/// Implements: REQ-0000
 #[derive(Debug)]
 pub(crate) struct V3MessageEnvelope<'a> {
     /// Message ID from `HeaderData`; echoed in the `SNMPv3` response.
@@ -55,9 +52,6 @@ pub(crate) struct V3MessageEnvelope<'a> {
 /// `engine_boots` and `engine_time` are `i32` because BER INTEGER is signed
 /// and the underlying reader returns `i32`. The dispatch layer validates that
 /// the values fall within the non-negative protocol range.
-///
-/// # Requirements
-/// Implements: REQ-0000
 #[derive(Debug)]
 pub(crate) struct UsmFields {
     /// `msgAuthoritativeEngineID`.
@@ -75,9 +69,6 @@ pub(crate) struct UsmFields {
 }
 
 /// Decoded `ScopedPduData` — either plaintext or encrypted.
-///
-/// # Requirements
-/// Implements: REQ-0000
 #[derive(Debug)]
 pub(crate) enum ScopedData {
     /// Plaintext `ScopedPDU` containing the context fields and raw PDU bytes.
@@ -94,9 +85,6 @@ pub(crate) enum ScopedData {
 }
 
 /// Decoded `ScopedPdu` fields after AES decryption (used by the dispatch layer).
-///
-/// # Requirements
-/// Implements: REQ-0000
 #[derive(Debug)]
 pub(crate) struct DecodedScopedPduFields {
     /// `contextEngineID` from the `ScopedPdu`.
@@ -242,9 +230,6 @@ pub(crate) fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, 
 /// # Errors
 ///
 /// Returns a [`BerError`] if `bytes` is not a valid BER-encoded `ScopedPdu`.
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn decode_scoped_pdu(bytes: &[u8]) -> Result<DecodedScopedPduFields, BerError> {
     let mut outer_reader = BerReader::new(bytes);
     let mut scoped_reader = outer_reader.read_sequence()?;
@@ -263,9 +248,6 @@ pub(crate) fn decode_scoped_pdu(bytes: &[u8]) -> Result<DecodedScopedPduFields, 
 /// Encodes a `ScopedPdu`: `SEQUENCE { contextEngineID, contextName, raw_pdu_bytes }`.
 ///
 /// `raw_pdu_bytes` is a pre-encoded PDU TLV (context-tagged constructed).
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn encode_scoped_pdu(
     context_engine_id: &[u8],
     context_name: &[u8],
@@ -282,9 +264,6 @@ pub(crate) fn encode_scoped_pdu(
 }
 
 /// Encodes USM security parameters as a BER SEQUENCE (RFC 3414 §2.4).
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn encode_usm_params(
     engine_id: &[u8],
     engine_boots: i32,
@@ -307,9 +286,6 @@ pub(crate) fn encode_usm_params(
 }
 
 /// Encodes a `HeaderData` SEQUENCE (RFC 3412 §6).
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn encode_header_data(
     msg_id: i32,
     max_size: i32,
@@ -345,9 +321,6 @@ pub(crate) fn encode_header_data(
 ///
 /// Returns a [`BerError`] if re-parsing the encoded message to locate the
 /// `auth_params` offset fails (should be unreachable for well-formed inputs).
-///
-/// # Requirements
-/// Implements: REQ-0000
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn encode_v3_message(
     msg_id: i32,
@@ -399,9 +372,6 @@ pub(crate) fn encode_v3_message(
 /// `raw_pdu_tlv` must be a fully-encoded PDU TLV (e.g. the output of
 /// [`super::pdu::encode_pdu`]) and is written verbatim without additional
 /// wrapping. Used for plain trap delivery when no USM user is configured.
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn encode_v2c_message(community: &[u8], raw_pdu_tlv: &[u8]) -> Vec<u8> {
     let mut inner = BerWriter::new();
     inner.write_integer(SNMPV2C_VERSION);
@@ -424,7 +394,6 @@ pub(crate) fn encode_v2c_message(community: &[u8], raw_pdu_tlv: &[u8]) -> Vec<u8
 /// byte sizes of each TLV layer. The re-parse approach is preferred because
 /// it is self-verifying (a structural mismatch fails with a `BerError`) and
 /// avoids duplicating TLV size arithmetic from `encode_length`.
-// Implements: REQ-0000
 fn find_auth_params_offset(
     encoded_message: &[u8],
     auth_params_len: usize,
@@ -484,14 +453,12 @@ mod tests {
 
     #[test]
     fn given_header_data_fields_when_encoded_then_matches_wire_vector() {
-        // Verifies: REQ-0000
         let encoded = encode_header_data(1, MSG_MAX_SIZE_UDP, 0x04, 3);
         assert_eq!(encoded, HEADER_DATA_WIRE);
     }
 
     #[test]
     fn given_header_data_wire_when_decoded_then_fields_extracted() {
-        // Verifies: REQ-0000
         let mut outer = BerReader::new(HEADER_DATA_WIRE);
         let mut reader = outer.read_sequence().expect("SEQUENCE must parse");
         let msg_id = reader.read_integer().expect("msgID must parse");
@@ -531,14 +498,12 @@ mod tests {
 
     #[test]
     fn given_usm_fields_when_encoded_then_matches_wire_vector() {
-        // Verifies: REQ-0000
         let encoded = encode_usm_params(&[0x80, 0x00, 0x01], 10, 200, b"admin", &[], &[]);
         assert_eq!(encoded, USM_PARAMS_WIRE);
     }
 
     #[test]
     fn given_usm_wire_when_decoded_then_fields_extracted() {
-        // Verifies: REQ-0000
         let mut outer = BerReader::new(USM_PARAMS_WIRE);
         let mut reader = outer.read_sequence().expect("SEQUENCE must parse");
         let engine_id = reader.read_octet_string().expect("engine_id must parse");
@@ -576,14 +541,12 @@ mod tests {
 
     #[test]
     fn given_scoped_pdu_fields_when_encoded_then_matches_wire_vector() {
-        // Verifies: REQ-0000
         let encoded = encode_scoped_pdu(&[0x01], b"ctx", &[0xA0, 0x00]);
         assert_eq!(encoded, SCOPED_PDU_WIRE);
     }
 
     #[test]
     fn given_scoped_pdu_wire_when_decoded_then_fields_extracted() {
-        // Verifies: REQ-0000
         let decoded = decode_scoped_pdu(SCOPED_PDU_WIRE).expect("must decode");
 
         assert_eq!(decoded.context_engine_id, &[0x01]);
@@ -645,7 +608,6 @@ mod tests {
 
     #[test]
     fn given_discovery_probe_fields_when_encoded_then_matches_wire_vector() {
-        // Verifies: REQ-0000
         let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
         let (encoded, auth_offset) = encode_v3_message(
             1,                // msg_id
@@ -672,7 +634,6 @@ mod tests {
 
     #[test]
     fn given_discovery_probe_wire_when_decoded_then_all_fields_match() {
-        // Verifies: REQ-0000
         let envelope = decode_v3_envelope(V3_DISCOVERY_WIRE).expect("must decode");
 
         assert_eq!(envelope.msg_id, 1);
@@ -706,7 +667,6 @@ mod tests {
 
     #[test]
     fn given_v3_message_with_auth_params_when_encoded_then_offset_points_into_message() {
-        // Verifies: REQ-0000
         let auth_params = [0x00u8; 12]; // 12-byte HMAC-SHA-1 placeholder
         let scoped_pdu = encode_scoped_pdu(&[0x01], b"", &[0xA0, 0x00]);
         let (encoded, auth_offset) = encode_v3_message(
@@ -735,7 +695,6 @@ mod tests {
 
     #[test]
     fn given_v3_message_with_auth_params_when_decoded_then_offset_points_into_message() {
-        // Verifies: REQ-0000
         // Encode a message with non-empty auth_params, then decode and verify
         // that auth_params_offset from decode also points at the correct bytes.
         let auth_params = vec![0xABu8; 12];
@@ -771,7 +730,6 @@ mod tests {
 
     #[test]
     fn given_v3_message_with_encrypted_scoped_data_when_decoded_then_ciphertext_preserved() {
-        // Verifies: REQ-0000
         let ciphertext = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02];
         let (encoded, _) = encode_v3_message(
             4,
@@ -803,7 +761,6 @@ mod tests {
 
     #[test]
     fn given_v3_authpriv_message_when_encoded_and_decoded_then_offsets_and_params_preserved() {
-        // Verifies: REQ-0000
         // An authPriv message has both non-empty auth_params (HMAC placeholder)
         // and non-empty priv_params (AES salt).
         let auth_params = [0x00u8; 12]; // 12-byte HMAC-SHA-1 placeholder
@@ -857,7 +814,6 @@ mod tests {
 
     #[test]
     fn given_snmpv2c_message_when_decoded_then_error_mentions_version() {
-        // Verifies: REQ-0000
         // Construct a minimal message with version 1 (SNMPv2c wire value).
         // We reuse the discovery wire vector and patch version byte 3 → value 1.
         // In V3_DISCOVERY_WIRE the version INTEGER is bytes [2..5]: 02 01 03.
@@ -881,7 +837,6 @@ mod tests {
 
     #[test]
     fn given_scoped_pdu_bytes_when_decode_scoped_pdu_called_then_fields_extracted() {
-        // Verifies: REQ-0000
         let raw_pdu = [0xA1, 0x00]; // empty GetNextRequest
         let encoded = encode_scoped_pdu(&[0x80, 0x00, 0x02], b"public", &raw_pdu);
 
@@ -896,7 +851,6 @@ mod tests {
 
     #[test]
     fn given_truncated_message_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         let truncated = &V3_DISCOVERY_WIRE[..10];
         let ber_error = decode_v3_envelope(truncated).unwrap_err();
         assert!(
@@ -911,7 +865,6 @@ mod tests {
 
     #[test]
     fn given_wrong_outer_tag_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         // Replace the outer SEQUENCE tag (0x30) with 0x31 (SET).
         let mut wrong_tag = V3_DISCOVERY_WIRE.to_vec();
         wrong_tag[0] = 0x31;
@@ -924,7 +877,6 @@ mod tests {
 
     #[test]
     fn given_truncated_usm_params_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         // Locate the USM SEQUENCE within the wire vector and shorten its length.
         // The USM SEQUENCE starts after: outer tag+len(2) + version(3) +
         //   HeaderData(16) + secParams OCTET STRING tag+len(2) = 23 bytes.
@@ -945,7 +897,6 @@ mod tests {
 
     #[test]
     fn given_negative_engine_boots_and_time_when_encoded_and_decoded_then_values_preserved() {
-        // Verifies: REQ-0000
         // The BER codec must preserve negative values as-is; the dispatch layer
         // is responsible for validating that boots/time are non-negative.
         let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
@@ -1124,7 +1075,6 @@ mod tests {
 
     #[test]
     fn given_msg_flags_with_wrong_length_when_decoded_then_error_mentions_msgflags() {
-        // Verifies: REQ-0000
         // Build a HeaderData with a 2-byte msgFlags (invalid per RFC 3412 §6.6)
         // and embed it in a minimal V3 envelope to exercise the validation path.
         let mut inner = BerWriter::new();
@@ -1171,7 +1121,6 @@ mod tests {
 
     #[test]
     fn given_empty_community_when_v2c_encoded_then_matches_wire_vector() {
-        // Verifies: REQ-0000
         let encoded = encode_v2c_message(b"", &[0xA7, 0x00]);
         assert_eq!(encoded, V2C_EMPTY_COMMUNITY_WIRE);
     }
@@ -1192,7 +1141,6 @@ mod tests {
 
     #[test]
     fn given_public_community_when_v2c_encoded_then_matches_wire_vector() {
-        // Verifies: REQ-0000
         let encoded = encode_v2c_message(b"public", &[0xA7, 0x00]);
         assert_eq!(encoded, V2C_PUBLIC_COMMUNITY_WIRE);
     }
@@ -1224,7 +1172,6 @@ mod tests {
 
     #[test]
     fn given_v2c_message_when_encoded_and_decoded_then_fields_match() {
-        // Verifies: REQ-0000
         let community = b"test-community";
         let raw_pdu = [0xA7, 0x00]; // empty Trap PDU
         let encoded = encode_v2c_message(community, &raw_pdu);
@@ -1240,7 +1187,6 @@ mod tests {
 
     #[test]
     fn given_v2c_message_with_trap_pdu_when_encoded_and_decoded_then_pdu_preserved() {
-        // Verifies: REQ-0000
         use super::super::TAG_TRAP;
         use super::super::pdu::encode_pdu;
 

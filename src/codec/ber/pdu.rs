@@ -12,9 +12,6 @@ use super::{
 // ── Decoded PDU ───────────────────────────────────────────────────────────────
 
 /// Decoded PDU content. `VarBindList` is left as raw bytes for later parsing.
-///
-/// # Requirements
-/// Implements: REQ-0000
 #[derive(Debug)]
 pub(crate) enum DecodedPdu {
     /// Standard PDU (`GetRequest`, `GetNextRequest`, `Response`, `SetRequest`,
@@ -62,9 +59,6 @@ pub(crate) enum DecodedPdu {
 ///   excluding 0xA4 / `SNMPv1` Trap).
 /// - There are trailing bytes after the PDU TLV.
 /// - The `VarBindList` field is absent.
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn decode_pdu(raw_pdu_bytes: &[u8]) -> Result<DecodedPdu, BerError> {
     let mut outer_reader = BerReader::new(raw_pdu_bytes);
     let pdu_tag = outer_reader.peek_tag()?;
@@ -111,7 +105,6 @@ pub(crate) fn decode_pdu(raw_pdu_bytes: &[u8]) -> Result<DecodedPdu, BerError> {
 
 // Validates that the VarBindList is present, captures its raw bytes, and
 // confirms there are no trailing bytes after it inside the PDU envelope.
-// Implements: REQ-0000
 fn read_validated_varbind_list(pdu_reader: &mut BerReader) -> Result<Vec<u8>, BerError> {
     // VarBindList is mandatory per RFC 3416 §3.
     if pdu_reader.is_empty() {
@@ -153,9 +146,6 @@ const VALID_STANDARD_PDU_TAGS: &[u8] = &[
 ///
 /// Returns a [`BerError`] if `tag` is not one of the valid standard PDU tags.
 /// Use [`encode_bulk_pdu`] for `GetBulkRequest` (tag 0xA5).
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn encode_pdu(
     tag: u8,
     request_id: i32,
@@ -183,9 +173,6 @@ pub(crate) fn encode_pdu(
 ///
 /// `raw_varbind_list` is a pre-encoded `VarBindList` SEQUENCE (including the
 /// SEQUENCE TLV wrapper).
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn encode_bulk_pdu(
     request_id: i32,
     non_repeaters: i32,
@@ -234,14 +221,12 @@ mod tests {
 
     #[test]
     fn given_get_request_fields_when_encoded_then_matches_wire_vector() {
-        // Verifies: REQ-0000
         let encoded = encode_pdu(TAG_GET_REQUEST, 42, 0, 0, &[0x30, 0x00]).expect("must encode");
         assert_eq!(encoded, GET_REQUEST_WIRE);
     }
 
     #[test]
     fn given_get_request_wire_when_decoded_then_fields_match() {
-        // Verifies: REQ-0000
         let decoded = decode_pdu(GET_REQUEST_WIRE).expect("must decode");
         match decoded {
             DecodedPdu::Standard {
@@ -274,14 +259,12 @@ mod tests {
 
     #[test]
     fn given_response_fields_when_encoded_then_matches_wire_vector() {
-        // Verifies: REQ-0000
         let encoded = encode_pdu(TAG_RESPONSE, 42, 0, 0, &[0x30, 0x00]).expect("must encode");
         assert_eq!(encoded, RESPONSE_WIRE);
     }
 
     #[test]
     fn given_response_wire_when_decoded_then_tag_is_response() {
-        // Verifies: REQ-0000
         let decoded = decode_pdu(RESPONSE_WIRE).expect("must decode");
         match decoded {
             DecodedPdu::Standard {
@@ -322,14 +305,12 @@ mod tests {
 
     #[test]
     fn given_bulk_fields_when_encoded_then_matches_wire_vector() {
-        // Verifies: REQ-0000
         let encoded = encode_bulk_pdu(7, 1, 10, &[0x30, 0x00]);
         assert_eq!(encoded, GET_BULK_WIRE);
     }
 
     #[test]
     fn given_bulk_wire_when_decoded_then_fields_match() {
-        // Verifies: REQ-0000
         let decoded = decode_pdu(GET_BULK_WIRE).expect("must decode");
         match decoded {
             DecodedPdu::Bulk {
@@ -360,14 +341,12 @@ mod tests {
 
     #[test]
     fn given_trap_fields_when_encoded_then_matches_wire_vector() {
-        // Verifies: REQ-0000
         let encoded = encode_pdu(TAG_TRAP, 1, 0, 0, &[0x30, 0x00]).expect("must encode");
         assert_eq!(encoded, TRAP_WIRE);
     }
 
     #[test]
     fn given_trap_wire_when_decoded_then_tag_is_trap() {
-        // Verifies: REQ-0000
         let decoded = decode_pdu(TRAP_WIRE).expect("must decode");
         match decoded {
             DecodedPdu::Standard {
@@ -408,14 +387,12 @@ mod tests {
 
     #[test]
     fn given_report_fields_when_encoded_then_matches_wire_vector() {
-        // Verifies: REQ-0000
         let encoded = encode_pdu(TAG_REPORT, 99, 0, 0, &[0x30, 0x00]).expect("must encode");
         assert_eq!(encoded, REPORT_WIRE);
     }
 
     #[test]
     fn given_report_wire_when_decoded_then_tag_is_report() {
-        // Verifies: REQ-0000
         let decoded = decode_pdu(REPORT_WIRE).expect("must decode");
         match decoded {
             DecodedPdu::Standard {
@@ -472,7 +449,6 @@ mod tests {
 
     #[test]
     fn given_get_next_with_varbind_when_encoded_then_matches_wire_vector() {
-        // Verifies: REQ-0000
         let encoded =
             encode_pdu(TAG_GET_NEXT_REQUEST, 100, 0, 0, VARBIND_LIST_WIRE).expect("must encode");
         assert_eq!(encoded, GET_NEXT_WITH_VARBIND_WIRE);
@@ -480,7 +456,6 @@ mod tests {
 
     #[test]
     fn given_get_next_with_varbind_wire_when_decoded_then_raw_varbind_list_preserved() {
-        // Verifies: REQ-0000
         let decoded = decode_pdu(GET_NEXT_WITH_VARBIND_WIRE).expect("must decode");
         match decoded {
             DecodedPdu::Standard {
@@ -504,7 +479,6 @@ mod tests {
 
     #[test]
     fn given_unrecognised_pdu_tag_when_decoded_then_error_mentions_unrecognised() {
-        // Verifies: REQ-0000
         // 0xBF is context class constructed with tag number 31 — not a valid SNMP PDU tag.
         // We construct a minimal TLV with 11-byte inner to give read_constructed something valid.
         let raw_bytes = [
@@ -525,7 +499,6 @@ mod tests {
 
     #[test]
     fn given_snmpv1_trap_tag_when_decoded_then_error_mentions_unrecognised() {
-        // Verifies: REQ-0000
         // 0xA4 is the SNMPv1 Trap-PDU tag, excluded from SNMPv2c/v3 processing.
         let raw_bytes = [
             0xA4, 0x0B, // SNMPv1 Trap-PDU tag
@@ -545,7 +518,6 @@ mod tests {
 
     #[test]
     fn given_truncated_pdu_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         // Only 3 bytes — not enough to form a valid PDU TLV.
         let truncated = [0xA0_u8, 0x0B, 0x02];
         let ber_error = decode_pdu(&truncated).unwrap_err();
@@ -563,7 +535,6 @@ mod tests {
 
     #[test]
     fn given_pdu_with_trailing_bytes_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         // A valid GetRequest TLV followed by an extra byte.
         let mut raw_bytes = GET_REQUEST_WIRE.to_vec();
         raw_bytes.push(0x00);
@@ -578,7 +549,6 @@ mod tests {
 
     #[test]
     fn given_pdu_missing_varbind_list_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         // GetRequest with only three INTEGER fields and no VarBindList.
         //   Inner: INTEGER 1, INTEGER 0, INTEGER 0 = 9 bytes
         //   Outer: A0 09 [9 bytes]
@@ -600,7 +570,6 @@ mod tests {
 
     #[test]
     fn given_bulk_tag_when_encode_pdu_called_then_returns_error() {
-        // Verifies: REQ-0000
         // TAG_GET_BULK_REQUEST must be rejected; callers must use encode_bulk_pdu.
         let ber_error = encode_pdu(TAG_GET_BULK_REQUEST, 1, 0, 0, &[0x30, 0x00]).unwrap_err();
         assert!(
@@ -613,7 +582,6 @@ mod tests {
 
     #[test]
     fn given_set_request_when_round_tripped_then_tag_is_set_request() {
-        // Verifies: REQ-0000
         let encoded = encode_pdu(TAG_SET_REQUEST, 55, 0, 0, &[0x30, 0x00]).expect("must encode");
         let decoded = decode_pdu(&encoded).expect("must decode");
         match decoded {
@@ -638,7 +606,6 @@ mod tests {
 
     #[test]
     fn given_inform_request_when_round_tripped_then_tag_is_inform_request() {
-        // Verifies: REQ-0000
         let encoded =
             encode_pdu(TAG_INFORM_REQUEST, 200, 0, 0, &[0x30, 0x00]).expect("must encode");
         let decoded = decode_pdu(&encoded).expect("must decode");
@@ -664,7 +631,6 @@ mod tests {
 
     #[test]
     fn given_bulk_pdu_when_round_tripped_then_all_fields_preserved() {
-        // Verifies: REQ-0000
         let encoded = encode_bulk_pdu(999, 3, 20, VARBIND_LIST_WIRE);
         let decoded = decode_pdu(&encoded).expect("must decode");
         match decoded {
@@ -687,7 +653,6 @@ mod tests {
 
     #[test]
     fn given_pdu_with_trailing_bytes_after_varbindlist_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         // GetRequest-PDU with valid VarBindList followed by a trailing byte
         // still inside the PDU envelope.
         let raw_bytes = [
@@ -707,7 +672,6 @@ mod tests {
 
     #[test]
     fn given_bulk_pdu_with_trailing_bytes_after_varbindlist_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         let raw_bytes = [
             0xA5, 0x0C, // GetBulkRequest-PDU, length 12
             0x02, 0x01, 0x01, // INTEGER 1

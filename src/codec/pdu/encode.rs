@@ -5,7 +5,6 @@ use crate::codec::ber;
 use crate::codec::ber::snmp::MSG_MAX_SIZE_UDP;
 use crate::codec::{Oid, Value};
 
-// Implements: REQ-0000
 fn encode_varbinds(varbinds: &[Varbind]) -> Result<Vec<u8>, EncodeError> {
     let encoded_varbinds: Vec<Vec<u8>> = varbinds
         .iter()

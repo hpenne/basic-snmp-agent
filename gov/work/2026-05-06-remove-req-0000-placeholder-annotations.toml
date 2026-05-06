@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-05-06-003"
 title = "Remove REQ-0000 placeholder annotations"
-status = "active"
+status = "done"
 created = "2026-05-06"
 started = "2026-05-06"
+completed = "2026-05-06"
 
 [content]
 description = """
@@ -14,20 +15,20 @@ What is the goal? What are the acceptance criteria?"""
 
 [[content.acceptance_criteria]]
 text = "All REQ-0000 placeholder annotations removed from src/"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "No functional code changes"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "cargo test passes"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "govctl check passes"
-status = "pending"
+status = "done"
 category = "chore"

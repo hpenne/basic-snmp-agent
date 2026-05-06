@@ -11,9 +11,6 @@
 //! (Counter32, Gauge32, etc.) are stored as [`DecodedVarbindValue::Raw`] at the
 //! structural layer and promoted to typed `Value` variants by
 //! [`decode_varbind_value_to_value`].
-//!
-//! # Implements
-//! Implements: REQ-0000
 
 use super::{
     BerError, BerWriter, TAG_COUNTER32, TAG_COUNTER64, TAG_END_OF_MIB_VIEW, TAG_GAUGE32,
@@ -32,9 +29,6 @@ use crate::codec::pdu::VarbindValue;
 /// SNMP exception tags are decoded into the dedicated variants. All
 /// APPLICATION-tagged types (Counter32, Gauge32, etc.) are stored as
 /// [`Raw`][DecodedVarbindValue::Raw] for interpretation in a higher layer.
-///
-/// # Requirements
-/// Implements: REQ-0000
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DecodedVarbindValue {
     /// `unSpecified NULL` — value placeholder in GetRequest/GetNext/GetBulk.
@@ -62,9 +56,6 @@ pub(crate) enum DecodedVarbindValue {
 // ----- DecodedVarbind --------------------------------------------------------
 
 /// A single decoded `VarBind`: an OID name and its associated value CHOICE.
-///
-/// # Requirements
-/// Implements: REQ-0000
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DecodedVarbind {
     /// The variable name (RFC 3416 §3: `name ObjectName`).
@@ -87,9 +78,6 @@ pub(crate) struct DecodedVarbind {
 /// - Any inner `VarBind` SEQUENCE is structurally invalid.
 /// - Trailing bytes remain after the outer SEQUENCE TLV.
 /// - Trailing bytes remain after the last `VarBind` within the outer SEQUENCE.
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn decode_varbind_list(
     raw_varbind_list_bytes: &[u8],
 ) -> Result<Vec<DecodedVarbind>, BerError> {
@@ -117,8 +105,6 @@ pub(crate) fn decode_varbind_list(
 /// The reader must be positioned at the start of the value TLV. After reading
 /// the value, no bytes must remain in the `VarBind` reader — trailing bytes
 /// indicate a malformed `VarBind` and cause an error.
-///
-/// Implements: REQ-0000
 fn decode_varbind_value(
     varbind_reader: &mut super::BerReader,
 ) -> Result<DecodedVarbindValue, BerError> {
@@ -185,9 +171,6 @@ fn decode_varbind_value(
 ///
 // Returns Result for forward compatibility: Value is #[non_exhaustive], and future
 // variants might have encoding constraints that can fail.
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn decode_varbind_value_to_value(
     decoded: &DecodedVarbindValue,
 ) -> Result<VarbindValue, BerError> {
@@ -267,9 +250,6 @@ pub(crate) fn decode_varbind_value_to_value(
 /// The caller prepares each `VarBind` with [`encode_varbind`] and passes the
 /// resulting slices here. The function concatenates them and wraps the result
 /// in a SEQUENCE TLV (tag 0x30).
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn encode_varbind_list(encoded_varbinds: &[&[u8]]) -> Vec<u8> {
     let mut inner_writer = BerWriter::new();
     for encoded_varbind in encoded_varbinds {
@@ -286,9 +266,6 @@ pub(crate) fn encode_varbind_list(encoded_varbinds: &[&[u8]]) -> Vec<u8> {
 /// The `encoded_value_tlv` must be a complete TLV (tag + length + value bytes)
 /// for the desired value type. Use the `encode_*_value` helpers or
 /// [`encode_exception`] to produce this.
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn encode_varbind(oid: &Oid, encoded_value_tlv: &[u8]) -> Vec<u8> {
     let mut inner_writer = BerWriter::new();
     inner_writer.write_oid(oid);
@@ -306,9 +283,6 @@ pub(crate) fn encode_varbind(oid: &Oid, encoded_value_tlv: &[u8]) -> Vec<u8> {
 ///
 // Returns Result for forward compatibility: Value is #[non_exhaustive], and future
 // variants might have encoding constraints that can fail.
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn encode_varbind_value(value: &VarbindValue) -> Result<Vec<u8>, BerError> {
     match value {
         VarbindValue::Unspecified => Ok(encode_null_value()),
@@ -359,17 +333,11 @@ pub(crate) fn encode_varbind_value(value: &VarbindValue) -> Result<Vec<u8>, BerE
 ///
 /// Used as the value in GetRequest/GetNext/GetBulk `VarBinds` where the value
 /// field is the `unSpecified` CHOICE.
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn encode_null_value() -> Vec<u8> {
     vec![TAG_NULL, 0x00]
 }
 
 /// Encodes a signed INTEGER value TLV.
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn encode_integer_value(value: i32) -> Vec<u8> {
     let mut writer = BerWriter::new();
     writer.write_integer(value);
@@ -377,9 +345,6 @@ pub(crate) fn encode_integer_value(value: i32) -> Vec<u8> {
 }
 
 /// Encodes an OCTET STRING value TLV.
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn encode_octet_string_value(bytes: &[u8]) -> Vec<u8> {
     let mut writer = BerWriter::new();
     writer.write_octet_string(bytes);
@@ -387,9 +352,6 @@ pub(crate) fn encode_octet_string_value(bytes: &[u8]) -> Vec<u8> {
 }
 
 /// Encodes an OBJECT IDENTIFIER value TLV.
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn encode_oid_value(oid: &Oid) -> Vec<u8> {
     let mut writer = BerWriter::new();
     writer.write_oid(oid);
@@ -406,9 +368,6 @@ pub(crate) fn encode_oid_value(oid: &Oid) -> Vec<u8> {
 /// # Errors
 ///
 /// Returns a [`BerError`] when `tag` is not one of the three valid exception tags.
-///
-/// # Requirements
-/// Implements: REQ-0000
 pub(crate) fn encode_exception(tag: u8) -> Result<Vec<u8>, BerError> {
     if tag != TAG_NO_SUCH_OBJECT && tag != TAG_NO_SUCH_INSTANCE && tag != TAG_END_OF_MIB_VIEW {
         return Err(BerError::new(format!(
@@ -575,7 +534,6 @@ mod tests {
 
     #[test]
     fn given_empty_varbind_list_bytes_when_decoded_then_returns_empty_vec() {
-        // Verifies: REQ-0000
         let varbinds =
             decode_varbind_list(EMPTY_VARBIND_LIST).expect("empty VarBindList should decode");
         assert_eq!(varbinds, vec![]);
@@ -585,7 +543,6 @@ mod tests {
 
     #[test]
     fn given_single_varbind_with_null_when_decoded_then_returns_unspecified() {
-        // Verifies: REQ-0000
         let varbinds = decode_varbind_list(VARBIND_LIST_OID1361_NULL)
             .expect("VarBindList with NULL should decode");
         assert_eq!(varbinds.len(), 1);
@@ -598,7 +555,6 @@ mod tests {
 
     #[test]
     fn given_single_varbind_with_integer_42_when_decoded_then_returns_integer_42() {
-        // Verifies: REQ-0000
         let varbinds = decode_varbind_list(VARBIND_LIST_OID1361_INT42)
             .expect("VarBindList with INTEGER should decode");
         assert_eq!(varbinds.len(), 1);
@@ -611,7 +567,6 @@ mod tests {
 
     #[test]
     fn given_single_varbind_with_octet_string_hi_when_decoded_then_returns_hi_bytes() {
-        // Verifies: REQ-0000
         let varbinds = decode_varbind_list(VARBIND_LIST_OID1361_HI)
             .expect("VarBindList with OCTET STRING should decode");
         assert_eq!(varbinds.len(), 1);
@@ -627,7 +582,6 @@ mod tests {
 
     #[test]
     fn given_single_varbind_with_oid_value_when_decoded_then_returns_oid() {
-        // Verifies: REQ-0000
         let varbinds = decode_varbind_list(VARBIND_LIST_OID1361_OID136121)
             .expect("VarBindList with OID value should decode");
         assert_eq!(varbinds.len(), 1);
@@ -644,7 +598,6 @@ mod tests {
 
     #[test]
     fn given_two_varbinds_when_decoded_then_returns_both() {
-        // Verifies: REQ-0000
         let varbinds = decode_varbind_list(VARBIND_LIST_TWO_VARBINDS)
             .expect("VarBindList with two VarBinds should decode");
         assert_eq!(varbinds.len(), 2);
@@ -660,7 +613,6 @@ mod tests {
 
     #[test]
     fn given_varbind_with_no_such_object_when_decoded_then_returns_no_such_object() {
-        // Verifies: REQ-0000
         let varbinds = decode_varbind_list(VARBIND_LIST_NO_SUCH_OBJECT)
             .expect("noSuchObject VarBind should decode");
         assert_eq!(varbinds.len(), 1);
@@ -669,7 +621,6 @@ mod tests {
 
     #[test]
     fn given_varbind_with_no_such_instance_when_decoded_then_returns_no_such_instance() {
-        // Verifies: REQ-0000
         let varbinds = decode_varbind_list(VARBIND_LIST_NO_SUCH_INSTANCE)
             .expect("noSuchInstance VarBind should decode");
         assert_eq!(varbinds.len(), 1);
@@ -678,7 +629,6 @@ mod tests {
 
     #[test]
     fn given_varbind_with_end_of_mib_view_when_decoded_then_returns_end_of_mib_view() {
-        // Verifies: REQ-0000
         let varbinds = decode_varbind_list(VARBIND_LIST_END_OF_MIB_VIEW)
             .expect("endOfMibView VarBind should decode");
         assert_eq!(varbinds.len(), 1);
@@ -689,7 +639,6 @@ mod tests {
 
     #[test]
     fn given_varbind_with_counter32_when_decoded_then_returns_raw_with_tag_and_bytes() {
-        // Verifies: REQ-0000
         let varbinds = decode_varbind_list(VARBIND_LIST_COUNTER32_1000)
             .expect("Counter32 VarBind should decode");
         assert_eq!(varbinds.len(), 1);
@@ -706,7 +655,6 @@ mod tests {
 
     #[test]
     fn given_empty_encoded_varbinds_when_encoded_as_list_then_matches_empty_wire() {
-        // Verifies: REQ-0000
         let encoded = encode_varbind_list(&[]);
         assert_eq!(encoded, EMPTY_VARBIND_LIST);
     }
@@ -715,7 +663,6 @@ mod tests {
 
     #[test]
     fn given_oid_and_null_value_when_encoded_as_varbind_then_matches_wire() {
-        // Verifies: REQ-0000
         let oid: Oid = "1.3.6.1".parse().unwrap();
         let null_tlv = encode_null_value();
         let varbind_bytes = encode_varbind(&oid, &null_tlv);
@@ -727,7 +674,6 @@ mod tests {
 
     #[test]
     fn given_oid_and_integer_value_when_encoded_then_matches_wire() {
-        // Verifies: REQ-0000
         let oid: Oid = "1.3.6.1".parse().unwrap();
         let integer_tlv = encode_integer_value(42);
         let varbind_bytes = encode_varbind(&oid, &integer_tlv);
@@ -739,7 +685,6 @@ mod tests {
 
     #[test]
     fn given_oid_and_octet_string_value_when_encoded_then_matches_wire() {
-        // Verifies: REQ-0000
         let oid: Oid = "1.3.6.1".parse().unwrap();
         let octet_string_tlv = encode_octet_string_value(b"Hi");
         let varbind_bytes = encode_varbind(&oid, &octet_string_tlv);
@@ -751,7 +696,6 @@ mod tests {
 
     #[test]
     fn given_oid_name_and_oid_value_when_encoded_then_matches_wire() {
-        // Verifies: REQ-0000
         let name_oid: Oid = "1.3.6.1".parse().unwrap();
         let value_oid: Oid = "1.3.6.1.2.1".parse().unwrap();
         let oid_tlv = encode_oid_value(&value_oid);
@@ -764,7 +708,6 @@ mod tests {
 
     #[test]
     fn given_no_such_object_exception_when_encoded_then_matches_wire() {
-        // Verifies: REQ-0000
         let oid: Oid = "1.3.6.1".parse().unwrap();
         let exception_tlv = encode_exception(TAG_NO_SUCH_OBJECT).expect("must encode");
         let varbind_bytes = encode_varbind(&oid, &exception_tlv);
@@ -774,7 +717,6 @@ mod tests {
 
     #[test]
     fn given_no_such_instance_exception_when_encoded_then_matches_wire() {
-        // Verifies: REQ-0000
         let oid: Oid = "1.3.6.1".parse().unwrap();
         let exception_tlv = encode_exception(TAG_NO_SUCH_INSTANCE).expect("must encode");
         let varbind_bytes = encode_varbind(&oid, &exception_tlv);
@@ -784,7 +726,6 @@ mod tests {
 
     #[test]
     fn given_end_of_mib_view_exception_when_encoded_then_matches_wire() {
-        // Verifies: REQ-0000
         let oid: Oid = "1.3.6.1".parse().unwrap();
         let exception_tlv = encode_exception(TAG_END_OF_MIB_VIEW).expect("must encode");
         let varbind_bytes = encode_varbind(&oid, &exception_tlv);
@@ -796,7 +737,6 @@ mod tests {
 
     #[test]
     fn given_invalid_exception_tag_when_encoded_then_returns_error() {
-        // Verifies: REQ-0000
         let ber_error = encode_exception(0x05).unwrap_err();
         assert!(
             ber_error.to_string().contains("invalid exception tag"),
@@ -808,7 +748,6 @@ mod tests {
 
     #[test]
     fn given_varbind_with_null_when_round_tripped_then_recovers_identical_varbind() {
-        // Verifies: REQ-0000
         let oid: Oid = "1.3.6.1".parse().unwrap();
         let null_tlv = encode_null_value();
         let varbind_bytes = encode_varbind(&oid, &null_tlv);
@@ -822,7 +761,6 @@ mod tests {
 
     #[test]
     fn given_varbind_with_integer_when_round_tripped_then_recovers_identical_varbind() {
-        // Verifies: REQ-0000
         let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
         let integer_tlv = encode_integer_value(-42);
         let varbind_bytes = encode_varbind(&oid, &integer_tlv);
@@ -836,7 +774,6 @@ mod tests {
 
     #[test]
     fn given_varbind_with_octet_string_when_round_tripped_then_recovers_identical_varbind() {
-        // Verifies: REQ-0000
         let oid: Oid = "1.3.6.1".parse().unwrap();
         let octet_string_tlv = encode_octet_string_value(b"hello world");
         let varbind_bytes = encode_varbind(&oid, &octet_string_tlv);
@@ -853,7 +790,6 @@ mod tests {
 
     #[test]
     fn given_varbind_with_oid_value_when_round_tripped_then_recovers_identical_varbind() {
-        // Verifies: REQ-0000
         let name_oid: Oid = "1.3.6.1".parse().unwrap();
         let value_oid: Oid = "1.3.6.1.2.1".parse().unwrap();
         let oid_tlv = encode_oid_value(&value_oid);
@@ -871,7 +807,6 @@ mod tests {
 
     #[test]
     fn given_varbind_with_no_such_object_when_round_tripped_then_recovers_exception() {
-        // Verifies: REQ-0000
         let oid: Oid = "1.3.6.1".parse().unwrap();
         let exception_tlv = encode_exception(TAG_NO_SUCH_OBJECT).expect("must encode");
         let varbind_bytes = encode_varbind(&oid, &exception_tlv);
@@ -885,7 +820,6 @@ mod tests {
 
     #[test]
     fn given_varbind_with_raw_counter32_when_round_tripped_then_recovers_raw_tag_and_bytes() {
-        // Verifies: REQ-0000
         // Counter32 (APPLICATION tag 0x41) with value 1000 = 0x03E8
         let oid: Oid = "1.3.6.1".parse().unwrap();
         // Manually construct a Counter32 TLV: tag 0x41, length 2, value 0x03 0xE8
@@ -907,7 +841,6 @@ mod tests {
 
     #[test]
     fn given_multiple_varbinds_when_round_tripped_then_recovers_all() {
-        // Verifies: REQ-0000
         let oid1: Oid = "1.3.6.1".parse().unwrap();
         let oid2: Oid = "1.3.6.1.2.1".parse().unwrap();
         let vb1 = encode_varbind(&oid1, &encode_null_value());
@@ -926,7 +859,6 @@ mod tests {
 
     #[test]
     fn given_truncated_varbind_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         // VarBindList SEQUENCE containing a truncated VarBind (declares length 7
         // but only 4 bytes of content follow).
         // 30 06  — VarBindList SEQUENCE, length 6
@@ -944,7 +876,6 @@ mod tests {
 
     #[test]
     fn given_non_sequence_outer_tag_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         // Tag 0x31 is SET, not SEQUENCE.
         const NOT_A_SEQUENCE: &[u8] = &[0x31, 0x00];
         let ber_error = decode_varbind_list(NOT_A_SEQUENCE).unwrap_err();
@@ -958,7 +889,6 @@ mod tests {
 
     #[test]
     fn given_trailing_bytes_in_varbind_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         // VarBind SEQUENCE contains OID + NULL + extra junk byte 0xFF.
         // VarBind inner: OID(5) + NULL(2) + junk(1) = 8 → 30 08 06 03 2B 06 01 05 00 FF
         // VarBindList: 10 bytes → 30 0A 30 08 06 03 2B 06 01 05 00 FF
@@ -977,7 +907,6 @@ mod tests {
 
     #[test]
     fn given_trailing_bytes_after_varbindlist_sequence_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         // VARBIND_LIST_OID1361_NULL with an extra 0xFF byte appended after the outer SEQUENCE.
         let mut with_trailing = VARBIND_LIST_OID1361_NULL.to_vec();
         with_trailing.push(0xFF);
@@ -992,7 +921,6 @@ mod tests {
 
     #[test]
     fn given_exception_with_non_zero_length_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         // noSuchObject (0x80) with length 1 instead of 0: the decoder must reject it.
         // VarBind inner: OID 1.3.6.1 (5 bytes) + 0x80 0x01 0xFF (3 bytes) = 8 bytes
         // VarBindList: 30 0A 30 08 06 03 2B 06 01 80 01 FF
@@ -1013,7 +941,6 @@ mod tests {
 
     #[test]
     fn given_ip_address_value_when_encoded_then_matches_wire() {
-        // Verifies: REQ-0000
         let varbind_value = VarbindValue::Value(Value::IpAddress([10, 0, 0, 1]));
         let encoded_tlv = encode_varbind_value(&varbind_value).expect("must encode");
         assert_eq!(encoded_tlv, IP_ADDRESS_TLV);
@@ -1021,7 +948,6 @@ mod tests {
 
     #[test]
     fn given_raw_ip_address_when_decoded_to_value_then_returns_ip_address() {
-        // Verifies: REQ-0000
         let raw = DecodedVarbindValue::Raw {
             tag: TAG_IP_ADDRESS,
             value_bytes: vec![10, 0, 0, 1],
@@ -1035,7 +961,6 @@ mod tests {
 
     #[test]
     fn given_raw_ip_address_with_wrong_length_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         let raw_three_bytes = DecodedVarbindValue::Raw {
             tag: TAG_IP_ADDRESS,
             value_bytes: vec![10, 0, 0],
@@ -1059,7 +984,6 @@ mod tests {
 
     #[test]
     fn given_raw_ip_address_with_zero_length_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
         let raw_empty = DecodedVarbindValue::Raw {
             tag: TAG_IP_ADDRESS,
             value_bytes: vec![],
@@ -1075,7 +999,6 @@ mod tests {
 
     #[test]
     fn given_counter32_1000_when_encoded_then_matches_wire() {
-        // Verifies: REQ-0000
         let varbind_value = VarbindValue::Value(Value::Counter32(1000));
         let encoded_tlv = encode_varbind_value(&varbind_value).expect("must encode");
         assert_eq!(encoded_tlv, COUNTER32_1000_TLV);
@@ -1083,7 +1006,6 @@ mod tests {
 
     #[test]
     fn given_counter32_max_when_encoded_then_matches_wire() {
-        // Verifies: REQ-0000
         let varbind_value = VarbindValue::Value(Value::Counter32(u32::MAX));
         let encoded_tlv = encode_varbind_value(&varbind_value).expect("must encode");
         assert_eq!(encoded_tlv, COUNTER32_MAX_TLV);
@@ -1091,7 +1013,6 @@ mod tests {
 
     #[test]
     fn given_raw_counter32_1000_when_decoded_to_value_then_returns_counter32_1000() {
-        // Verifies: REQ-0000
         let raw = DecodedVarbindValue::Raw {
             tag: TAG_COUNTER32,
             value_bytes: vec![0x03, 0xE8],
@@ -1102,7 +1023,6 @@ mod tests {
 
     #[test]
     fn given_raw_counter32_max_when_decoded_to_value_then_returns_counter32_max() {
-        // Verifies: REQ-0000
         // u32::MAX = 0xFFFFFFFF, encoded with leading sign byte: 00 FF FF FF FF
         let raw = DecodedVarbindValue::Raw {
             tag: TAG_COUNTER32,
@@ -1119,7 +1039,6 @@ mod tests {
 
     #[test]
     fn given_gauge32_500_when_encoded_then_matches_wire() {
-        // Verifies: REQ-0000
         let varbind_value = VarbindValue::Value(Value::Gauge32(500));
         let encoded_tlv = encode_varbind_value(&varbind_value).expect("must encode");
         assert_eq!(encoded_tlv, GAUGE32_500_TLV);
@@ -1127,7 +1046,6 @@ mod tests {
 
     #[test]
     fn given_raw_gauge32_500_when_decoded_to_value_then_returns_gauge32_500() {
-        // Verifies: REQ-0000
         let raw = DecodedVarbindValue::Raw {
             tag: TAG_GAUGE32,
             value_bytes: vec![0x01, 0xF4],
@@ -1140,7 +1058,6 @@ mod tests {
 
     #[test]
     fn given_timeticks_360000_when_encoded_then_matches_wire() {
-        // Verifies: REQ-0000
         let varbind_value = VarbindValue::Value(Value::TimeTicks(360_000));
         let encoded_tlv = encode_varbind_value(&varbind_value).expect("must encode");
         assert_eq!(encoded_tlv, TIMETICKS_360000_TLV);
@@ -1148,7 +1065,6 @@ mod tests {
 
     #[test]
     fn given_raw_timeticks_360000_when_decoded_to_value_then_returns_timeticks_360000() {
-        // Verifies: REQ-0000
         let raw = DecodedVarbindValue::Raw {
             tag: TAG_TIMETICKS,
             value_bytes: vec![0x05, 0x7E, 0x40],
@@ -1164,7 +1080,6 @@ mod tests {
 
     #[test]
     fn given_opaque_dead_when_encoded_then_matches_wire() {
-        // Verifies: REQ-0000
         let varbind_value = VarbindValue::Value(Value::Opaque(vec![0xDE, 0xAD]));
         let encoded_tlv = encode_varbind_value(&varbind_value).expect("must encode");
         assert_eq!(encoded_tlv, OPAQUE_DEAD_TLV);
@@ -1172,7 +1087,6 @@ mod tests {
 
     #[test]
     fn given_raw_opaque_dead_when_decoded_to_value_then_returns_opaque_dead() {
-        // Verifies: REQ-0000
         let raw = DecodedVarbindValue::Raw {
             tag: TAG_OPAQUE,
             value_bytes: vec![0xDE, 0xAD],
@@ -1188,7 +1102,6 @@ mod tests {
 
     #[test]
     fn given_counter64_1000_when_encoded_then_matches_wire() {
-        // Verifies: REQ-0000
         let varbind_value = VarbindValue::Value(Value::Counter64(1000));
         let encoded_tlv = encode_varbind_value(&varbind_value).expect("must encode");
         assert_eq!(encoded_tlv, COUNTER64_1000_TLV);
@@ -1196,7 +1109,6 @@ mod tests {
 
     #[test]
     fn given_counter64_max_when_encoded_then_matches_wire() {
-        // Verifies: REQ-0000
         let varbind_value = VarbindValue::Value(Value::Counter64(u64::MAX));
         let encoded_tlv = encode_varbind_value(&varbind_value).expect("must encode");
         assert_eq!(encoded_tlv, COUNTER64_MAX_TLV);
@@ -1204,7 +1116,6 @@ mod tests {
 
     #[test]
     fn given_raw_counter64_1000_when_decoded_to_value_then_returns_counter64_1000() {
-        // Verifies: REQ-0000
         let raw = DecodedVarbindValue::Raw {
             tag: TAG_COUNTER64,
             value_bytes: vec![0x03, 0xE8],
@@ -1217,7 +1128,6 @@ mod tests {
 
     #[test]
     fn given_raw_with_unknown_tag_when_decoded_to_value_then_returns_error() {
-        // Verifies: REQ-0000
         // Tag 0x45 (APPLICATION 5) is not a defined SMIv2 type.
         let raw = DecodedVarbindValue::Raw {
             tag: 0x45,
@@ -1240,7 +1150,6 @@ mod tests {
 
     #[test]
     fn given_unspecified_when_decoded_to_value_then_returns_unspecified() {
-        // Verifies: REQ-0000
         let decoded = DecodedVarbindValue::Unspecified;
         let varbind_value = decode_varbind_value_to_value(&decoded).expect("must decode");
         assert_eq!(varbind_value, VarbindValue::Unspecified);
@@ -1248,7 +1157,6 @@ mod tests {
 
     #[test]
     fn given_no_such_object_when_decoded_to_value_then_returns_no_such_object() {
-        // Verifies: REQ-0000
         let decoded = DecodedVarbindValue::NoSuchObject;
         let varbind_value = decode_varbind_value_to_value(&decoded).expect("must decode");
         assert_eq!(varbind_value, VarbindValue::NoSuchObject);
@@ -1256,7 +1164,6 @@ mod tests {
 
     #[test]
     fn given_no_such_instance_when_decoded_to_value_then_returns_no_such_instance() {
-        // Verifies: REQ-0000
         let decoded = DecodedVarbindValue::NoSuchInstance;
         let varbind_value = decode_varbind_value_to_value(&decoded).expect("must decode");
         assert_eq!(varbind_value, VarbindValue::NoSuchInstance);
@@ -1264,7 +1171,6 @@ mod tests {
 
     #[test]
     fn given_end_of_mib_view_when_decoded_to_value_then_returns_end_of_mib_view() {
-        // Verifies: REQ-0000
         let decoded = DecodedVarbindValue::EndOfMibView;
         let varbind_value = decode_varbind_value_to_value(&decoded).expect("must decode");
         assert_eq!(varbind_value, VarbindValue::EndOfMibView);
@@ -1272,7 +1178,6 @@ mod tests {
 
     #[test]
     fn given_integer_42_when_decoded_to_value_then_returns_integer32_42() {
-        // Verifies: REQ-0000
         let decoded = DecodedVarbindValue::Integer(42);
         let varbind_value = decode_varbind_value_to_value(&decoded).expect("must decode");
         assert_eq!(varbind_value, VarbindValue::Value(Value::Integer32(42)));
@@ -1280,7 +1185,6 @@ mod tests {
 
     #[test]
     fn given_octet_string_when_decoded_to_value_then_returns_octet_string() {
-        // Verifies: REQ-0000
         let decoded = DecodedVarbindValue::OctetString(b"hello".to_vec());
         let varbind_value = decode_varbind_value_to_value(&decoded).expect("must decode");
         assert_eq!(
@@ -1291,7 +1195,6 @@ mod tests {
 
     #[test]
     fn given_object_identifier_when_decoded_to_value_then_returns_object_identifier() {
-        // Verifies: REQ-0000
         let oid: Oid = "1.3.6.1.2.1".parse().unwrap();
         let decoded = DecodedVarbindValue::ObjectIdentifier(oid.clone());
         let varbind_value = decode_varbind_value_to_value(&decoded).expect("must decode");
@@ -1305,7 +1208,6 @@ mod tests {
 
     #[test]
     fn given_passthrough_variants_when_encoded_then_produce_expected_tlvs() {
-        // Verifies: REQ-0000
         // Unspecified → NULL TLV
         assert_eq!(
             encode_varbind_value(&VarbindValue::Unspecified).expect("unspecified"),
@@ -1362,7 +1264,6 @@ mod tests {
 
     #[test]
     fn given_application_tagged_values_when_full_pipeline_round_tripped_then_recover_all() {
-        // Verifies: REQ-0000
         assert_full_pipeline_round_trip(&VarbindValue::Value(Value::IpAddress([192, 168, 1, 1])));
         assert_full_pipeline_round_trip(&VarbindValue::Value(Value::Counter32(1000)));
         assert_full_pipeline_round_trip(&VarbindValue::Value(Value::Counter32(u32::MAX)));
