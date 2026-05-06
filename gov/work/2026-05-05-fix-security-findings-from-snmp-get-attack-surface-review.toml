@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-05-05-002"
 title = "Fix security findings from SNMP GET attack surface review"
-status = "active"
+status = "done"
 created = "2026-05-05"
 started = "2026-05-05"
+completed = "2026-05-06"
 
 [content]
 description = """
@@ -119,12 +120,12 @@ category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "All fixes have corresponding unit tests"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "govctl check passes"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
