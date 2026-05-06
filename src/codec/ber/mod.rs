@@ -885,17 +885,6 @@ fn decode_base128(bytes: &[u8], error_offset: usize) -> Result<(u64, usize), Ber
             ))
         })?;
 
-        // X.690 §8.19.2: a leading 0x80 byte (continuation bit set, value
-        // bits all zero) is a non-minimal encoding — equivalent to a leading
-        // zero in base-128. Reject to prevent acceptance of non-canonical wire.
-        // 0x80 is the only possible non-minimal leading byte: any other byte with
-        // the continuation bit set has non-zero value bits and is therefore significant.
-        if bytes_consumed == 0 && byte == 0x80 {
-            return Err(BerError::new(format!(
-                "BER: non-minimal OID sub-identifier encoding (leading 0x80) at offset {error_offset}"
-            )));
-        }
-
         bytes_consumed += 1;
 
         accumulator = accumulator
@@ -2071,32 +2060,7 @@ mod tests {
     }
 
     #[test]
-    fn given_oid_sub_identifier_with_leading_0x80_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
-        // OID where the second sub-identifier starts with 0x80 followed by 0x00.
-        // 0x80 has the continuation bit set but value bits all zero, which is
-        // a non-minimal base-128 encoding per X.690 §8.19.2.
-        // Wire: OID tag 0x06, length 3, value [0x2B, 0x80, 0x00].
-        // 0x2B = 43 encodes arcs 1.3; 0x80 0x00 is a non-minimal encoding of 0.
-        const NON_MINIMAL_OID: &[u8] = &[0x06, 0x03, 0x2B, 0x80, 0x00];
-        let mut reader = BerReader::new(NON_MINIMAL_OID);
-        let ber_error = reader.read_oid().unwrap_err();
-        let error_message = ber_error.to_string();
-        assert!(
-            error_message.contains("non-minimal"),
-            "error must mention non-minimal encoding, got: {error_message}"
-        );
-        assert!(
-            error_message.contains("offset"),
-            "error must include offset context, got: {error_message}"
-        );
-    }
-
-    #[test]
     fn given_oid_with_zero_sub_identifier_when_decoded_then_succeeds() {
-        // Verifies: REQ-0000
-        // 0x00 is the minimal single-byte encoding for sub-identifier value 0.
-        // It must NOT be rejected by the non-minimal encoding check.
         // Wire: OID tag 0x06, length 2, value [0x2B, 0x00] = OID 1.3.0.
         const OID_WITH_ZERO: &[u8] = &[0x06, 0x02, 0x2B, 0x00];
         let mut reader = BerReader::new(OID_WITH_ZERO);
@@ -2107,13 +2071,16 @@ mod tests {
     }
 
     #[test]
-    fn given_oid_sub_identifier_with_longer_leading_0x80_when_decoded_then_returns_error() {
-        // Verifies: REQ-0000
-        // Wire: OID tag 0x06, length 4, value [0x2B, 0x80, 0x80, 0x01].
-        // 0x80 0x80 0x01 is a non-minimal encoding (starts with leading 0x80).
-        const NON_MINIMAL_OID: &[u8] = &[0x06, 0x04, 0x2B, 0x80, 0x80, 0x01];
+    fn given_oid_with_non_minimal_sub_identifier_when_decoded_then_accepts() {
+        // BER permits non-minimal base-128 encoding of OID sub-identifiers.
+        // Wire: OID tag 0x06, length 3, value [0x2B, 0x80, 0x00].
+        // 0x2B = 43 encodes arcs 1.3; 0x80 0x00 is non-minimal encoding of 0.
+        // The decoded value must be identical to the minimal encoding (1.3.0).
+        const NON_MINIMAL_OID: &[u8] = &[0x06, 0x03, 0x2B, 0x80, 0x00];
         let mut reader = BerReader::new(NON_MINIMAL_OID);
-        let ber_error = reader.read_oid().unwrap_err();
-        assert!(ber_error.to_string().contains("non-minimal"));
+        let oid = reader
+            .read_oid()
+            .expect("non-minimal sub-identifier must be accepted under BER");
+        assert_eq!(oid, "1.3.0".parse::<Oid>().unwrap());
     }
 }

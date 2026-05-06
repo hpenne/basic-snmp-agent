@@ -94,7 +94,7 @@ status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
-text = "F-17 — Reject non-minimal OID sub-identifier encoding in decode_base128: error if first byte is 0x80 (leading zero in base-128) per X.690 §8.19.2"
+text = "F-17 — REVERTED (WI-2026-05-06-001): non-minimal base-128 OID encoding is valid under BER; SNMP uses BER not DER, and the decoded value is identical regardless of encoding"
 status = "done"
 category = "fixed"
 
