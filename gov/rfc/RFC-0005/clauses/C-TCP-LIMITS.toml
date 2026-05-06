@@ -1,0 +1,27 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-TCP-LIMITS"
+title = "TCP Connection Limits"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+[REQ-0120] The agent MUST enforce a configurable maximum number of concurrent TCP connections. The default MUST be 64.
+
+[REQ-0121] When the connection limit is reached, the agent MUST reject new incoming connections and SHOULD log a warning.
+
+[REQ-0122] The agent MUST enforce an idle timeout on TCP connections. A connection that has received no complete SNMP message within the timeout period MUST be closed.
+
+[REQ-0123] The default idle timeout MUST be 300 seconds (5 minutes).
+
+[REQ-0124] When the number of open connections reaches a configurable pressure threshold below the maximum, the agent MUST reduce the idle timeout to a shorter configurable value to reclaim resources faster. The default pressure threshold MUST be 5 connections below the maximum, and the default reduced timeout MUST be 30 seconds.
+
+**Rationale:**
+
+An unbounded TCP listener is trivially exhausted by opening connections and holding them idle. The connection limit (REQ-0120, REQ-0121) caps resource consumption at a predictable level.
+
+The idle timeout (REQ-0122, REQ-0123) reclaims connections from peers that have gone silent — whether due to network failure, client crash, or deliberate slowloris-style resource exhaustion. The pressure-sensitive shorter timeout (REQ-0124) is a progressive defence: under normal load the generous timeout avoids disrupting legitimate slow clients, but as the connection table fills up, the agent becomes more aggressive about reclaiming idle slots before reaching the hard limit.
+
+All limits and timeouts are configurable so that embedders can tune them for their deployment environment."""

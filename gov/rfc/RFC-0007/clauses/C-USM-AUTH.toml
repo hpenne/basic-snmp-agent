@@ -15,8 +15,20 @@ text = """
 
 Where this RFC refers to "HMAC-SHA-256" in other clauses, it means usmHMAC192SHA256AuthProtocol; where it refers to "HMAC-SHA-512", it means usmHMAC384SHA512AuthProtocol.
 
+[REQ-0111] When computing or verifying an HMAC over an SNMPv3 message, the agent MUST replace the `msgAuthenticationParameters` field in the serialised message with zeros of the protocol-specified length before computing the digest, as specified in RFC 3414 §6.3.1 step 5 and §6.3.2 step 6.
+
+[REQ-0112] The agent MUST truncate the computed HMAC to 24 bytes for HMAC-SHA-256 (RFC 7860 §4.2.2) and 48 bytes for HMAC-SHA-512 (RFC 7860 §4.4.2). The agent MUST reject any inbound authenticated message whose `msgAuthenticationParameters` field is not exactly the expected truncation length for the configured authentication protocol.
+
+[REQ-0113] MAC verification MUST use a constant-time comparison that does not reveal information about the position of the first differing byte through timing variation.
+
 **Rationale:**
 
 HMAC-MD5 and HMAC-SHA-1 are cryptographically weakened and their use in new deployments is discouraged by the IETF and NIST. SHA-224 and SHA-384 offer no meaningful security advantage over SHA-256 and SHA-512 for this use case and would double the number of protocol code paths to implement and test. Two protocols — one mandatory, one optional — keep the implementation surface small while offering a choice between performance (SHA-256) and a higher security margin (SHA-512) for deployments that require it.
 
-The set of supported protocols is constrained at the type level by the configuration API (see C-USM-USERS) rather than by runtime validation, so no explicit rejection requirement is needed in this clause."""
+The set of supported protocols is constrained at the type level by the configuration API (see C-USM-USERS) rather than by runtime validation, so no explicit rejection requirement is needed in this clause.
+
+Zeroing the `msgAuthenticationParameters` field before HMAC computation (REQ-0111) is the standard sign-then-MAC-in-place construction specified by RFC 3414: the sender sets the field to zeros, computes the MAC over the whole serialised message, then writes the MAC into the field. The receiver reverses the process. Without this step the MAC input differs between sender and receiver and every authenticated message is rejected.
+
+Truncation lengths (REQ-0112) are protocol-defined constants from RFC 7860. Accepting a wrong-length `msgAuthenticationParameters` field is either a bug in the peer or an attempt to bypass authentication; rejecting it early avoids feeding unexpected input into the HMAC comparison.
+
+Constant-time comparison (REQ-0113) is a standard cryptographic hygiene requirement. A variable-time byte comparison leaks information about how many leading bytes of the MAC matched, which in principle allows an online forgery attack by iterating one byte at a time. Although SNMP operates over a network where timing noise raises the bar, the cost of a constant-time comparison is negligible and the protection is unconditional."""

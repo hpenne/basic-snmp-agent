@@ -15,10 +15,18 @@ text = """
 
 Where this RFC refers to "AES-128-CFB" in other clauses, it means usmAesCfb128Protocol; "AES-256-CFB" means the 256-bit variant described in REQ-0089.
 
+[REQ-0109] The AES-CFB initialisation vector MUST be the 16-byte concatenation `snmpEngineBoots (4 bytes, big-endian) || snmpEngineTime (4 bytes, big-endian) || salt (8 bytes)`, as specified in RFC 3826 §3.1.2. This construction applies to both encryption of outbound scoped PDUs and decryption of inbound scoped PDUs.
+
+[REQ-0110] The privacy salt MUST be unique for every encrypted message sent by the same SNMP engine, as specified in RFC 3826 §3.1.2. Reuse of a salt value under the same privacy key constitutes an IV collision and breaks CFB-mode confidentiality.
+
 **Rationale:**
 
 DES-CBC (RFC 3414) is broken and its use in new deployments is prohibited by NIST. AES-192-CFB adds no meaningful security benefit over AES-256 and would widen the implementation surface for no gain. Two protocols — one mandatory, one optional — mirror the auth-protocol approach and offer a choice between broad interop (AES-128, universally supported) and a higher security margin (AES-256) for deployments that require it.
 
 AES-256-CFB lacks a standards-track RFC but is widely implemented (net-snmp, pysnmp) using the same CFB construction as RFC 3826 with a longer key. Specifying it in terms of that construction rather than an OID avoids depending on a non-existent standard while remaining interoperable with every major implementation.
 
-The set of supported protocols is constrained at the type level by the configuration API (see C-USM-USERS) rather than by runtime validation."""
+The set of supported protocols is constrained at the type level by the configuration API (see C-USM-USERS) rather than by runtime validation.
+
+The IV construction (REQ-0109) is stated normatively because it is the single point where boots, time, and salt are combined into the cryptographic input that AES-CFB consumes. Getting any byte wrong — endianness, field order, field width — silently produces ciphertext that no conforming peer can decrypt, with no error signal until the receiver reports a decryption failure. The explicit specification eliminates ambiguity and enables byte-level test vectors.
+
+Salt uniqueness (REQ-0110) is the fundamental security invariant of CFB mode under a fixed key: if two messages share the same IV (and therefore the same keystream), XORing the two ciphertexts reveals the XOR of the two plaintexts, destroying confidentiality. The boots and time components of the IV change slowly (time advances once per second; boots once per restart), so the salt is the only field that distinguishes messages sent within the same second, making its uniqueness load-bearing."""

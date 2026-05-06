@@ -25,6 +25,10 @@ text = """
 - The localised authentication key length MUST be determined by the authentication protocol variant, not by a runtime parameter.
 It MUST be impossible to construct a user entry that pairs `noAuthNoPriv` with key material, or `authNoPriv` with a privacy protocol, or an authentication key of the wrong length for its protocol.
 
+[REQ-0116] The agent MUST reject at construction time any user entry whose user name is empty (zero-length).
+
 **Rationale:**
 
-Encoding security-level and key-length constraints into the type system means misconfiguration (e.g., claiming authPriv without providing a privacy protocol, attaching key material to a noAuthNoPriv user, or supplying a 32-byte key for HMAC-SHA-512) is caught at compile time rather than surfacing as a runtime panic or silent misbehaviour. This follows Rust's "make illegal states unrepresentable" idiom and eliminates an entire class of configuration-validation code paths and their associated tests."""
+Encoding security-level and key-length constraints into the type system means misconfiguration (e.g., claiming authPriv without providing a privacy protocol, attaching key material to a noAuthNoPriv user, or supplying a 32-byte key for HMAC-SHA-512) is caught at compile time rather than surfacing as a runtime panic or silent misbehaviour. This follows Rust's "make illegal states unrepresentable" idiom and eliminates an entire class of configuration-validation code paths and their associated tests.
+
+Rejecting empty user names at construction (REQ-0116) makes the "non-empty" constraint in REQ-0091 a hard error rather than a documentation-only statement. An empty user name is never valid in USM: RFC 3414 §2.1 defines the user name as the identity under which authentication credentials are selected, and an empty identity would match no legitimate user entry in any conforming manager. Catching this at the configuration boundary prevents the agent from entering a state where the user-name matching logic in REQ-0078 behaves in undefined or surprising ways."""

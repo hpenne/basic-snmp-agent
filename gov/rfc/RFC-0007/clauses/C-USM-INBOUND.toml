@@ -21,10 +21,14 @@ text = """
 
 [REQ-0107] The agent MUST send Response PDUs at the same security level as the corresponding request, using the configured user's credentials per RFC 3414 §3.1 step 4b. Specifically: `noAuthNoPriv` requests receive unsigned, unencrypted responses; `authNoPriv` requests receive HMAC-authenticated responses; `authPriv` requests receive HMAC-authenticated and AES-encrypted responses.
 
+[REQ-0115] The agent MUST reject any inbound SNMPv3 message whose `msgSecurityModel` field is not 3 (USM). The agent MUST increment the `snmpUnknownSecurityModels` counter and, if the reportable flag is set in `msgFlags`, MUST respond with a Report PDU carrying the `snmpUnknownSecurityModels` counter value.
+
 **Rationale:**
 
 The processing order in REQ-0102 mirrors RFC 3414 §3.2 and is security-critical: checking the user name and security level before attempting cryptographic operations avoids wasting CPU on messages that will be rejected, and ensures that Report PDUs for user-name or level mismatches are sent without requiring valid keys.
 
 REQ-0104 replaces RFC-0005 REQ-0057's silent-discard behaviour with the RFC 3412-compliant Report PDU response. Silent discard is simpler but leaves the manager unable to distinguish a `contextEngineID` mismatch from packet loss, making misconfiguration harder to diagnose.
 
-REQ-0107 is stated explicitly because the response security level is not implied by any other requirement. REQ-0079 enforces that inbound requests match the user's level, and the dispatch code uses the user's credentials for response encoding, so correct behaviour follows — but the absence of an explicit requirement previously allowed an implementation that sent cleartext responses to authenticated requests to pass all checks."""
+REQ-0107 is stated explicitly because the response security level is not implied by any other requirement. REQ-0079 enforces that inbound requests match the user's level, and the dispatch code uses the user's credentials for response encoding, so correct behaviour follows — but the absence of an explicit requirement previously allowed an implementation that sent cleartext responses to authenticated requests to pass all checks.
+
+Security-model validation (REQ-0115) is the outermost dispatch gate: RFC 3412 §7.2 step 4 requires the message processor to verify that the security model indicated in the message is one that the engine supports before invoking any security-model-specific processing. An agent that implements only USM must reject any other value. Without this check, a crafted message with an unsupported `msgSecurityModel` could bypass USM processing entirely, reaching the PDU handler unauthenticated."""

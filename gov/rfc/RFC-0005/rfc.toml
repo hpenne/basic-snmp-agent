@@ -20,6 +20,7 @@ clauses = [
     "clauses/C-INBOUND.toml",
     "clauses/C-ENGINE.toml",
     "clauses/C-PLAINTCP.toml",
+    "clauses/C-TCP-LIMITS.toml",
 ]
 
 [[changelog]]

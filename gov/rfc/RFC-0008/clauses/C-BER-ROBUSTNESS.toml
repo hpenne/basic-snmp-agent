@@ -1,0 +1,27 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-BER-ROBUSTNESS"
+title = "BER Codec Robustness"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+[REQ-0125] The agent MUST reject any OID that contains more than 128 sub-identifiers, as specified in RFC 2578 §3.5.
+
+[REQ-0126] The agent MUST reject any BER length field whose initial byte is 0xFF, as this value is reserved and not a valid length encoding per X.690 §8.1.3.5.
+
+[REQ-0127] The agent MUST reject any BER length field whose length-of-length byte count exceeds the size of the platform's pointer type. This prevents integer overflow when computing buffer offsets.
+
+[REQ-0128] The agent MUST parse the VarBindList structurally as a BER SEQUENCE OF VarBind entries. The agent MUST reject any message that contains trailing bytes after the VarBindList SEQUENCE.
+
+**Rationale:**
+
+The OID sub-identifier limit (REQ-0125) is a normative constraint from SMIv2 (RFC 2578 §3.5). Without enforcement, a crafted OID with thousands of sub-identifiers wastes allocation and comparison time proportional to the sub-identifier count.
+
+The 0xFF length byte (REQ-0126) is explicitly reserved by X.690 §8.1.3.5 and has no defined meaning. Accepting it would be a conformance violation and could trigger undefined behaviour in downstream length calculations.
+
+Capping the length-of-length (REQ-0127) prevents a crafted multi-byte length field (e.g., 0x88 followed by 8 bytes) from producing a length value that overflows the platform's address space, which could wrap to a small value and cause buffer over-reads or under-allocations.
+
+Structural VarBindList parsing (REQ-0128) ensures that the entire PDU payload is accounted for. Treating the VarBindList as an opaque byte range and ignoring trailing bytes could allow data to be smuggled past the parser, and makes it impossible to detect truncation or corruption."""
