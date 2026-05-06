@@ -718,7 +718,7 @@ mod tests {
         // the agent starts with a custom timeout configuration.
         use std::time::Duration;
         let config = ConnectionTimeoutConfig {
-            normal_timeout: Duration::from_secs(60),
+            normal_timeout: Duration::from_mins(1),
             pressure_timeout: Duration::from_secs(10),
             pressure_headroom: 3,
         };
