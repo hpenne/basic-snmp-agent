@@ -144,5 +144,5 @@ category = "chore"
 
 [[content.acceptance_criteria]]
 text = "F-25 — Add OID round-trip test for u32::MAX as second arc under first arc 2 (i.e. 2.4294967295)"
-status = "pending"
+status = "done"
 category = "chore"

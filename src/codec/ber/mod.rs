@@ -1379,6 +1379,24 @@ mod tests {
         assert_eq!(recovered, oid);
     }
 
+    #[test]
+    fn given_arc_two_oid_with_max_u32_second_arc_when_round_tripped_then_recovers() {
+        // Verifies: REQ-0000
+        // 2.4294967295: combined first-two-arc value = 2*40 + 4294967295 = 4294967375 = 0x1_0000_004F
+        // This exceeds u32::MAX, so it must be encoded as a 5-byte base-128 value.
+        // 7-bit groups of 0x1_0000_004F (MSB first): 0x10, 0x00, 0x00, 0x00, 0x4F
+        // With continuation bits:                     0x90, 0x80, 0x80, 0x80, 0x4F
+        // Wire: 06 05 90 80 80 80 4F
+        const EXPECTED_WIRE: &[u8] = &[0x06, 0x05, 0x90, 0x80, 0x80, 0x80, 0x4F];
+        let oid: Oid = "2.4294967295".parse().unwrap();
+        let encoded = encode_with_writer(|w| w.write_oid(&oid));
+        assert_eq!(encoded, EXPECTED_WIRE);
+        let recovered = BerReader::new(&encoded)
+            .read_oid()
+            .expect("OID should decode");
+        assert_eq!(recovered, oid);
+    }
+
     // --- Signed integer round-trips ---
 
     fn integer_round_trip(value: i32) -> i32 {
