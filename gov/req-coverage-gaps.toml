@@ -147,3 +147,83 @@ rationale = "Internal RFC 3414 §3.2 processing order (user-name → level → H
 req     = "REQ-0108"
 missing = ["behave_test"]
 rationale = "Intermediate key material zeroisation is a runtime safety property not observable from the network protocol. Verified by unit tests inspecting memory contents."
+
+[[gap]]
+req     = "REQ-0109"
+missing = ["behave_test"]
+rationale = "IV construction (boots||time||salt) is an internal cryptographic detail not observable from the protocol. Verified by unit tests that decrypt and round-trip encrypted PDUs."
+
+[[gap]]
+req     = "REQ-0110"
+missing = ["behave_test"]
+rationale = "Salt uniqueness (monotonic counter) is an internal cryptographic property. A system test cannot reliably inspect the raw salt bytes. Verified by unit tests comparing consecutive salts."
+
+[[gap]]
+req     = "REQ-0111"
+missing = ["behave_test"]
+rationale = "Auth params zeroing before MAC computation is an internal step not observable from the protocol. Verified by unit tests that inspect the zeroed buffer."
+
+[[gap]]
+req     = "REQ-0112"
+missing = ["behave_test"]
+rationale = "MAC truncation length is an internal cryptographic detail. Protocol-level tests verify authentication succeeds/fails but cannot inspect the truncated MAC length directly. Verified by unit tests."
+
+[[gap]]
+req     = "REQ-0113"
+missing = ["behave_test"]
+rationale = "Constant-time MAC comparison is a side-channel defence not observable from protocol-level tests. Verified by unit tests confirming the subtle crate is used."
+
+[[gap]]
+req     = "REQ-0114"
+missing = ["behave_test"]
+rationale = "Password minimum length is a configuration-time constraint enforced before any network interaction. A Behave test cannot exercise the builder API directly. Verified by unit tests."
+
+[[gap]]
+req     = "REQ-0115"
+missing = ["behave_test"]
+rationale = "Security model validation requires crafting a packet with a non-USM security model field, which net-snmp CLI tools cannot produce. Verified by unit tests with hand-patched frames."
+
+[[gap]]
+req     = "REQ-0116"
+missing = ["behave_test"]
+rationale = "Empty user name rejection is a configuration-time constraint enforced at construction. A Behave test cannot exercise builder-level validation. Verified by unit tests."
+
+[[gap]]
+req     = "REQ-0117"
+missing = ["behave_test"]
+rationale = "Oversized frame rejection requires sending a frame larger than 65535 bytes over TCP, which net-snmp CLI tools cannot produce. Verified by unit tests with synthetic frames."
+
+[[gap]]
+req     = "REQ-0118"
+missing = ["behave_test"]
+rationale = "Negative msgID rejection requires crafting a packet with a negative BER-encoded integer, which net-snmp CLI tools cannot produce. Verified by unit tests with hand-crafted frames."
+
+[[gap]]
+req     = "REQ-0119"
+missing = ["behave_test"]
+rationale = "msgMaxSize < 484 rejection requires crafting a packet with an invalid msgMaxSize field, which net-snmp CLI tools cannot produce. Verified by unit tests with hand-crafted frames."
+
+[[gap]]
+req     = "REQ-0120"
+missing = ["behave_test"]
+rationale = "Connection limit enforcement requires opening 64+ simultaneous TCP connections and verifying rejection, which is impractical in the current Behave test infrastructure. Verified by unit tests."
+
+[[gap]]
+req     = "REQ-0121"
+missing = ["behave_test"]
+rationale = "Log warning on connection rejection is an internal diagnostic not observable from the protocol. Verified by unit tests that check the rejection behaviour."
+
+[[gap]]
+req     = "REQ-0122"
+missing = ["behave_test"]
+rationale = "Idle connection timeout requires waiting 5 minutes (or configuring a short timeout), which is impractical for system tests. Verified by unit tests with synthetic time advancement."
+
+[[gap]]
+req     = "REQ-0123"
+missing = ["behave_test"]
+rationale = "Timeout configurability is a builder API property not observable from the protocol. Verified by unit tests that construct agents with custom timeout configurations."
+
+[[gap]]
+req     = "REQ-0124"
+missing = ["behave_test"]
+rationale = "Pressure mode (shorter timeout near connection limit) requires filling connection slots and observing timeout changes, which is impractical in system tests. Verified by unit tests with synthetic time advancement."

@@ -55,10 +55,10 @@ static DECRYPTION_ERRORS_OID: std::sync::LazyLock<crate::codec::Oid> =
     });
 
 /// OID for `snmpUnknownSecurityModels.0` (RFC 3412, SNMP-MPD-MIB).
-// Implements: REQ-0000
+// Implements: REQ-0115
 const SNMP_UNKNOWN_SECURITY_MODELS_OID: &str = "1.3.6.1.6.3.11.2.1.1.0";
 
-// Implements: REQ-0000
+// Implements: REQ-0115
 static UNKNOWN_SECURITY_MODELS_OID: std::sync::LazyLock<crate::codec::Oid> =
     std::sync::LazyLock::new(|| {
         SNMP_UNKNOWN_SECURITY_MODELS_OID
@@ -72,7 +72,7 @@ const REPORTABLE_FLAG: u8 = 0x04;
 /// Engine state and statistics passed to each inbound frame dispatch.
 ///
 /// # Requirements
-/// Implements: REQ-0093, REQ-0094, REQ-0104, REQ-0078, REQ-0079, REQ-0098, REQ-0100, REQ-0101
+/// Implements: REQ-0078, REQ-0079, REQ-0093, REQ-0094, REQ-0098, REQ-0100, REQ-0101, REQ-0104, REQ-0115
 pub struct DispatchContext<'a> {
     /// The agent's authoritative engine ID.
     pub engine_id: &'a [u8],
@@ -98,7 +98,7 @@ pub struct DispatchContext<'a> {
     // Implements: REQ-0101
     pub decryption_errors_counter: &'a mut u32,
     /// Counter for `snmpUnknownSecurityModels` (RFC 3412 §7.1).
-    // Implements: REQ-0000
+    // Implements: REQ-0115
     pub unknown_security_models_counter: &'a mut u32,
     /// Optional configured USM user; `None` when no USM user is configured (REQ-0078, REQ-0079).
     // Implements: REQ-0078, REQ-0079
@@ -113,7 +113,7 @@ pub struct DispatchContext<'a> {
 /// controlled varbind data in the `ScopedPDU`.
 ///
 /// # Requirements
-/// Implements: REQ-0100
+/// Implements: REQ-0100, REQ-0111
 #[must_use]
 fn zero_auth_params_in_message(
     raw_message: &[u8],
@@ -184,7 +184,7 @@ fn emit_unknown_engine_id_response(
 /// `snmpUnknownSecurityModels` Report PDU; otherwise return `None` (silent discard).
 ///
 /// # Requirements
-/// Implements: REQ-0000
+/// Implements: REQ-0115
 fn emit_unknown_security_model_response(
     ctx: &mut DispatchContext<'_>,
     msg_id: i32,
@@ -219,7 +219,7 @@ fn emit_unknown_security_model_response(
 /// the flag set are silently discarded per RFC 3412 §7.1.3a.
 ///
 /// # Requirements
-/// Implements: REQ-0056, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0102, REQ-0103, REQ-0104, REQ-0107
+/// Implements: REQ-0056, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0102, REQ-0103, REQ-0104, REQ-0107, REQ-0109, REQ-0115
 ///
 /// # Examples
 ///
@@ -267,6 +267,7 @@ pub fn process_snmpv3_request(
     let v3_msg = crate::codec::decode_v3_message(frame).ok()?;
 
     // RFC 3412 §7.2 step 2: reject messages with unsupported security models.
+    // Implements: REQ-0115
     if !v3_msg.security_model.is_usm() {
         return emit_unknown_security_model_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
     }
@@ -444,6 +445,7 @@ pub fn process_snmpv3_request(
                 );
             }
 
+            // Implements: REQ-0109
             // IV = engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes) per RFC 3826 §2.2.
             let mut aes_iv = [0u8; 16];
             aes_iv[0..4].copy_from_slice(&v3_msg.usm.auth_engine_boots.to_be_bytes());
@@ -1531,7 +1533,7 @@ mod tests {
 
     #[test]
     fn given_offset_and_len_when_zero_auth_params_then_bytes_at_offset_are_zeroed() {
-        // Verifies: REQ-0100 — correct region is zeroed
+        // Verifies: REQ-0100, REQ-0111 — correct region is zeroed
         let message = b"hello MAC-goes-here world";
         let zeroed = zero_auth_params_in_message(message, 6, 12);
         assert_eq!(&zeroed[..6], b"hello ");
@@ -1541,7 +1543,7 @@ mod tests {
 
     #[test]
     fn given_offset_at_start_when_zero_auth_params_then_prefix_zeroed() {
-        // Verifies: REQ-0100 — boundary at start
+        // Verifies: REQ-0100, REQ-0111 — boundary at start
         let message = b"MACxxxxrest";
         let zeroed = zero_auth_params_in_message(message, 0, 3);
         assert_eq!(&zeroed[..3], &[0u8; 3]);
@@ -1550,7 +1552,7 @@ mod tests {
 
     #[test]
     fn given_offset_at_end_when_zero_auth_params_then_suffix_zeroed() {
-        // Verifies: REQ-0100 — boundary at end
+        // Verifies: REQ-0100, REQ-0111 — boundary at end
         let message = b"prefixMAC";
         let zeroed = zero_auth_params_in_message(message, 6, 3);
         assert_eq!(&zeroed[..6], b"prefix");
@@ -1559,7 +1561,7 @@ mod tests {
 
     #[test]
     fn given_input_when_zero_auth_params_then_original_message_is_not_modified() {
-        // Verifies: REQ-0100 — original raw_message is not mutated
+        // Verifies: REQ-0100, REQ-0111 — original raw_message is not mutated
         let message = b"prefix MAC suffix";
         let zeroed = zero_auth_params_in_message(message, 7, 3);
         assert_eq!(message, b"prefix MAC suffix", "original must be unchanged");
@@ -2025,7 +2027,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn given_correct_priv_key_when_process_authpriv_then_decrypts_and_responds() {
-        // Verifies: REQ-0101, REQ-0107
+        // Verifies: REQ-0101, REQ-0107, REQ-0109
         use crate::usm::auth::AuthProtocol;
         use crate::usm::keys::SecretKey;
         use crate::usm::privacy::PrivProtocol;
@@ -2423,7 +2425,7 @@ mod tests {
 
     #[test]
     fn given_security_model_not_usm_when_processed_then_returns_report_and_increments_counter() {
-        // Verifies: REQ-0000
+        // Verifies: REQ-0115
         let mib = crate::mib::Store::new();
         // Build a frame with security_model=3 then patch the byte to 4.
         // In a standard SNMPv3 frame, security_model=3 is encoded as 02 01 03.
@@ -2475,7 +2477,7 @@ mod tests {
 
     #[test]
     fn given_security_model_not_usm_and_no_reportable_flag_when_processed_then_silent_discard() {
-        // Verifies: REQ-0000
+        // Verifies: REQ-0115
         let mib = crate::mib::Store::new();
         // Build frame with security_model patched to 4 AND reportable flag cleared.
         let mut frame =
@@ -2517,7 +2519,7 @@ mod tests {
 
     #[test]
     fn given_unknown_security_models_counter_at_max_when_incremented_then_does_not_overflow() {
-        // Verifies: REQ-0000
+        // Verifies: REQ-0115
         let mib = crate::mib::Store::new();
         let mut frame =
             snmpv3_frames::encode_get_request(test_engine_id(), b"", 1, 1, test_oid_arcs());

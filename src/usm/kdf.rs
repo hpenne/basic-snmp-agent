@@ -64,7 +64,7 @@ impl std::error::Error for KdfError {}
 /// bytes (RFC 3414 §11.2 minimum).
 ///
 /// # Requirements
-/// Implements: REQ-0081, REQ-0082, REQ-0108
+/// Implements: REQ-0081, REQ-0082, REQ-0108, REQ-0114
 pub fn password_to_localised_key(
     password: &[u8],
     engine_id: &[u8],
@@ -451,7 +451,7 @@ mod tests {
 
     #[test]
     fn given_single_byte_password_when_derive_sha256_key_then_error() {
-        // Verifies: REQ-0090
+        // Verifies: REQ-0090, REQ-0114
         // The single-byte password "x" is below the RFC 3414 §11.2 minimum of
         // 8 bytes, so the function must reject it rather than produce a key.
         let result = password_to_localised_key(b"x", MAPLE_ENGINE_ID, AuthProtocol::HmacSha256);
@@ -473,7 +473,7 @@ mod tests {
 
     #[test]
     fn given_empty_password_when_derive_then_error() {
-        // Verifies: RFC 3414
+        // Verifies: REQ-0114
         let result =
             password_to_localised_key(b"", b"\x80\x00\x1f\x88\x04test", AuthProtocol::HmacSha256);
         assert_eq!(result.unwrap_err(), KdfError::EmptyPassword);
@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn given_7_byte_password_when_derive_then_error() {
-        // Verifies: RFC 3414 §11.2
+        // Verifies: REQ-0114
         let result = password_to_localised_key(
             b"short!!",
             b"\x80\x00\x1f\x88\x04test",
@@ -495,12 +495,12 @@ mod tests {
 
     #[test]
     fn given_8_byte_password_when_derive_then_ok() {
-        // Verifies: RFC 3414 §11.2
+        // Verifies: REQ-0114
         let result = password_to_localised_key(
             b"exactly8",
             b"\x80\x00\x1f\x88\x04test",
             AuthProtocol::HmacSha256,
         );
-        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 32);
     }
 }

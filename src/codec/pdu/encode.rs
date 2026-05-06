@@ -115,7 +115,7 @@ fn random_u64() -> u64 {
     random_u64_from_hasher()
 }
 
-// Implements: REQ-0101
+// Implements: REQ-0101, REQ-0110
 fn next_privacy_salt() -> [u8; 8] {
     PRIVACY_SALT_INIT.call_once(|| {
         PRIVACY_SALT_COUNTER.store(random_u64() | 1, Ordering::Relaxed);
@@ -132,7 +132,7 @@ fn next_privacy_salt() -> [u8; 8] {
 
 // Shared V3 message-building logic: wraps pre-encoded PDU bytes in a ScopedPdu,
 // optionally encrypts it, adds USM params, and signs with HMAC.
-// Implements: REQ-0068, REQ-0070, REQ-0072, REQ-0100, REQ-0101, REQ-0105, REQ-0106, REQ-0107
+// Implements: REQ-0068, REQ-0070, REQ-0072, REQ-0100, REQ-0101, REQ-0105, REQ-0106, REQ-0107, REQ-0109, REQ-0110, REQ-0111, REQ-0112
 #[allow(clippy::too_many_arguments)]
 fn encode_v3_envelope(
     msg_id: i32,
@@ -269,7 +269,7 @@ fn encode_v3_envelope(
 /// in `i32`, so the internal conversion is infallible for any valid `ErrorStatus`.
 ///
 /// # Requirements
-/// Implements: REQ-0068, REQ-0070, REQ-0072, REQ-0100, REQ-0101, REQ-0107
+/// Implements: REQ-0068, REQ-0070, REQ-0072, REQ-0100, REQ-0101, REQ-0107, REQ-0109, REQ-0110, REQ-0111, REQ-0112
 ///
 /// # Examples
 ///
@@ -347,7 +347,7 @@ pub fn encode_v3_response(
 /// encryption fails, or if `privacy` is `Some` while `auth` is `None`.
 ///
 /// # Requirements
-/// Implements: REQ-0105, REQ-0106
+/// Implements: REQ-0105, REQ-0106, REQ-0109, REQ-0110, REQ-0111, REQ-0112
 ///
 /// # Examples
 ///
@@ -898,7 +898,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn given_auth_priv_when_encode_v3_response_then_scoped_pdu_is_encrypted_and_decryptable() {
-        // Verifies: REQ-0101, REQ-0107
+        // Verifies: REQ-0101, REQ-0107, REQ-0109, REQ-0111, REQ-0112
         use crate::usm::auth::AuthProtocol;
         use crate::usm::keys::SecretKey;
         use crate::usm::privacy::PrivProtocol;
@@ -1353,7 +1353,7 @@ mod tests {
 
     #[test]
     fn given_two_consecutive_priv_trap_encodes_when_encoded_then_salts_differ() {
-        // Verifies: REQ-0101
+        // Verifies: REQ-0110
         // The mutant replaces next_privacy_salt() with a constant value.
         // Two consecutive encode_v3_trap calls with privacy must produce different
         // privacy parameters (the 8-byte salt embedded in USM parameters).

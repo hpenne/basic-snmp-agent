@@ -56,7 +56,7 @@ impl UserName {
     /// Returns [`EmptyUserNameError`] if `name` is empty.
     ///
     /// # Requirements
-    /// Implements: REQ-0091
+    /// Implements: REQ-0091, REQ-0116
     pub fn new(name: impl Into<String>) -> Result<Self, EmptyUserNameError> {
         let name = name.into();
         if name.is_empty() {
@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn given_non_empty_string_when_username_new_then_ok() {
-        // Verifies: REQ-0091
+        // Verifies: REQ-0091, REQ-0116
         let name = UserName::new("admin").unwrap();
         assert_eq!(name.as_str(), "admin");
         assert_eq!(name.as_bytes(), b"admin");
@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn given_empty_string_when_username_new_then_error() {
-        // Verifies: REQ-0091
+        // Verifies: REQ-0091, REQ-0116
         let result = UserName::new("");
         assert_eq!(
             result.unwrap_err().to_string(),

@@ -55,7 +55,7 @@ impl AuthProtocol {
     /// 48 bytes (384 bits) for HMAC-SHA-512 per RFC 7860 §4.4.
     ///
     /// # Requirements
-    /// Implements: REQ-0086, REQ-0087
+    /// Implements: REQ-0086, REQ-0087, REQ-0112
     #[must_use]
     pub fn mac_len(self) -> usize {
         match self {
@@ -69,7 +69,7 @@ impl AuthProtocol {
     /// Returns `Err` if `key` is not exactly [`key_len`][Self::key_len] bytes.
     ///
     /// # Requirements
-    /// Implements: REQ-0083, REQ-0086, REQ-0087
+    /// Implements: REQ-0083, REQ-0086, REQ-0087, REQ-0112
     ///
     /// # Panics
     ///
@@ -113,7 +113,7 @@ impl AuthProtocol {
     /// key length is wrong.
     ///
     /// # Requirements
-    /// Implements: REQ-0083, REQ-0086, REQ-0087, REQ-0100
+    /// Implements: REQ-0083, REQ-0086, REQ-0087, REQ-0100, REQ-0112, REQ-0113
     ///
     /// # Panics
     ///
@@ -223,13 +223,13 @@ mod tests {
 
     #[test]
     fn hmac_sha256_mac_len_is_24() {
-        // Verifies: REQ-0086
+        // Verifies: REQ-0086, REQ-0112
         assert_eq!(AuthProtocol::HmacSha256.mac_len(), 24);
     }
 
     #[test]
     fn hmac_sha512_mac_len_is_48() {
-        // Verifies: REQ-0087
+        // Verifies: REQ-0087, REQ-0112
         assert_eq!(AuthProtocol::HmacSha512.mac_len(), 48);
     }
 
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn given_correct_key_when_compute_sha256_mac_then_returns_24_bytes() {
-        // Verifies: REQ-0086
+        // Verifies: REQ-0086, REQ-0112
         let key = SecretKey::new_from_exposed_slice(&[0xABu8; 32]);
         let mac = AuthProtocol::HmacSha256
             .compute_mac(&key, b"hello")
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn given_correct_key_when_compute_sha512_mac_then_returns_48_bytes() {
-        // Verifies: REQ-0087
+        // Verifies: REQ-0087, REQ-0112
         let key = SecretKey::new_from_exposed_slice(&[0xCDu8; 64]);
         let mac = AuthProtocol::HmacSha512
             .compute_mac(&key, b"hello")
@@ -374,7 +374,7 @@ mod tests {
 
     #[test]
     fn given_tampered_mac_when_verify_then_mac_mismatch_error() {
-        // Verifies: REQ-0086
+        // Verifies: REQ-0086, REQ-0113
         let key = SecretKey::new_from_exposed_slice(&[0x55u8; 32]);
         let mut mac = AuthProtocol::HmacSha256
             .compute_mac(&key, b"authentic")
@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn given_tampered_message_when_verify_then_mac_mismatch_error() {
-        // Verifies: REQ-0086
+        // Verifies: REQ-0086, REQ-0113
         let key = SecretKey::new_from_exposed_slice(&[0x66u8; 32]);
         let mac = AuthProtocol::HmacSha256
             .compute_mac(&key, b"original")
@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn given_mac_from_different_sha256_key_when_verify_then_mac_mismatch_error() {
-        // Verifies: REQ-0100
+        // Verifies: REQ-0100, REQ-0113
         // A MAC produced under key_a must be rejected when verified under key_b,
         // even though both keys have the correct length for the protocol.
         let key_a = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn given_mac_from_different_sha512_key_when_verify_then_mac_mismatch_error() {
-        // Verifies: REQ-0100
+        // Verifies: REQ-0100, REQ-0113
         // A MAC produced under key_a must be rejected when verified under key_b,
         // even though both keys have the correct length for the protocol.
         let key_a = SecretKey::new_from_exposed_slice(&[0xAAu8; 64]);
@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn given_wrong_mac_length_when_verify_sha256_then_invalid_mac_length_error() {
-        // Verifies: REQ-0100
+        // Verifies: REQ-0100, REQ-0112
         let key = SecretKey::new_from_exposed_slice(&[0x33u8; 32]);
         let short_mac = vec![0u8; 12]; // 12 bytes, not 24
         assert_eq!(
@@ -461,7 +461,7 @@ mod tests {
 
     #[test]
     fn given_wrong_mac_length_when_verify_sha512_then_invalid_mac_length_error() {
-        // Verifies: REQ-0100
+        // Verifies: REQ-0100, REQ-0112
         let key = SecretKey::new_from_exposed_slice(&[0x33u8; 64]);
         assert_eq!(
             AuthProtocol::HmacSha512.verify_mac(&key, b"msg", &[0u8; 1]),
@@ -474,7 +474,7 @@ mod tests {
 
     #[test]
     fn given_empty_mac_when_verify_sha256_then_invalid_mac_length_error() {
-        // Verifies: REQ-0100
+        // Verifies: REQ-0100, REQ-0112
         let key = SecretKey::new_from_exposed_slice(&[0x33u8; 32]);
         assert_eq!(
             AuthProtocol::HmacSha256.verify_mac(&key, b"msg", &[]),

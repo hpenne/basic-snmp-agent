@@ -300,6 +300,9 @@ impl AgentBuilder {
     ///
     /// Default: [`DEFAULT_MAX_CONNECTIONS`] (64). When this limit is reached,
     /// new connections are rejected until existing ones close.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0120
     #[must_use]
     pub fn max_connections(mut self, max: usize) -> Self {
         self.max_connections = max;
@@ -315,6 +318,9 @@ impl AgentBuilder {
     ///
     /// Default: [`ConnectionTimeoutConfig::default`] (300 s normal, 30 s pressure,
     /// headroom of 5).
+    ///
+    /// # Requirements
+    /// Implements: REQ-0123
     #[must_use]
     pub fn connection_timeout_config(mut self, config: ConnectionTimeoutConfig) -> Self {
         self.timeout_config = config;
@@ -701,35 +707,28 @@ mod tests {
 
     #[test]
     fn given_max_connections_when_build_then_agent_starts() {
-        // Verifies that the max_connections builder method is accepted and the agent starts.
-        let result = AgentBuilder::new()
+        // Verifies: REQ-0120
+        let _agent = AgentBuilder::new()
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .max_connections(10)
-            .build();
-        assert!(
-            result.is_ok(),
-            "expected agent to start with custom max_connections"
-        );
+            .build()
+            .expect("agent should start with custom max_connections");
     }
 
     #[test]
     fn given_connection_timeout_config_when_build_then_agent_starts() {
-        // Verifies that the connection_timeout_config builder method is accepted and
-        // the agent starts with a custom timeout configuration.
+        // Verifies: REQ-0123
         use std::time::Duration;
         let config = ConnectionTimeoutConfig {
             normal_timeout: Duration::from_mins(1),
             pressure_timeout: Duration::from_secs(10),
             pressure_headroom: 3,
         };
-        let result = AgentBuilder::new()
+        let _agent = AgentBuilder::new()
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .connection_timeout_config(config)
-            .build();
-        assert!(
-            result.is_ok(),
-            "expected agent to start with custom connection timeout config"
-        );
+            .build()
+            .expect("agent should start with custom connection timeout config");
     }
 
     #[test]

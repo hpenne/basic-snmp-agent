@@ -129,7 +129,7 @@ pub(crate) struct DecodedScopedPduFields {
 /// - Any mandatory field is absent, truncated, or has the wrong tag.
 ///
 /// # Requirements
-/// Implements: REQ-0000
+/// Implements: REQ-0118, REQ-0119
 pub(crate) fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, BerError> {
     let mut outer_reader = BerReader::new(bytes);
     let mut msg_reader = outer_reader.read_sequence()?;
@@ -980,7 +980,8 @@ mod tests {
 
     #[test]
     fn given_negative_msg_id_when_decode_v3_envelope_then_error() {
-        // Verifies: RFC 3412 §6.4 msgID range [0, 2^31-1]
+        // Verifies: REQ-0118
+        // §6.4 msgID range [0, 2^31-1]
         // encode_v3_message happily encodes any i32 including -1; the decoder
         // must then reject it because msgID must be non-negative.
         let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
@@ -1016,9 +1017,10 @@ mod tests {
 
     #[test]
     fn given_max_size_zero_when_decode_v3_envelope_then_error() {
-        // Verifies: RFC 3412 §6.6 msgMaxSize minimum value 484
-        // encode_v3_message encodes any i32 for max_size; the decoder must
-        // reject 0 because msgMaxSize must be at least 484.
+        // Verifies: REQ-0119
+        // §6.6 msgMaxSize minimum value 484 — encode_v3_message encodes any i32
+        // for max_size; the decoder must reject 0 because msgMaxSize must be at
+        // least 484.
         let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
         let (encoded, _) = encode_v3_message(
             1,    // msg_id
@@ -1050,8 +1052,9 @@ mod tests {
 
     #[test]
     fn given_max_size_483_when_decode_v3_envelope_then_error() {
-        // Verifies: RFC 3412 §6.6 msgMaxSize minimum value 484
-        // 483 is one below the minimum; the decoder must reject it.
+        // Verifies: REQ-0119
+        // §6.6 msgMaxSize minimum value 484 — 483 is one below the minimum; the
+        // decoder must reject it.
         let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
         let (encoded, _) = encode_v3_message(
             1,    // msg_id
@@ -1083,8 +1086,9 @@ mod tests {
 
     #[test]
     fn given_max_size_484_when_decode_v3_envelope_then_accepted() {
-        // Verifies: RFC 3412 §6.6 msgMaxSize minimum value 484
-        // 484 is the minimum allowed value; the decoder must not reject it
+        // Verifies: REQ-0119
+        // §6.6 msgMaxSize minimum value 484 — 484 is the minimum allowed value;
+        // the decoder must not reject it
         // for the max_size check (it may succeed fully or fail for other reasons).
         let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
         let (encoded, _) = encode_v3_message(

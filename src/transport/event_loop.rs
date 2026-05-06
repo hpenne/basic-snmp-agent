@@ -43,22 +43,35 @@ pub(crate) const MAX_BULK_REPETITIONS: u32 = 100;
 /// matching the `SNMPv3` `maxMessageSize` upper bound. Frames whose total
 /// size exceeds this are rejected and the connection is closed to prevent
 /// memory exhaustion.
+// Implements: REQ-0117
 const MAX_FRAME_SIZE: usize = 65_535;
 
 /// Default maximum number of concurrent TCP connections the agent will accept.
 /// When this limit is reached, new connections are rejected until existing
 /// ones close.
+///
+/// # Requirements
+/// Implements: REQ-0120
 pub const DEFAULT_MAX_CONNECTIONS: usize = 64;
 
 /// Default idle timeout for connections under normal conditions.
+///
+/// # Requirements
+/// Implements: REQ-0123
 pub const NORMAL_IDLE_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Reduced idle timeout when the connection count is near the maximum.
+///
+/// # Requirements
+/// Implements: REQ-0124
 pub const PRESSURE_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How many free connection slots trigger "pressure" mode.
 /// When `connections >= max_connections - PRESSURE_HEADROOM`, the shorter
 /// timeout applies.
+///
+/// # Requirements
+/// Implements: REQ-0124
 pub const PRESSURE_HEADROOM: usize = 5;
 
 // ── EventLoopError ───────────────────────────────────────────────────────────
@@ -249,6 +262,9 @@ impl Clone for CommandSender {
 /// };
 /// assert_eq!(config.normal_timeout, Duration::from_secs(120));
 /// ```
+///
+/// # Requirements
+/// Implements: REQ-0122, REQ-0123, REQ-0124
 #[derive(Debug, Clone, Copy)]
 pub struct ConnectionTimeoutConfig {
     /// Idle timeout under normal conditions.
@@ -355,7 +371,7 @@ pub struct EventLoop {
     decryption_errors_counter: u32,
     /// Counter for `snmpUnknownSecurityModels`; incremented when an inbound message
     /// uses a security model other than USM (RFC 3412 §7.1).
-    // Implements: REQ-0000
+    // Implements: REQ-0115
     unknown_security_models_counter: u32,
     /// Configured USM user; `None` when no USM user is configured.
     // Implements: REQ-0076
@@ -525,7 +541,7 @@ impl EventLoop {
     /// `EMFILE`, `ENFILE`, `ECONNABORTED`) are logged and skipped rather than
     /// killing the event loop, because a single resource-exhaustion moment
     /// should not bring down the agent.
-    // Implements: REQ-0051
+    // Implements: REQ-0051, REQ-0120, REQ-0121
     fn accept_connections(&mut self) {
         loop {
             // Stop accepting when the connection table is at capacity so that
@@ -696,6 +712,7 @@ impl EventLoop {
             };
 
             let total_frame_bytes = 1 + length_field_bytes + content_length;
+            // Implements: REQ-0117
             if total_frame_bytes > MAX_FRAME_SIZE {
                 // Reject oversized frames to prevent memory exhaustion.
                 eprintln!(
@@ -768,6 +785,7 @@ impl EventLoop {
     ///
     /// Under pressure (connection count near maximum), a shorter timeout applies
     /// to free slots for new clients more aggressively.
+    // Implements: REQ-0122, REQ-0124
     fn sweep_idle_connections(&mut self) {
         let now = Instant::now();
         let under_pressure =
@@ -1737,7 +1755,7 @@ mod tests {
 
     #[test]
     fn given_frame_at_exactly_max_size_when_received_then_connection_stays_open() {
-        // Verifies: REQ-0071, REQ-0073
+        // Verifies: REQ-0071, REQ-0073, REQ-0117
         // MAX_FRAME_SIZE is 65535. A frame of exactly 65535 bytes must be accepted
         // (not cause connection closure). The mutant `> with >=` would incorrectly
         // close the connection for this boundary frame.
@@ -1801,6 +1819,7 @@ mod tests {
 
     #[test]
     fn given_max_connections_reached_when_new_connection_then_rejected() {
+        // Verifies: REQ-0120, REQ-0121
         // The event loop accepts at most `max_connections` TCP connections. When
         // the limit is full, the loop stops calling accept() for the current poll
         // cycle; any connections the OS has buffered in the backlog are not
@@ -1861,6 +1880,7 @@ mod tests {
 
     #[test]
     fn given_idle_connection_when_timeout_elapses_then_connection_is_closed() {
+        // Verifies: REQ-0122
         // Verifies that sweep_idle_connections() closes connections that have
         // been idle longer than the configured timeout.
 
@@ -1907,6 +1927,7 @@ mod tests {
 
     #[test]
     fn given_pressure_headroom_exceeded_when_sweep_then_pressure_timeout_applies() {
+        // Verifies: REQ-0124
         // Verifies that when the number of connections reaches max_connections -
         // pressure_headroom, the pressure timeout is used instead of the normal one.
         //
