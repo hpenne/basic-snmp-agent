@@ -414,6 +414,38 @@ mod tests {
     }
 
     #[test]
+    fn given_mac_from_different_sha256_key_when_verify_then_mac_mismatch_error() {
+        // Verifies: REQ-0100
+        // A MAC produced under key_a must be rejected when verified under key_b,
+        // even though both keys have the correct length for the protocol.
+        let key_a = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
+        let key_b = SecretKey::new_from_exposed_slice(&[0xBBu8; 32]);
+        let mac_from_key_a = AuthProtocol::HmacSha256
+            .compute_mac(&key_a, b"message")
+            .unwrap();
+        assert_eq!(
+            AuthProtocol::HmacSha256.verify_mac(&key_b, b"message", &mac_from_key_a),
+            Err(AuthError::MacMismatch)
+        );
+    }
+
+    #[test]
+    fn given_mac_from_different_sha512_key_when_verify_then_mac_mismatch_error() {
+        // Verifies: REQ-0100
+        // A MAC produced under key_a must be rejected when verified under key_b,
+        // even though both keys have the correct length for the protocol.
+        let key_a = SecretKey::new_from_exposed_slice(&[0xAAu8; 64]);
+        let key_b = SecretKey::new_from_exposed_slice(&[0xBBu8; 64]);
+        let mac_from_key_a = AuthProtocol::HmacSha512
+            .compute_mac(&key_a, b"message")
+            .unwrap();
+        assert_eq!(
+            AuthProtocol::HmacSha512.verify_mac(&key_b, b"message", &mac_from_key_a),
+            Err(AuthError::MacMismatch)
+        );
+    }
+
+    #[test]
     fn given_wrong_mac_length_when_verify_sha256_then_invalid_mac_length_error() {
         // Verifies: REQ-0100
         let key = SecretKey::new_from_exposed_slice(&[0x33u8; 32]);

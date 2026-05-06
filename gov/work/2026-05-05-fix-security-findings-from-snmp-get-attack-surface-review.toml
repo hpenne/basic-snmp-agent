@@ -134,7 +134,7 @@ category = "chore"
 
 [[content.acceptance_criteria]]
 text = "F-23 — Add test verifying MAC computed with wrong key is rejected by verify_mac"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
