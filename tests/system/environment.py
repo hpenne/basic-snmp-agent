@@ -92,12 +92,15 @@ def before_scenario(context, scenario):
 def after_scenario(context, scenario):
     if context.agent_container is not None:
         subprocess.run(
-            ["docker", "stop", context.agent_container],
+            ["docker", "stop", "--time", "1", context.agent_container],
             check=False,
             capture_output=True,
         )
     for name in context.extra_containers:
-        subprocess.run(["docker", "stop", name], check=False, capture_output=True)
+        subprocess.run(
+            ["docker", "stop", "--time", "1", name],
+            check=False, capture_output=True,
+        )
     for path in context.temp_files:
         try:
             os.unlink(path)
