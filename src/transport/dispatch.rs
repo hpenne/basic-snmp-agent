@@ -1602,12 +1602,12 @@ mod tests {
             .compute_mac(&key, &frame_with_zeros)
             .unwrap();
 
-        let pos = frame_with_zeros
-            .windows(mac_len)
-            .position(|w| w == zeroed_auth_params.as_slice())
-            .unwrap();
+        let auth_params_offset = crate::codec::ber::snmp::decode_v3_envelope(&frame_with_zeros)
+            .expect("frame must be a valid SNMPv3 envelope")
+            .auth_params_offset
+            .expect("authenticated frame must carry a non-empty auth_params field");
         let mut frame = frame_with_zeros;
-        frame[pos..pos + mac_len].copy_from_slice(&mac);
+        frame[auth_params_offset..auth_params_offset + mac_len].copy_from_slice(&mac);
         frame
     }
 
@@ -2013,12 +2013,12 @@ mod tests {
         let mac = AuthProtocol::HmacSha256
             .compute_mac(&auth_key, &frame_with_zeros)
             .unwrap();
-        let pos = frame_with_zeros
-            .windows(mac_len)
-            .position(|w| w == zeroed_auth_params.as_slice())
-            .expect("zeroed auth_params must appear in frame");
+        let auth_params_offset = crate::codec::ber::snmp::decode_v3_envelope(&frame_with_zeros)
+            .expect("frame must be a valid SNMPv3 envelope")
+            .auth_params_offset
+            .expect("authenticated frame must carry a non-empty auth_params field");
         let mut frame = frame_with_zeros;
-        frame[pos..pos + mac_len].copy_from_slice(&mac);
+        frame[auth_params_offset..auth_params_offset + mac_len].copy_from_slice(&mac);
         frame
     }
 
@@ -2129,17 +2129,11 @@ mod tests {
 
         // Verify the HMAC over the encrypted response is valid.
         let auth_key_for_verify = SecretKey::new_from_exposed_slice(&auth_key_bytes);
-        let usm_raw = v3_response.security_parameters.as_ref();
         let embedded_mac = usm_params.authentication_parameters.to_vec();
-        let usm_pos = response_bytes
-            .windows(usm_raw.len())
-            .position(|w| w == usm_raw)
-            .expect("USM bytes must appear in response");
-        let mac_pos = response_bytes[usm_pos..usm_pos + usm_raw.len()]
-            .windows(embedded_mac.len())
-            .position(|w| w == embedded_mac.as_slice())
-            .expect("MAC must appear within USM region");
-        let auth_params_offset = usm_pos + mac_pos;
+        let auth_params_offset = crate::codec::ber::snmp::decode_v3_envelope(&response_bytes)
+            .expect("response must be a valid SNMPv3 envelope")
+            .auth_params_offset
+            .expect("authenticated response must carry a non-empty auth_params field");
         let mut zeroed_response = response_bytes.clone();
         zeroed_response[auth_params_offset..auth_params_offset + embedded_mac.len()].fill(0);
         AuthProtocol::HmacSha256
@@ -2268,12 +2262,12 @@ mod tests {
         let mac = AuthProtocol::HmacSha256
             .compute_mac(&auth_key, &frame_with_zeros)
             .unwrap();
-        let pos = frame_with_zeros
-            .windows(mac_len)
-            .position(|w| w == zeroed_auth_params.as_slice())
-            .unwrap();
+        let auth_params_offset = crate::codec::ber::snmp::decode_v3_envelope(&frame_with_zeros)
+            .expect("frame must be a valid SNMPv3 envelope")
+            .auth_params_offset
+            .expect("authenticated frame must carry a non-empty auth_params field");
         let mut frame = frame_with_zeros;
-        frame[pos..pos + mac_len].copy_from_slice(&mac);
+        frame[auth_params_offset..auth_params_offset + mac_len].copy_from_slice(&mac);
 
         let mut tc = TestCtx::new().with_boots_time(1, 0);
         let result = {
@@ -2368,12 +2362,12 @@ mod tests {
         let mac = AuthProtocol::HmacSha256
             .compute_mac(&auth_key, &frame_with_zeros)
             .unwrap();
-        let pos = frame_with_zeros
-            .windows(mac_len)
-            .position(|w| w == zeroed_auth_params.as_slice())
-            .unwrap();
+        let auth_params_offset = crate::codec::ber::snmp::decode_v3_envelope(&frame_with_zeros)
+            .expect("frame must be a valid SNMPv3 envelope")
+            .auth_params_offset
+            .expect("authenticated frame must carry a non-empty auth_params field");
         let mut frame = frame_with_zeros;
-        frame[pos..pos + mac_len].copy_from_slice(&mac);
+        frame[auth_params_offset..auth_params_offset + mac_len].copy_from_slice(&mac);
 
         let mut tc = TestCtx::new().with_boots_time(1, 0);
         let result = {

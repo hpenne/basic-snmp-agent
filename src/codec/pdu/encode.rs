@@ -505,25 +505,20 @@ mod tests {
 
     /// Verify that the HMAC embedded in `encoded_message` is correct.
     ///
-    /// Locates the MAC bytes using the same two-step search as the production
-    /// code (USM region first, then MAC within USM), zeroes the placeholder,
-    /// and then calls `verify_mac` to confirm the signature is valid.
+    /// Locates the `msgAuthenticationParameters` byte offset by BER-parsing the
+    /// message structure via `decode_v3_envelope`, zeroes the placeholder, and
+    /// then calls `verify_mac` to confirm the signature is valid.
     fn verify_embedded_hmac(
         encoded_message: &[u8],
-        security_parameters_raw: &[u8],
         embedded_mac: &[u8],
         auth_protocol: crate::usm::auth::AuthProtocol,
         auth_key: &crate::usm::keys::SecretKey,
     ) {
-        let usm_pos = encoded_message
-            .windows(security_parameters_raw.len())
-            .position(|w| w == security_parameters_raw)
-            .expect("USM bytes must appear in encoded message");
-        let auth_pos = encoded_message[usm_pos..usm_pos + security_parameters_raw.len()]
-            .windows(embedded_mac.len())
-            .position(|w| w == embedded_mac)
-            .expect("MAC must appear within USM region");
-        let auth_params_offset = usm_pos + auth_pos;
+        let envelope = crate::codec::ber::snmp::decode_v3_envelope(encoded_message)
+            .expect("encoded message must be a valid SNMPv3 envelope");
+        let auth_params_offset = envelope
+            .auth_params_offset
+            .expect("authenticated message must carry a non-empty auth_params field");
 
         let mut zeroed = encoded_message.to_vec();
         zeroed[auth_params_offset..auth_params_offset + embedded_mac.len()].fill(0);
@@ -795,7 +790,6 @@ mod tests {
 
         verify_embedded_hmac(
             &encoded,
-            decoded.security_parameters.as_ref(),
             &usm_params.authentication_parameters,
             auth_protocol,
             &auth_key_for_verify,
@@ -847,7 +841,6 @@ mod tests {
 
         verify_embedded_hmac(
             &encoded,
-            decoded.security_parameters.as_ref(),
             &usm_params.authentication_parameters,
             auth_protocol,
             &auth_key_for_verify,
@@ -893,10 +886,9 @@ mod tests {
             rasn::ber::decode(decoded.security_parameters.as_ref())
                 .expect("USM security parameters must decode");
 
-        // Mirrors the production two-step search to independently verify the offset logic.
+        // Use structural BER parsing to locate the auth_params offset.
         verify_embedded_hmac(
             &encoded,
-            decoded.security_parameters.as_ref(),
             &usm_params.authentication_parameters,
             auth_protocol,
             &auth_key_for_verify,
@@ -1020,7 +1012,6 @@ mod tests {
         // Verify the HMAC is valid over the encrypted message.
         verify_embedded_hmac(
             &encoded,
-            v3_msg.security_parameters.as_ref(),
             &usm_params.authentication_parameters,
             auth_protocol,
             &auth_key_for_verify,
@@ -1227,7 +1218,6 @@ mod tests {
 
         verify_embedded_hmac(
             &encoded,
-            decoded.security_parameters.as_ref(),
             &usm_params.authentication_parameters,
             auth_protocol,
             &auth_key_for_verify,
@@ -1319,7 +1309,6 @@ mod tests {
         // Verify the HMAC is valid over the encrypted message.
         verify_embedded_hmac(
             &encoded,
-            v3_msg.security_parameters.as_ref(),
             &usm_params.authentication_parameters,
             auth_protocol,
             &auth_key_for_verify,

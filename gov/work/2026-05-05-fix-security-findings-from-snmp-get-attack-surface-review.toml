@@ -129,7 +129,7 @@ category = "chore"
 
 [[content.acceptance_criteria]]
 text = "F-22 — Replace byte-pattern search in test helpers (dispatch.rs:1530-1535, encode.rs:466-489) with structural auth_params_offset from the BER encoder"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
