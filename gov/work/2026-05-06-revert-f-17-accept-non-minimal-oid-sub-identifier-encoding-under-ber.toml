@@ -1,0 +1,38 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-05-06-001"
+title = "Revert F-17: accept non-minimal OID sub-identifier encoding under BER"
+status = "active"
+created = "2026-05-06"
+started = "2026-05-06"
+
+[content]
+description = """
+Describe the work to be done.
+What is the goal? What are the acceptance criteria?"""
+
+[[content.acceptance_criteria]]
+text = "Remove non-minimal OID sub-identifier rejection from decode_base128"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "Remove three tests that verify non-minimal OID rejection"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "Update WI-2026-05-05-002 F-17 acceptance criterion to reverted status"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "cargo test passes"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"
