@@ -1,0 +1,43 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-05-06-002"
+title = "Add requirement tracing annotations for REQ-0109 through REQ-0124"
+status = "active"
+created = "2026-05-06"
+started = "2026-05-06"
+
+[content]
+description = """
+Describe the work to be done.
+What is the goal? What are the acceptance criteria?"""
+
+[[content.acceptance_criteria]]
+text = "Add Implements/Verifies annotations for REQ-0109 through REQ-0116 (RFC-0007 USM security)"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Add Implements/Verifies annotations for REQ-0117 through REQ-0119 (RFC-0005 C-INBOUND)"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Add Implements/Verifies annotations for REQ-0120 through REQ-0124 (RFC-0005 C-TCP-LIMITS)"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "All 16 requirements pass tracing tool (code + rust_test)"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "cargo test passes"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"
