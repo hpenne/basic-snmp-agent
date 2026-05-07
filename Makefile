@@ -1,7 +1,4 @@
-PYTHON_FILES := tools/req_coverage_check.py tools/tests/test_req_coverage_check.py \
-	tests/system/context_protocol.py tests/system/environment.py \
-	tests/system/steps/mib_read_steps.py tests/system/steps/trap_steps.py \
-	tests/system/docker/snmptrapd/record-trap.py
+PYTHON_FILES := $(shell find tools/ tests/ -name '*.py' -not -path '*/__pycache__/*')
 
 .PHONY: test trace clippy rust-test python-test python-lint behave-test fuzz-gen-seeds fuzz-1s fuzz-1m fuzz-10m fuzz-30m
 

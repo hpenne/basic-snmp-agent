@@ -24,7 +24,7 @@ Implementation plan:
 - [x] Add type annotations to all functions and get mypy passing
 - [x] Get pylint passing (fix findings or add targeted disables with justification)
 - [x] Add Makefile targets: black --check, mypy, pylint (integrate into pre-commit)
-- [ ] Add black/mypy/pylint to CI workflow"""
+- [x] Add black/mypy/pylint to CI workflow"""
 
 [[content.acceptance_criteria]]
 text = "pyproject.toml with black, mypy, and pylint configuration"
