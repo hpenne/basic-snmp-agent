@@ -16,8 +16,8 @@ To view the report locally:
 
 ```sh
 unzip fuzz-coverage-report.zip -d fuzz-coverage-report
-open fuzz-coverage-report/index.html   # macOS
-xdg-open fuzz-coverage-report/index.html  # Linux
+open fuzz-coverage-report/report/linux/report.html   # macOS
+xdg-open fuzz-coverage-report/report/linux/report.html  # Linux
 ```
 
 ## Corpus pruning
