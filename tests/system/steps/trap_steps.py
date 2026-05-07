@@ -23,7 +23,7 @@ import tempfile
 import time
 from typing import Any
 
-from behave import (  # pylint: disable=no-name-in-module  # behave uses lazy imports
+from behave import (  # pylint: disable=no-name-in-module,import-error  # behave uses lazy imports
     given,
     then,
     when,

@@ -72,7 +72,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install tools
-        run: pip install black mypy pylint pytest behave
+        run: pip install black mypy pylint pytest
 
       - name: make python-lint
         run: make python-lint
