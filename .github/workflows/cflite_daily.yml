@@ -57,5 +57,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fuzz-coverage-report
-          path: build-out/coverage
+          path: cifuzz-coverage
           if-no-files-found: error
