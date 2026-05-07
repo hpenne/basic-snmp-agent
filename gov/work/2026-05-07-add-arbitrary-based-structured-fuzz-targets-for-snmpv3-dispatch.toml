@@ -3,8 +3,9 @@
 [govctl]
 id = "WI-2026-05-07-002"
 title = "Add Arbitrary-based structured fuzz targets for SNMPv3 dispatch"
-status = "queue"
+status = "active"
 created = "2026-05-07"
+started = "2026-05-07"
 
 [content]
 description = """
