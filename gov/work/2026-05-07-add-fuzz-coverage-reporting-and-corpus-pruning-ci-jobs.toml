@@ -13,18 +13,21 @@ Add two new ClusterFuzzLite CI capabilities to the existing fuzzing infrastructu
 1. **Coverage reporting** — a daily job (or manually triggered) that replays the accumulated corpus with coverage instrumentation and uploads an llvm-cov HTML report as a GitHub Actions artifact.
 This shows which functions and branches the fuzzers reach, identifies dead zones that need new seeds, and tracks whether coverage is still growing or has plateaued.
 
-2. **Corpus pruning** — a manually triggered job that removes corpus entries which no longer contribute unique coverage.
+2. **Corpus pruning** — a monthly cron job (also manually triggerable) that removes corpus entries which no longer contribute unique coverage.
 Over time the corpus accumulates redundant inputs that slow fuzzing; pruning keeps only the minimal set that achieves the same coverage.
 ClusterFuzzLite provides this via mode: 'prune'.
+Runs once per month — the corpus does not bloat meaningfully in shorter periods at current scale.
 
-Both jobs use the existing ClusterFuzzLite actions infrastructure from cflite_daily.yml.
+Both jobs use the existing ClusterFuzzLite actions infrastructure.
+The coverage job is added to cflite_daily.yml.
+The pruning job gets its own workflow file with a monthly cron schedule.
 
-A README documents how to find, download, and view the coverage artifact.
+A README documents how to find, download, and view the coverage artifact, and how to trigger pruning manually.
 
 Implementation plan:
 - [ ] Add coverage job to cflite_daily.yml (mode: 'coverage', upload artifact)
-- [ ] Add workflow_dispatch-triggered pruning job (mode: 'prune')
-- [ ] Write fuzz/README.md documenting: how to find the coverage artifact in GitHub Actions, how to download and view it, and how to trigger corpus pruning"""
+- [ ] Create separate workflow for monthly corpus pruning (mode: 'prune', monthly cron + workflow_dispatch)
+- [ ] Write fuzz/README.md documenting: how to find the coverage artifact in GitHub Actions, how to download and view it, and how to trigger pruning"""
 
 [[content.acceptance_criteria]]
 text = "ClusterFuzzLite coverage job uploads HTML report as GitHub Actions artifact"
@@ -33,10 +36,15 @@ category = "added"
 
 [[content.acceptance_criteria]]
 text = "Manually triggered ClusterFuzzLite prune job for corpus minimisation"
-status = "pending"
+status = "cancelled"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "fuzz/README.md documents how to find, download, and view the coverage artifact and how to trigger pruning"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "Monthly cron ClusterFuzzLite prune job for corpus minimisation (also manually triggerable)"
 status = "pending"
 category = "added"
