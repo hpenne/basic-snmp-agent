@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-05-07-001"
 title = "Add BER token dictionaries for byte-level fuzz targets and reduce CI fuzz time"
-status = "active"
+status = "done"
 created = "2026-05-07"
 started = "2026-05-07"
+completed = "2026-05-07"
 
 [content]
 description = """
@@ -17,26 +18,26 @@ The tcp_framing target is excluded — its input space is too small to benefit.
 Also reduce the ClusterFuzzLite daily batch run from 600s to 300s to avoid exhausting CI CPU budget, especially once the structured fuzz targets from [[WI-2026-05-07-002]] are added.
 
 Implementation plan:
-- [ ] Create fuzz/snmpv3.dict with BER and SNMP token entries
-- [ ] Update Makefile fuzz targets to pass -dict=fuzz/snmpv3.dict for snmpv3_request and snmpv3_request_auth
-- [ ] Update cflite_daily.yml fuzz-seconds from 600 to 300"""
+- [x] Create fuzz/snmpv3.dict with BER and SNMP token entries
+- [x] Update Makefile fuzz targets to pass -dict=fuzz/snmpv3.dict for snmpv3_request and snmpv3_request_auth
+- [x] Update cflite_daily.yml fuzz-seconds from 600 to 300"""
 
 [[content.acceptance_criteria]]
 text = "BER token dictionary file shared by snmpv3_request and snmpv3_request_auth fuzz targets"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "ClusterFuzzLite daily fuzz-seconds reduced from 600 to 300"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "Makefile fuzz targets pass -dict flag for snmpv3_request and snmpv3_request_auth"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "Dictionary contains BER tags, SNMP PDU type tags, engine ID, user name, and OID prefix tokens"
-status = "pending"
+status = "done"
 category = "chore"

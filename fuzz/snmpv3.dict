@@ -1,0 +1,70 @@
+# libfuzzer dictionary for snmpv3_request and snmpv3_request_auth fuzz targets.
+# Not used by tcp_framing (its input space is too small to benefit).
+
+# BER universal tags
+tag_integer="\x02"
+tag_octet_string="\x04"
+tag_null="\x05"
+tag_oid="\x06"
+tag_sequence="\x30"
+
+# SNMP PDU type tags (context-class constructed)
+tag_get_request="\xA0"
+tag_get_next_request="\xA1"
+tag_response="\xA2"
+tag_set_request="\xA3"
+tag_trap_v1="\xA4"
+tag_get_bulk_request="\xA5"
+tag_inform_request="\xA6"
+tag_trap="\xA7"
+tag_report="\xA8"
+
+# VarBind exception tags (context-class primitive)
+tag_no_such_object="\x80"
+tag_no_such_instance="\x81"
+tag_end_of_mib_view="\x82"
+
+# SMIv2 application-class tags
+tag_ip_address="\x40"
+tag_counter32="\x41"
+tag_gauge32="\x42"
+tag_timeticks="\x43"
+tag_opaque="\x44"
+tag_counter64="\x46"
+
+# BER length forms
+len_long_1="\x81"
+len_long_2="\x82"
+len_long_3="\x83"
+len_long_4="\x84"
+len_indefinite="\x80"
+
+# SNMPv3 protocol tokens
+snmpv3_version="\x02\x01\x03"
+usm_security_model="\x02\x01\x03"
+null_tlv="\x05\x00"
+empty_octet_string="\x04\x00"
+
+# msgMaxSize values (must be >= 484)
+max_size_484="\x02\x02\x01\xE4"
+max_size_65535="\x02\x03\x00\xFF\xFF"
+
+# Fixed engine ID used by fuzz targets
+engine_id="\x80\x00\x1F\x88\x80test"
+engine_id_tlv="\x04\x08\x80\x00\x1F\x88\x80test"
+
+# USM user name used by fuzz targets
+user_name="fuzz-user"
+
+# BER-encoded OID prefixes
+oid_internet="\x2B\x06\x01"
+oid_sysdescr="\x2B\x06\x01\x02\x01\x01\x01\x00"
+oid_snmp_mib="\x2B\x06\x01\x06\x03"
+
+# SNMP message flags (single-byte values and complete OCTET STRING TLV forms)
+flags_noauth_nopriv="\x04"
+flags_auth_nopriv="\x05"
+flags_auth_priv="\x07"
+flags_noauth_nopriv_tlv="\x04\x01\x04"
+flags_auth_nopriv_tlv="\x04\x01\x05"
+flags_auth_priv_tlv="\x04\x01\x07"
