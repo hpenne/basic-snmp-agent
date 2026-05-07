@@ -1,15 +1,20 @@
 #![no_main]
 
+#[path = "../arbitrary_snmpv3.rs"]
+mod arbitrary_snmpv3;
+
 #[path = "../fuzz_support.rs"]
 mod fuzz_support;
 
+use arbitrary_snmpv3::FuzzSnmpv3;
 use basic_snmp_agent::process_snmpv3_request;
 use basic_snmp_agent::transport::dispatch::DispatchContext;
 use libfuzzer_sys::fuzz_target;
 
-fuzz_target!(|request_bytes: &[u8]| {
-    // Use a fixed engine ID; the fuzzer will explore both matching and
-    // non-matching cases by varying the bytes that map to the engine ID field.
+fuzz_target!(|input: FuzzSnmpv3| {
+    let Some(encoded) = input.encode() else {
+        return;
+    };
     let engine_id = b"\x80\x00\x1f\x88\x80test";
     let mut unknown_engine_ids_counter = 0u32;
     let mut unknown_user_names_counter = 0u32;
@@ -31,5 +36,5 @@ fuzz_target!(|request_bytes: &[u8]| {
         unknown_security_models_counter: &mut unknown_security_models_counter,
         usm_user: None,
     };
-    let _ = process_snmpv3_request(request_bytes, &mut ctx, fuzz_support::mib());
+    let _ = process_snmpv3_request(&encoded, &mut ctx, fuzz_support::mib());
 });

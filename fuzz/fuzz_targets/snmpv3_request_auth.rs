@@ -2,62 +2,28 @@
 // exercising the authentication verification and time-window check code paths.
 #![no_main]
 
+#[path = "../fuzz_support.rs"]
+mod fuzz_support;
+
 use std::sync::OnceLock;
 
-use basic_snmp_agent::mib::Store;
+use basic_snmp_agent::process_snmpv3_request;
 use basic_snmp_agent::transport::dispatch::DispatchContext;
 use basic_snmp_agent::usm::auth::AuthProtocol;
 use basic_snmp_agent::usm::keys::SecretKey;
 use basic_snmp_agent::usm::user::{UserName, UsmUser};
-use basic_snmp_agent::{Oid, Value, process_snmpv3_request};
 use libfuzzer_sys::fuzz_target;
 
-static MIB: OnceLock<Store> = OnceLock::new();
 static USER: OnceLock<UsmUser> = OnceLock::new();
-
-fn mib() -> &'static Store {
-    MIB.get_or_init(|| {
-        let mut store = Store::new();
-        store.set(
-            "1.3.6.1.2.1.1.1.0".parse::<Oid>().unwrap(),
-            Value::OctetString(b"basic-snmp-agent".to_vec()),
-        );
-        store.set(
-            "1.3.6.1.2.1.1.3.0".parse::<Oid>().unwrap(),
-            Value::TimeTicks(0),
-        );
-        store.set(
-            "1.3.6.1.2.1.1.5.0".parse::<Oid>().unwrap(),
-            Value::OctetString(b"agent".to_vec()),
-        );
-        store.set(
-            "1.3.6.1.2.1.2.1.0".parse::<Oid>().unwrap(),
-            Value::Integer32(1),
-        );
-        store.set(
-            "1.3.6.1.2.1.2.2.0".parse::<Oid>().unwrap(),
-            Value::Counter32(0),
-        );
-        store.set(
-            "1.3.6.1.2.1.2.3.0".parse::<Oid>().unwrap(),
-            Value::Counter64(0),
-        );
-        store.set(
-            "1.3.6.1.2.1.2.4.0".parse::<Oid>().unwrap(),
-            Value::Gauge32(0),
-        );
-        store.set(
-            "1.3.6.1.2.1.2.5.0".parse::<Oid>().unwrap(),
-            Value::IpAddress([127, 0, 0, 1]),
-        );
-        store
-    })
-}
 
 fn user() -> &'static UsmUser {
     USER.get_or_init(|| {
         let auth_key = SecretKey::new_from_exposed_slice(&[0xAB; 32]);
-        UsmUser::auth_no_priv(UserName::new("fuzz-user").expect("valid user name"), AuthProtocol::HmacSha256, auth_key)
+        UsmUser::auth_no_priv(
+            UserName::new("fuzz-user").expect("valid user name"),
+            AuthProtocol::HmacSha256,
+            auth_key,
+        )
     })
 }
 
@@ -83,5 +49,5 @@ fuzz_target!(|request_bytes: &[u8]| {
         unknown_security_models_counter: &mut unknown_security_models_counter,
         usm_user: Some(user()),
     };
-    let _ = process_snmpv3_request(request_bytes, &mut ctx, mib());
+    let _ = process_snmpv3_request(request_bytes, &mut ctx, fuzz_support::mib());
 });

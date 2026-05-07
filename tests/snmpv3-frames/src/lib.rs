@@ -30,6 +30,10 @@ use rasn_snmp::v3::{
 
 /// Encode a minimal `SNMPv3` `GetRequest` frame (noAuthNoPriv, USM).
 ///
+/// # Panics
+///
+/// Does not panic in practice; all internal BER encodings are of well-formed structures.
+///
 /// # Examples
 ///
 /// ```
@@ -50,7 +54,31 @@ pub fn encode_get_request(
     request_id: i32,
     oid_arcs: &[u32],
 ) -> Vec<u8> {
-    encode_get_request_with_user(engine_id, b"", context_name, msg_id, request_id, oid_arcs)
+    try_encode_get_request(engine_id, context_name, msg_id, request_id, oid_arcs)
+        .expect("GetRequest must encode")
+}
+
+/// Fallible variant of [`encode_get_request`].
+///
+/// # Errors
+///
+/// Returns an error if BER encoding fails (e.g. invalid OID arcs).
+pub fn try_encode_get_request(
+    engine_id: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    request_id: i32,
+    oid_arcs: &[u32],
+) -> Result<Vec<u8>, rasn::error::EncodeError> {
+    let rasn_pdu = RasnGetRequest(single_varbind_pdu(request_id, oid_arcs));
+    encode_v3_message(
+        engine_id,
+        b"",
+        context_name,
+        msg_id,
+        Pdus::GetRequest(rasn_pdu),
+        0x04,
+    )
 }
 
 /// Encode a minimal `SNMPv3` `GetRequest` frame with a specific `msgUserName`.
@@ -137,6 +165,10 @@ pub fn encode_get_request_with_user_no_report(
 /// [`encode_get_request_with_user`] (`msgFlags = 0x04`) or
 /// [`encode_get_request_with_user_no_report`] (`msgFlags = 0x00`).
 ///
+/// # Panics
+///
+/// Does not panic in practice; all internal BER encodings are of well-formed structures.
+///
 /// # Examples
 ///
 /// ```
@@ -171,6 +203,7 @@ pub fn encode_get_request_with_user_and_flags(
         Pdus::GetRequest(rasn_pdu),
         msg_flags_byte,
     )
+    .expect("GetRequest must encode")
 }
 
 /// Encode a `SNMPv3` `GetRequest` frame with explicit `msgAuthenticationParameters`.
@@ -179,6 +212,10 @@ pub fn encode_get_request_with_user_and_flags(
 /// this function places the given `auth_params` bytes into the USM security parameters.
 /// Use this to build frames for HMAC verification tests: first encode with zeroed `auth_params`,
 /// compute the HMAC, then encode again with the real MAC.
+///
+/// # Panics
+///
+/// Does not panic in practice; all internal BER encodings are of well-formed structures.
 ///
 /// # Examples
 ///
@@ -218,6 +255,7 @@ pub fn encode_get_request_with_auth_params(
         msg_flags_byte,
         auth_params,
     )
+    .expect("GetRequest must encode")
 }
 
 /// Encode a `SNMPv3` `GetRequest` frame with explicit `msgAuthenticationParameters`
@@ -226,6 +264,10 @@ pub fn encode_get_request_with_auth_params(
 /// Use this to build frames for time-window validation tests: supply the boots and
 /// time values that the manager claims in its USM security parameters, compute the
 /// HMAC over the frame with zeroed `auth_params`, then splice in the real MAC.
+///
+/// # Panics
+///
+/// Does not panic in practice; all internal BER encodings are of well-formed structures.
 ///
 /// # Examples
 ///
@@ -259,6 +301,39 @@ pub fn encode_get_request_with_auth_params_and_time(
     auth_engine_boots: u32,
     auth_engine_time: u32,
 ) -> Vec<u8> {
+    try_encode_get_request_with_auth_params_and_time(
+        engine_id,
+        user_name,
+        context_name,
+        msg_id,
+        request_id,
+        oid_arcs,
+        msg_flags_byte,
+        auth_params,
+        auth_engine_boots,
+        auth_engine_time,
+    )
+    .expect("GetRequest must encode")
+}
+
+/// Fallible variant of [`encode_get_request_with_auth_params_and_time`].
+///
+/// # Errors
+///
+/// Returns an error if BER encoding fails (e.g. invalid OID arcs).
+#[allow(clippy::too_many_arguments)]
+pub fn try_encode_get_request_with_auth_params_and_time(
+    engine_id: &[u8],
+    user_name: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    request_id: i32,
+    oid_arcs: &[u32],
+    msg_flags_byte: u8,
+    auth_params: &[u8],
+    auth_engine_boots: u32,
+    auth_engine_time: u32,
+) -> Result<Vec<u8>, rasn::error::EncodeError> {
     let rasn_pdu = RasnGetRequest(single_varbind_pdu(request_id, oid_arcs));
     encode_v3_message_with_usm_params(
         engine_id,
@@ -274,6 +349,10 @@ pub fn encode_get_request_with_auth_params_and_time(
 }
 
 /// Encode a minimal `SNMPv3` `GetNextRequest` frame (noAuthNoPriv, USM).
+///
+/// # Panics
+///
+/// Does not panic in practice; all internal BER encodings are of well-formed structures.
 ///
 /// # Examples
 ///
@@ -295,6 +374,22 @@ pub fn encode_get_next_request(
     request_id: i32,
     oid_arcs: &[u32],
 ) -> Vec<u8> {
+    try_encode_get_next_request(engine_id, context_name, msg_id, request_id, oid_arcs)
+        .expect("GetNextRequest must encode")
+}
+
+/// Fallible variant of [`encode_get_next_request`].
+///
+/// # Errors
+///
+/// Returns an error if BER encoding fails (e.g. invalid OID arcs).
+pub fn try_encode_get_next_request(
+    engine_id: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    request_id: i32,
+    oid_arcs: &[u32],
+) -> Result<Vec<u8>, rasn::error::EncodeError> {
     let rasn_pdu = RasnGetNextRequest(single_varbind_pdu(request_id, oid_arcs));
     encode_v3_message(
         engine_id,
@@ -307,6 +402,10 @@ pub fn encode_get_next_request(
 }
 
 /// Encode a minimal `SNMPv3` `GetBulkRequest` frame (noAuthNoPriv, USM).
+///
+/// # Panics
+///
+/// Does not panic in practice; all internal BER encodings are of well-formed structures.
 ///
 /// # Examples
 ///
@@ -332,6 +431,33 @@ pub fn encode_get_bulk_request(
     max_repetitions: u32,
     oid_arcs: &[u32],
 ) -> Vec<u8> {
+    try_encode_get_bulk_request(
+        engine_id,
+        context_name,
+        msg_id,
+        request_id,
+        non_repeaters,
+        max_repetitions,
+        oid_arcs,
+    )
+    .expect("GetBulkRequest must encode")
+}
+
+/// Fallible variant of [`encode_get_bulk_request`].
+///
+/// # Errors
+///
+/// Returns an error if BER encoding fails (e.g. invalid OID arcs).
+#[allow(clippy::too_many_arguments)]
+pub fn try_encode_get_bulk_request(
+    engine_id: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    request_id: i32,
+    non_repeaters: u32,
+    max_repetitions: u32,
+    oid_arcs: &[u32],
+) -> Result<Vec<u8>, rasn::error::EncodeError> {
     let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(oid_arcs.to_vec()));
     let rasn_pdu = RasnGetBulkRequest(BulkPdu {
         request_id,
@@ -354,6 +480,10 @@ pub fn encode_get_bulk_request(
 
 /// Encode a minimal `SNMPv3` `SetRequest` frame (noAuthNoPriv, USM).
 ///
+/// # Panics
+///
+/// Does not panic in practice; all internal BER encodings are of well-formed structures.
+///
 /// # Examples
 ///
 /// ```
@@ -374,6 +504,22 @@ pub fn encode_set_request(
     request_id: i32,
     oid_arcs: &[u32],
 ) -> Vec<u8> {
+    try_encode_set_request(engine_id, context_name, msg_id, request_id, oid_arcs)
+        .expect("SetRequest must encode")
+}
+
+/// Fallible variant of [`encode_set_request`].
+///
+/// # Errors
+///
+/// Returns an error if BER encoding fails (e.g. invalid OID arcs).
+pub fn try_encode_set_request(
+    engine_id: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    request_id: i32,
+    oid_arcs: &[u32],
+) -> Result<Vec<u8>, rasn::error::EncodeError> {
     let rasn_pdu = RasnSetRequest(single_varbind_pdu(request_id, oid_arcs));
     encode_v3_message(
         engine_id,
@@ -539,7 +685,7 @@ fn encode_v3_message(
     msg_id: i32,
     pdus: Pdus,
     msg_flags_byte: u8,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, rasn::error::EncodeError> {
     encode_v3_message_with_auth_params(
         engine_id,
         user_name,
@@ -561,7 +707,7 @@ fn encode_v3_message_with_auth_params(
     pdus: Pdus,
     msg_flags_byte: u8,
     auth_params: &[u8],
-) -> Vec<u8> {
+) -> Result<Vec<u8>, rasn::error::EncodeError> {
     encode_v3_message_with_usm_params(
         engine_id,
         user_name,
@@ -589,7 +735,7 @@ fn encode_v3_message_with_usm_params(
     auth_params: &[u8],
     auth_engine_boots: u32,
     auth_engine_time: u32,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, rasn::error::EncodeError> {
     let scoped_pdu = ScopedPdu {
         engine_id: engine_id.to_vec().into(),
         name: context_name.to_vec().into(),
@@ -603,8 +749,7 @@ fn encode_v3_message_with_usm_params(
         authentication_parameters: rasn::types::OctetString::from(auth_params.to_vec()),
         privacy_parameters: rasn::types::OctetString::from(vec![]),
     };
-    let security_parameters_bytes =
-        rasn::ber::encode(&usm_params).expect("USMSecurityParameters must encode");
+    let security_parameters_bytes = rasn::ber::encode(&usm_params)?;
     let v3_message = V3Message {
         version: 3.into(),
         global_data: HeaderData {
@@ -616,7 +761,7 @@ fn encode_v3_message_with_usm_params(
         security_parameters: security_parameters_bytes.into(),
         scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
     };
-    rasn::ber::encode(&v3_message).expect("V3Message must encode")
+    rasn::ber::encode(&v3_message)
 }
 
 // Build a RasnPdu carrying a single null varbind for the given OID arcs.

@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-05-07-002"
 title = "Add Arbitrary-based structured fuzz targets for SNMPv3 dispatch"
-status = "active"
+status = "done"
 created = "2026-05-07"
 started = "2026-05-07"
+completed = "2026-05-07"
 
 [content]
 description = """
@@ -28,46 +29,46 @@ Also reduce the ClusterFuzzLite daily batch run from 600s to 300s to avoid exhau
 Depends on [[WI-2026-05-07-001]] (dictionary should land first).
 
 Implementation plan:
-- [ ] Add arbitrary crate dependency to fuzz/Cargo.toml
-- [ ] Define Arbitrary-derived struct for SNMPv3 message fields in a shared module under fuzz/
-- [ ] Implement BER encoding from the Arbitrary struct (reuse snmpv3-frames where possible)
-- [ ] Create snmpv3_request_structured fuzz target
-- [ ] Create snmpv3_request_auth_structured fuzz target
-- [ ] Add seed generation for structured targets to generate_seeds.rs
-- [ ] Register new targets in fuzz/Cargo.toml and Makefile
-- [ ] Update cflite_daily.yml fuzz-seconds from 600 to 300"""
+- [x] Add arbitrary crate dependency to fuzz/Cargo.toml
+- [x] Define Arbitrary-derived struct for SNMPv3 message fields in a shared module under fuzz/
+- [x] Implement BER encoding from the Arbitrary struct (reuse snmpv3-frames where possible)
+- [x] Create snmpv3_request_structured fuzz target
+- [x] Create snmpv3_request_auth_structured fuzz target
+- [x] Add seed generation for structured targets to generate_seeds.rs
+- [x] Register new targets in fuzz/Cargo.toml and Makefile
+- [x] Update cflite_daily.yml fuzz-seconds from 600 to 300"""
 
 [[content.acceptance_criteria]]
 text = "snmpv3_request_structured fuzz target using Arbitrary to generate valid-by-construction BER messages"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "snmpv3_request_auth_structured fuzz target with Arbitrary-generated USM auth fields"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "Arbitrary struct covers PDU type, OID arcs, varbind values, msg flags, USM parameters"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "Seed corpus generated for both structured targets via generate_seeds"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "Makefile fuzz targets include both new structured targets"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "arbitrary crate added to fuzz/Cargo.toml"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "ClusterFuzzLite daily fuzz-seconds reduced from 600 to 300"
-status = "pending"
+status = "done"
 category = "fixed"

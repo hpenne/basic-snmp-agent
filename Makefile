@@ -37,24 +37,32 @@ fuzz-1s:
 	cargo +nightly fuzz run snmpv3_request -- -max_total_time=1 -dict=$(SNMPV3_DICT)
 	cargo +nightly fuzz run tcp_framing -- -max_total_time=1
 	cargo +nightly fuzz run snmpv3_request_auth -- -max_total_time=1 -dict=$(SNMPV3_DICT)
+	cargo +nightly fuzz run snmpv3_request_structured -- -max_total_time=1
+	cargo +nightly fuzz run snmpv3_request_auth_structured -- -max_total_time=1
 
 # Run all fuzzers locally for 1 minute each.
 fuzz-1m:
 	cargo +nightly fuzz run snmpv3_request -- -max_total_time=60 -dict=$(SNMPV3_DICT)
 	cargo +nightly fuzz run tcp_framing -- -max_total_time=60
 	cargo +nightly fuzz run snmpv3_request_auth -- -max_total_time=60 -dict=$(SNMPV3_DICT)
+	cargo +nightly fuzz run snmpv3_request_structured -- -max_total_time=60
+	cargo +nightly fuzz run snmpv3_request_auth_structured -- -max_total_time=60
 
 # Run all fuzzers locally for 10 minutes each.
 fuzz-10m:
 	cargo +nightly fuzz run snmpv3_request -- -max_total_time=600 -dict=$(SNMPV3_DICT)
 	cargo +nightly fuzz run tcp_framing -- -max_total_time=600
 	cargo +nightly fuzz run snmpv3_request_auth -- -max_total_time=600 -dict=$(SNMPV3_DICT)
+	cargo +nightly fuzz run snmpv3_request_structured -- -max_total_time=600
+	cargo +nightly fuzz run snmpv3_request_auth_structured -- -max_total_time=600
 
 # Run all fuzzers locally for 30 minutes each.
 fuzz-30m:
 	cargo +nightly fuzz run snmpv3_request -- -max_total_time=1800 -dict=$(SNMPV3_DICT)
 	cargo +nightly fuzz run tcp_framing -- -max_total_time=1800
 	cargo +nightly fuzz run snmpv3_request_auth -- -max_total_time=1800 -dict=$(SNMPV3_DICT)
+	cargo +nightly fuzz run snmpv3_request_structured -- -max_total_time=1800
+	cargo +nightly fuzz run snmpv3_request_auth_structured -- -max_total_time=1800
 
 check-format:
 	cargo fmt --check

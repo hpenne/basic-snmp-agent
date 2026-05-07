@@ -2,9 +2,9 @@
 ///
 /// Three categories of seeds are written:
 ///
-/// - **SNMPv3 request seeds** (`fuzz/corpus/snmpv3_request`): valid BER-encoded SNMPv3
-///   messages covering each inbound PDU type (GetRequest, GetNextRequest, GetBulkRequest,
-///   SetRequest). These let the fuzzer skip the time needed to rediscover valid BER
+/// - **`SNMPv3` request seeds** (`fuzz/corpus/snmpv3_request`): valid BER-encoded `SNMPv3`
+///   messages covering each inbound PDU type (`GetRequest`, `GetNextRequest`, `GetBulkRequest`,
+///   `SetRequest`). These let the fuzzer skip the time needed to rediscover valid BER
 ///   framing from scratch and reach the dispatch and MIB-lookup code paths immediately.
 ///
 /// - **TCP framing seeds** (`fuzz/corpus/tcp_framing`): raw BER length-field encodings
@@ -12,12 +12,16 @@
 ///   form, and an empty buffer. These seed the `tcp_framing` fuzzer that exercises
 ///   `parse_ber_length`.
 ///
-/// - **Authenticated SNMPv3 request seeds** (`fuzz/corpus/snmpv3_request_auth`): SNMPv3
+/// - **Authenticated `SNMPv3` request seeds** (`fuzz/corpus/snmpv3_request_auth`): `SNMPv3`
 ///   requests with a USM security header, including a seed with a correctly computed HMAC
 ///   that passes authentication end-to-end, as well as seeds with wrong users and missing
 ///   auth flags. These seed the `snmpv3_request_auth` fuzzer.
 ///
-/// All SNMPv3 seeds use the engine ID that matches the fuzz targets' fixed value so they
+/// - **Structured fuzzer seeds** (`fuzz/corpus/snmpv3_request_structured` and
+///   `fuzz/corpus/snmpv3_request_auth_structured`): raw byte buffers that the `Arbitrary`
+///   derive deserialises into `FuzzSnmpv3` and `FuzzSnmpv3Auth` structs respectively.
+///
+/// All `SNMPv3` seeds use the engine ID that matches the fuzz targets' fixed value so they
 /// exercise the full dispatch path rather than the early-discard path.
 ///
 /// Run via `make fuzz-gen-seeds`. Corpus directories are created if absent.
@@ -85,12 +89,32 @@ impl DispatchCounters {
     }
 }
 
-// ── main ─────────────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────
 
-fn main() {
-    let corpus = Path::new(CORPUS_DIR);
-    fs::create_dir_all(corpus).expect("failed to create corpus directory");
+fn write_structured_seeds(corpus_dir: &Path) {
+    let seeds: &[(&str, &[u8])] = &[
+        ("zeros", &[0u8; 128]),
+        ("ones", &[0xFF; 128]),
+        (
+            "ascending",
+            &core::array::from_fn::<u8, 128, _>(|index| u8::try_from(index).expect("index < 128")),
+        ),
+    ];
 
+    for (name, bytes) in seeds {
+        let path = corpus_dir.join(name);
+        fs::write(&path, bytes)
+            .unwrap_or_else(|e| panic!("failed to write structured seed '{name}': {e}"));
+        println!(
+            "wrote {} ({} bytes) → {}",
+            name,
+            bytes.len(),
+            path.display()
+        );
+    }
+}
+
+fn write_snmpv3_request_seeds(corpus: &Path) {
     let seeds: &[(&str, Vec<u8>)] = &[
         (
             "get_request",
@@ -129,11 +153,9 @@ fn main() {
             path.display()
         );
     }
+}
 
-    // TCP framing seeds for parse_ber_length
-    let tcp_corpus = Path::new("fuzz/corpus/tcp_framing");
-    fs::create_dir_all(tcp_corpus).expect("failed to create TCP framing corpus directory");
-
+fn write_tcp_framing_seeds(tcp_corpus: &Path) {
     let tcp_seeds: &[(&str, &[u8])] = &[
         ("short_form_zero", &[0x00]),
         ("short_form_max", &[0x7F]),
@@ -156,25 +178,15 @@ fn main() {
             path.display()
         );
     }
+}
 
-    // Auth fuzzer seeds
-    let auth_corpus = Path::new("fuzz/corpus/snmpv3_request_auth");
-    fs::create_dir_all(auth_corpus).expect("failed to create auth corpus directory");
-
-    let auth_key_for_user =
-        basic_snmp_agent::usm::keys::SecretKey::new_from_exposed_slice(&[0xAB; 32]);
+// Build the valid-HMAC seed: encode with zeroed auth_params, compute the
+// HMAC over that frame, then re-encode with the real MAC. Since the
+// auth_params field length is fixed at 24 bytes, the BER structure is
+// identical and only the content bytes differ.
+fn build_authenticated_frame() -> Vec<u8> {
     let auth_key_for_mac =
         basic_snmp_agent::usm::keys::SecretKey::new_from_exposed_slice(&[0xAB; 32]);
-    let auth_user = basic_snmp_agent::usm::user::UsmUser::auth_no_priv(
-        basic_snmp_agent::usm::user::UserName::new("fuzz-user").expect("valid user name"),
-        basic_snmp_agent::usm::auth::AuthProtocol::HmacSha256,
-        auth_key_for_user,
-    );
-
-    // Build the valid-HMAC seed: encode with zeroed auth_params, compute the
-    // HMAC over that frame, then re-encode with the real MAC. Since the
-    // auth_params field length is fixed at 24 bytes, the BER structure is
-    // identical and only the content bytes differ.
     let zeroed_frame = snmpv3_frames::encode_get_request_with_auth_params_and_time(
         ENGINE_ID,
         b"fuzz-user",
@@ -190,7 +202,7 @@ fn main() {
     let mac = basic_snmp_agent::usm::auth::AuthProtocol::HmacSha256
         .compute_mac(&auth_key_for_mac, &zeroed_frame)
         .expect("HMAC computation failed");
-    let authenticated_frame = snmpv3_frames::encode_get_request_with_auth_params_and_time(
+    snmpv3_frames::encode_get_request_with_auth_params_and_time(
         ENGINE_ID,
         b"fuzz-user",
         b"",
@@ -201,10 +213,24 @@ fn main() {
         &mac,
         1,
         0,
+    )
+}
+
+fn write_auth_seeds(auth_corpus: &Path) {
+    let auth_key_for_user =
+        basic_snmp_agent::usm::keys::SecretKey::new_from_exposed_slice(&[0xAB; 32]);
+    let auth_user = basic_snmp_agent::usm::user::UsmUser::auth_no_priv(
+        basic_snmp_agent::usm::user::UserName::new("fuzz-user").expect("valid user name"),
+        basic_snmp_agent::usm::auth::AuthProtocol::HmacSha256,
+        auth_key_for_user,
     );
 
     let auth_seeds: &[(&str, Vec<u8>, bool)] = &[
-        ("auth_get_request_valid_hmac", authenticated_frame, true),
+        (
+            "auth_get_request_valid_hmac",
+            build_authenticated_frame(),
+            true,
+        ),
         (
             "auth_get_request",
             snmpv3_frames::encode_get_request_with_auth_params_and_time(
@@ -275,6 +301,31 @@ fn main() {
             path.display()
         );
     }
+}
+
+// ── main ─────────────────────────────────────────────────────────────────────
+
+fn main() {
+    let corpus = Path::new(CORPUS_DIR);
+    fs::create_dir_all(corpus).expect("failed to create corpus directory");
+    write_snmpv3_request_seeds(corpus);
+
+    let tcp_corpus = Path::new("fuzz/corpus/tcp_framing");
+    fs::create_dir_all(tcp_corpus).expect("failed to create TCP framing corpus directory");
+    write_tcp_framing_seeds(tcp_corpus);
+
+    let auth_corpus = Path::new("fuzz/corpus/snmpv3_request_auth");
+    fs::create_dir_all(auth_corpus).expect("failed to create auth corpus directory");
+    write_auth_seeds(auth_corpus);
+
+    let structured_corpus = Path::new("fuzz/corpus/snmpv3_request_structured");
+    fs::create_dir_all(structured_corpus).expect("failed to create structured corpus directory");
+    write_structured_seeds(structured_corpus);
+
+    let auth_structured_corpus = Path::new("fuzz/corpus/snmpv3_request_auth_structured");
+    fs::create_dir_all(auth_structured_corpus)
+        .expect("failed to create auth structured corpus directory");
+    write_structured_seeds(auth_structured_corpus);
 }
 
 fn empty_mib() -> basic_snmp_agent::mib::Store {
