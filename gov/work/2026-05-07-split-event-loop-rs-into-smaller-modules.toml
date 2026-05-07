@@ -1,0 +1,37 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-05-07-003"
+title = "Split event_loop.rs into smaller modules"
+status = "queue"
+created = "2026-05-07"
+
+[content]
+description = """
+Extract independent concerns from event_loop.rs (~2045 lines, ~932 production code) into focused modules.
+dispatch.rs is left as-is — its production code (~520 lines) is a single cohesive unit; the bulk is tests.
+
+Candidates for extraction from event_loop.rs:
+- parse_ber_length + BerLengthError → framing.rs or ber.rs (already independently fuzzed, no event loop dependency)
+- Command + CommandSender → command.rs (self-contained message-passing types)
+
+Implementation plan:
+- [ ] Extract parse_ber_length and BerLengthError into a new module
+- [ ] Extract Command and CommandSender into a new module
+- [ ] Update imports across codebase (fuzz targets, tests, re-exports)
+- [ ] Verify all tests and fuzz targets still compile and pass"""
+
+[[content.acceptance_criteria]]
+text = "parse_ber_length and BerLengthError extracted from event_loop.rs into own module"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "Command and CommandSender extracted from event_loop.rs into own module"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "All tests and fuzz targets pass after extraction"
+status = "pending"
+category = "chore"
