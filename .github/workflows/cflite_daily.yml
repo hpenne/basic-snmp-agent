@@ -29,3 +29,33 @@ jobs:
           mode: 'batch'
           language: rust
           sanitizer: address
+
+  coverage:
+    name: Coverage report
+    runs-on: ubuntu-latest
+    needs: fuzz
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build fuzz targets
+        uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+        with:
+          language: rust
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          sanitizer: coverage
+
+      - name: Generate coverage
+        uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          mode: 'coverage'
+          language: rust
+          sanitizer: coverage
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-coverage-report
+          path: build-out/coverage
+          if-no-files-found: error

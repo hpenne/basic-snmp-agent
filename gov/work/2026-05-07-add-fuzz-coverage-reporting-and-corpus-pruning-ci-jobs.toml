@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-05-07-005"
 title = "Add fuzz coverage reporting and corpus pruning CI jobs"
-status = "active"
+status = "done"
 created = "2026-05-07"
 started = "2026-05-07"
+completed = "2026-05-07"
 
 [content]
 description = """
@@ -26,13 +27,13 @@ The pruning job gets its own workflow file with a monthly cron schedule.
 A README documents how to find, download, and view the coverage artifact, and how to trigger pruning manually.
 
 Implementation plan:
-- [ ] Add coverage job to cflite_daily.yml (mode: 'coverage', upload artifact)
-- [ ] Create separate workflow for monthly corpus pruning (mode: 'prune', monthly cron + workflow_dispatch)
-- [ ] Write fuzz/README.md documenting: how to find the coverage artifact in GitHub Actions, how to download and view it, and how to trigger pruning"""
+- [x] Add coverage job to cflite_daily.yml (mode: 'coverage', upload artifact)
+- [x] Create separate workflow for monthly corpus pruning (mode: 'prune', monthly cron + workflow_dispatch)
+- [x] Write fuzz/README.md documenting: how to find the coverage artifact in GitHub Actions, how to download and view it, and how to trigger pruning"""
 
 [[content.acceptance_criteria]]
 text = "ClusterFuzzLite coverage job uploads HTML report as GitHub Actions artifact"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
@@ -42,10 +43,10 @@ category = "added"
 
 [[content.acceptance_criteria]]
 text = "fuzz/README.md documents how to find, download, and view the coverage artifact and how to trigger pruning"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "Monthly cron ClusterFuzzLite prune job for corpus minimisation (also manually triggerable)"
-status = "pending"
+status = "done"
 category = "added"
