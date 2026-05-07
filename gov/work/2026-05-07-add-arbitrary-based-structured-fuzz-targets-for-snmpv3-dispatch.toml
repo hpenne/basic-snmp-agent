@@ -1,0 +1,64 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-05-07-002"
+title = "Add Arbitrary-based structured fuzz targets for SNMPv3 dispatch"
+status = "queue"
+created = "2026-05-07"
+
+[content]
+description = """
+Add two new fuzz targets that use the Arbitrary trait to generate structured SNMPv3 message components, then BER-encode them before feeding to process_snmpv3_request.
+This complements the existing byte-level fuzz targets: the byte-level targets hammer the BER parser with mostly-invalid input, while the structured targets systematically explore the dispatch/MIB/USM code paths with valid-by-construction messages.
+
+The Arbitrary struct should cover:
+- PDU type (GetRequest, GetNextRequest, GetBulkRequest, SetRequest)
+- OID arcs (bounded length and arc values)
+- Varbind count and values
+- Message ID and request ID
+- msgFlags byte
+- USM fields: engine ID variants (matching/non-matching), user name, boots, time
+- For the auth target: authentication parameters
+
+The arbitrary crate is added to fuzz/Cargo.toml only (the fuzz workspace is excluded from the main workspace, so this has no impact on the agent binary's dependency tree).
+
+Depends on [[WI-2026-05-07-001]] (dictionary and CI time changes should land first).
+
+Implementation plan:
+- [ ] Add arbitrary crate dependency to fuzz/Cargo.toml
+- [ ] Define Arbitrary-derived struct for SNMPv3 message fields in a shared module under fuzz/
+- [ ] Implement BER encoding from the Arbitrary struct (reuse snmpv3-frames where possible)
+- [ ] Create snmpv3_request_structured fuzz target
+- [ ] Create snmpv3_request_auth_structured fuzz target
+- [ ] Add seed generation for structured targets to generate_seeds.rs
+- [ ] Register new targets in fuzz/Cargo.toml and Makefile"""
+
+[[content.acceptance_criteria]]
+text = "snmpv3_request_structured fuzz target using Arbitrary to generate valid-by-construction BER messages"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "snmpv3_request_auth_structured fuzz target with Arbitrary-generated USM auth fields"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "Arbitrary struct covers PDU type, OID arcs, varbind values, msg flags, USM parameters"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Seed corpus generated for both structured targets via generate_seeds"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Makefile fuzz targets include both new structured targets"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "arbitrary crate added to fuzz/Cargo.toml"
+status = "pending"
+category = "chore"
