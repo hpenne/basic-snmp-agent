@@ -43,6 +43,7 @@ SNMP_CLIENT_IMAGE = "snmp-client-test"
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _compose(*args: str) -> list[str]:
     return ["docker", "compose", "-f", COMPOSE_FILE, "-p", PROJECT_NAME, *args]
 
@@ -50,6 +51,7 @@ def _compose(*args: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # Hooks
 # ---------------------------------------------------------------------------
+
 
 def before_all(context):
     subprocess.run(_compose("--profile", "build-only", "build"), check=True)
@@ -71,8 +73,12 @@ def before_scenario(context, scenario):
     # Clear the trap record file so each scenario starts with an empty store.
     subprocess.run(
         [
-            "docker", "exec", context.snmptrapd_container,
-            "sh", "-c", "rm -f /traps/received.jsonl",
+            "docker",
+            "exec",
+            context.snmptrapd_container,
+            "sh",
+            "-c",
+            "rm -f /traps/received.jsonl",
         ],
         check=False,
         capture_output=True,
@@ -99,7 +105,8 @@ def after_scenario(context, scenario):
     for name in context.extra_containers:
         subprocess.run(
             ["docker", "stop", "--time", "1", name],
-            check=False, capture_output=True,
+            check=False,
+            capture_output=True,
         )
     for path in context.temp_files:
         try:

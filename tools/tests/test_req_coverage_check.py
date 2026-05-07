@@ -36,7 +36,6 @@ from req_coverage_check import (  # noqa: E402
     scan_rust_file_for_annotations,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -120,7 +119,9 @@ class TestFindProjectRoot:
 
         assert found_root == tmp_path
 
-    def test_returns_root_itself_when_gov_rfc_is_in_start_dir(self, tmp_path: Path) -> None:
+    def test_returns_root_itself_when_gov_rfc_is_in_start_dir(
+        self, tmp_path: Path
+    ) -> None:
         (tmp_path / "gov" / "rfc").mkdir(parents=True)
 
         found_root = find_project_root(tmp_path)
@@ -289,7 +290,13 @@ class TestLoadExemptions:
     def test_loads_single_exemption(self, tmp_path: Path) -> None:
         make_gap_toml(
             tmp_path,
-            [{"req": "REQ-0039", "missing": ["behave_test"], "rationale": "compile-time"}],
+            [
+                {
+                    "req": "REQ-0039",
+                    "missing": ["behave_test"],
+                    "rationale": "compile-time",
+                }
+            ],
         )
         gov_dir = tmp_path / "gov"
 
@@ -304,7 +311,11 @@ class TestLoadExemptions:
             [
                 {"req": "REQ-0039", "missing": ["behave_test"], "rationale": "x"},
                 {"req": "REQ-0043", "missing": ["behave_test"], "rationale": "y"},
-                {"req": "REQ-0046", "missing": ["rust_test", "behave_test"], "rationale": "z"},
+                {
+                    "req": "REQ-0046",
+                    "missing": ["rust_test", "behave_test"],
+                    "rationale": "z",
+                },
             ],
         )
         gov_dir = tmp_path / "gov"
@@ -370,7 +381,9 @@ class TestCheckCoverage:
 
     def test_req_with_exempted_missing_kind_passes(self) -> None:
         required = {"REQ-0039"}
-        coverage_map = {"REQ-0039": {"code", "rust_test"}}  # behave_test absent but exempted
+        coverage_map = {
+            "REQ-0039": {"code", "rust_test"}
+        }  # behave_test absent but exempted
         exemptions = {"REQ-0039": {"behave_test"}}
 
         failures = check_coverage(required, coverage_map, exemptions)
@@ -379,7 +392,9 @@ class TestCheckCoverage:
 
     def test_req_with_all_uncovered_kinds_exempted_passes(self) -> None:
         required = {"REQ-0046"}
-        coverage_map = {"REQ-0046": {"code"}}  # rust_test and behave_test absent but exempted
+        coverage_map = {
+            "REQ-0046": {"code"}
+        }  # rust_test and behave_test absent but exempted
         exemptions = {"REQ-0046": {"rust_test", "behave_test"}}
 
         failures = check_coverage(required, coverage_map, exemptions)
@@ -451,7 +466,9 @@ class TestLoadImplementedRfcs:
         assert "RFC-0003" not in rfc_ids
         assert "RFC-0004" not in rfc_ids
 
-    def test_loads_multiple_rfcs_in_test_and_stable_phases(self, tmp_path: Path) -> None:
+    def test_loads_multiple_rfcs_in_test_and_stable_phases(
+        self, tmp_path: Path
+    ) -> None:
         make_rfc_dir(tmp_path, "RFC-0001", "test", [])
         make_rfc_dir(tmp_path, "RFC-0002", "stable", [])
         make_rfc_dir(tmp_path, "RFC-0003", "impl", [])
@@ -657,7 +674,9 @@ class TestFindOrphanedAnnotations:
         assert orphaned == {"REQ-9999"}
 
     def test_returns_empty_set_when_annotated_set_is_empty(self) -> None:
-        orphaned = find_orphaned_annotations(annotated_ids=set(), required_ids={"REQ-0001"})
+        orphaned = find_orphaned_annotations(
+            annotated_ids=set(), required_ids={"REQ-0001"}
+        )
 
         assert orphaned == set()
 
@@ -670,11 +689,15 @@ class TestFindOrphanedAnnotations:
 class TestFindDuplicateReqIds:
     def test_returns_empty_dict_when_no_duplicates(self, tmp_path: Path) -> None:
         make_rfc_dir(
-            tmp_path, "RFC-0001", "test",
+            tmp_path,
+            "RFC-0001",
+            "test",
             [{"clause_id": "C-A", "text": "[REQ-0001] MUST do A."}],
         )
         make_rfc_dir(
-            tmp_path, "RFC-0002", "test",
+            tmp_path,
+            "RFC-0002",
+            "test",
             [{"clause_id": "C-B", "text": "[REQ-0002] MUST do B."}],
         )
         implemented_rfcs = load_implemented_rfcs(tmp_path / "gov")
@@ -687,11 +710,15 @@ class TestFindDuplicateReqIds:
         self, tmp_path: Path
     ) -> None:
         make_rfc_dir(
-            tmp_path, "RFC-0001", "test",
+            tmp_path,
+            "RFC-0001",
+            "test",
             [{"clause_id": "C-A", "text": "[REQ-0001] MUST do A."}],
         )
         make_rfc_dir(
-            tmp_path, "RFC-0002", "test",
+            tmp_path,
+            "RFC-0002",
+            "test",
             # REQ-0001 repeated in a second RFC — a governance error.
             [{"clause_id": "C-B", "text": "[REQ-0001] MUST also do B."}],
         )
@@ -708,7 +735,9 @@ class TestFindDuplicateReqIds:
         # The same REQ-0001 appears in two clauses of the same RFC; this is
         # not a duplicate — only cross-RFC repetition is reported.
         make_rfc_dir(
-            tmp_path, "RFC-0001", "test",
+            tmp_path,
+            "RFC-0001",
+            "test",
             [
                 {"clause_id": "C-A", "text": "[REQ-0001] MUST do A."},
                 {"clause_id": "C-B", "text": "[REQ-0001] Also MUST do A."},
@@ -788,7 +817,10 @@ class TestRunCheck:
         self, tmp_path: Path, capsys
     ) -> None:
         clauses = [
-            {"clause_id": "C-TRAPS", "text": "[REQ-0099] The agent MUST NOT send informs."}
+            {
+                "clause_id": "C-TRAPS",
+                "text": "[REQ-0099] The agent MUST NOT send informs.",
+            }
         ]
         make_rfc_dir(tmp_path, "RFC-0001", "test", clauses)
         make_gap_toml(
@@ -906,11 +938,15 @@ class TestRunCheck:
         # REQ-0001 is claimed by both RFCs — a governance error that must be
         # printed as a WARNING regardless of --strict.
         make_rfc_dir(
-            tmp_path, "RFC-0001", "test",
+            tmp_path,
+            "RFC-0001",
+            "test",
             [{"clause_id": "C-A", "text": "[REQ-0001] MUST do A."}],
         )
         make_rfc_dir(
-            tmp_path, "RFC-0002", "test",
+            tmp_path,
+            "RFC-0002",
+            "test",
             [{"clause_id": "C-B", "text": "[REQ-0001] MUST also do A."}],
         )
 

@@ -1,0 +1,31 @@
+[tool.black]
+target-version = ["py312"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["behave", "behave.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tomli"]
+ignore_missing_imports = true
+
+[tool.pylint.main]
+load-plugins = []
+
+[tool.pylint."messages control"]
+disable = [
+    "missing-module-docstring",
+    "missing-function-docstring",
+    "too-many-arguments",
+    "too-many-positional-arguments",
+    "line-too-long",
+]
+
+[tool.pylint.format]
+max-line-length = 88

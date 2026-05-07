@@ -25,10 +25,14 @@ def _snmp_client_run(context, snmp_cmd: list[str]) -> subprocess.CompletedProces
     """Run *snmp_cmd* inside a snmp-client container on the test network."""
     result = subprocess.run(
         [
-            "docker", "run", "--rm",
-            "--network", context.docker_network,
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            context.docker_network,
             context.snmp_client_image,
-        ] + snmp_cmd,
+        ]
+        + snmp_cmd,
         capture_output=True,
         text=True,
     )
@@ -46,7 +50,9 @@ def _agent_addr(context) -> str:
     return f"tcp:{context.agent_container}:10161"
 
 
-def _start_agent_container(context, name_prefix: str, image: str, ready_sentinel: str) -> str:
+def _start_agent_container(
+    context, name_prefix: str, image: str, ready_sentinel: str
+) -> str:
     """Start a test-agent container on the test network and wait for it to signal readiness.
 
     Polls docker logs rather than using a fixed sleep so the step returns as
@@ -56,9 +62,14 @@ def _start_agent_container(context, name_prefix: str, image: str, ready_sentinel
     container_name = f"{name_prefix}-{uuid.uuid4().hex[:8]}"
     subprocess.run(
         [
-            "docker", "run", "--rm", "-d",
-            "--name", container_name,
-            "--network", context.docker_network,
+            "docker",
+            "run",
+            "--rm",
+            "-d",
+            "--name",
+            container_name,
+            "--network",
+            context.docker_network,
             image,
         ],
         check=True,
@@ -108,14 +119,17 @@ def step_snmpgetnext(context, oid):
     )
 
 
-@when('snmpbulkget with non-repeaters={non_repeaters:d} and max-repetitions={max_repetitions:d} queries OID "{oid}" from the agent')
+@when(
+    'snmpbulkget with non-repeaters={non_repeaters:d} and max-repetitions={max_repetitions:d} queries OID "{oid}" from the agent'
+)
 def step_snmpbulkget(context, non_repeaters, max_repetitions, oid):
     _run_and_store(
         context,
         ["snmpbulkget"]
         + SNMPV3_FLAGS
         + [
-            "-e", context.agent_engine_id,
+            "-e",
+            context.agent_engine_id,
             f"-Cn{non_repeaters}",
             f"-Cr{max_repetitions}",
             _agent_addr(context),
@@ -124,7 +138,9 @@ def step_snmpbulkget(context, non_repeaters, max_repetitions, oid):
     )
 
 
-@when('snmpget with wrong context engine ID "{context_engine_id}" queries OID "{oid}" from the agent')
+@when(
+    'snmpget with wrong context engine ID "{context_engine_id}" queries OID "{oid}" from the agent'
+)
 def step_snmpget_wrong_context_engine_id(context, context_engine_id, oid):
     # -e sets the authoritative engine ID (correct), -E sets the contextEngineID
     # (wrong). This exercises the contextEngineID mismatch path (REQ-0104) while
@@ -133,8 +149,18 @@ def step_snmpget_wrong_context_engine_id(context, context_engine_id, oid):
         context,
         ["snmpget"]
         + SNMPV3_FLAGS
-        + ["-e", context.agent_engine_id, "-E", context_engine_id,
-           "-t", "2", "-r", "0", _agent_addr(context), oid],
+        + [
+            "-e",
+            context.agent_engine_id,
+            "-E",
+            context_engine_id,
+            "-t",
+            "2",
+            "-r",
+            "0",
+            _agent_addr(context),
+            oid,
+        ],
     )
 
 
@@ -145,9 +171,14 @@ def step_snmpget_with_context_name(context, context_name, oid):
         ["snmpget"]
         + SNMPV3_FLAGS
         + [
-            "-e", context.agent_engine_id,
-            "-n", context_name,
-            "-t", "2", "-r", "0",
+            "-e",
+            context.agent_engine_id,
+            "-n",
+            context_name,
+            "-t",
+            "2",
+            "-r",
+            "0",
             _agent_addr(context),
             oid,
         ],
@@ -160,8 +191,7 @@ def step_snmpget_no_engine_id(context, oid):
     # perform engine-ID discovery (RFC 3414 §4) before the actual GET.
     _run_and_store(
         context,
-        ["snmpget"] + SNMPV3_FLAGS + ["-t", "5", "-r", "1",
-         _agent_addr(context), oid],
+        ["snmpget"] + SNMPV3_FLAGS + ["-t", "5", "-r", "1", _agent_addr(context), oid],
     )
 
 
@@ -176,13 +206,17 @@ def step_response_contains_oid_with_value(context, oid, value):
 def step_response_contains_oid_with_exception(context, oid, exception):
     output = context.last_snmp_output
     assert oid in output, f"OID {oid!r} not found in output:\n{output}"
-    assert exception in output, f"Exception {exception!r} not found in output:\n{output}"
+    assert (
+        exception in output
+    ), f"Exception {exception!r} not found in output:\n{output}"
 
 
 @then('the SNMP response contains exception "{exception}"')
 def step_response_contains_exception(context, exception):
     output = context.last_snmp_output
-    assert exception in output, f"Exception {exception!r} not found in output:\n{output}"
+    assert (
+        exception in output
+    ), f"Exception {exception!r} not found in output:\n{output}"
 
 
 @then('the SNMP response contains OID "{oid}"')
@@ -213,7 +247,7 @@ def step_response_contains_error(context, error):
     assert error in output, f"Error {error!r} not found in output:\n{output}"
 
 
-@then('the SNMP request times out or returns an error')
+@then("the SNMP request times out or returns an error")
 def step_request_times_out_or_error(context):
     output = context.last_snmp_output
     returncode = context.last_snmp_returncode
@@ -223,7 +257,7 @@ def step_request_times_out_or_error(context):
     )
 
 
-@then('the SNMP response is a Report PDU')
+@then("the SNMP response is a Report PDU")
 def step_response_is_report_pdu(context):
     output = context.last_snmp_output
     returncode = context.last_snmp_returncode
@@ -243,7 +277,10 @@ def step_response_is_report_pdu(context):
 @given('a test-agent-mib-auth instance is running with engine ID "{engine_id}"')
 def step_start_test_agent_mib_auth(context, engine_id):
     context.agent_container = _start_agent_container(
-        context, "test-agent-mib-auth", context.test_agent_mib_auth_image, "test-agent-mib-auth ready"
+        context,
+        "test-agent-mib-auth",
+        context.test_agent_mib_auth_image,
+        "test-agent-mib-auth ready",
     )
     context.agent_engine_id = engine_id
 
@@ -253,15 +290,24 @@ def _auth_no_priv_flags(user: str, password: str, engine_id: str) -> list[str]:
     # -u sets the security name, -a the auth protocol, -A the auth passphrase,
     # -e the authoritative engine ID, -On prints OIDs in numeric form.
     return [
-        "-v3", "-l", "authNoPriv",
-        "-u", user,
-        "-a", "SHA-256", "-A", password,
-        "-e", engine_id,
+        "-v3",
+        "-l",
+        "authNoPriv",
+        "-u",
+        user,
+        "-a",
+        "SHA-256",
+        "-A",
+        password,
+        "-e",
+        engine_id,
         "-On",
     ]
 
 
-@when('snmpget at authNoPriv with user "{user}" and password "{password}" queries OID "{oid}" from the agent')
+@when(
+    'snmpget at authNoPriv with user "{user}" and password "{password}" queries OID "{oid}" from the agent'
+)
 def step_snmpget_auth_no_priv(context, user, password, oid):
     _run_and_store(
         context,
@@ -271,7 +317,9 @@ def step_snmpget_auth_no_priv(context, user, password, oid):
     )
 
 
-@when('snmpgetnext at authNoPriv with user "{user}" and password "{password}" queries OID "{oid}" from the agent')
+@when(
+    'snmpgetnext at authNoPriv with user "{user}" and password "{password}" queries OID "{oid}" from the agent'
+)
 def step_snmpgetnext_auth_no_priv(context, user, password, oid):
     _run_and_store(
         context,
@@ -281,14 +329,21 @@ def step_snmpgetnext_auth_no_priv(context, user, password, oid):
     )
 
 
-@when('snmpbulkget at authNoPriv with user "{user}" and password "{password}", non-repeaters={non_repeaters:d} and max-repetitions={max_repetitions:d} queries OID "{oid}" from the agent')
-def step_snmpbulkget_auth_no_priv(context, user, password, non_repeaters, max_repetitions, oid):
+@when(
+    'snmpbulkget at authNoPriv with user "{user}" and password "{password}", non-repeaters={non_repeaters:d} and max-repetitions={max_repetitions:d} queries OID "{oid}" from the agent'
+)
+def step_snmpbulkget_auth_no_priv(
+    context, user, password, non_repeaters, max_repetitions, oid
+):
     _run_and_store(
         context,
         ["snmpbulkget"]
         + _auth_no_priv_flags(user, password, context.agent_engine_id)
         + [
-            "-t", "5", "-r", "1",
+            "-t",
+            "5",
+            "-r",
+            "1",
             f"-Cn{non_repeaters}",
             f"-Cr{max_repetitions}",
             _agent_addr(context),
@@ -297,20 +352,43 @@ def step_snmpbulkget_auth_no_priv(context, user, password, non_repeaters, max_re
     )
 
 
-@when('snmpget at authNoPriv without explicit engine ID with user "{user}" and password "{password}" queries OID "{oid}" from the agent')
+@when(
+    'snmpget at authNoPriv without explicit engine ID with user "{user}" and password "{password}" queries OID "{oid}" from the agent'
+)
 def step_snmpget_auth_no_priv_no_engine_id(context, user, password, oid):
     # Omitting -e forces net-snmp to perform engine-ID discovery (RFC 3414 §4)
     # before sending the authenticated GET. This exercises REQ-0080: discovery
     # must succeed regardless of the configured security level.
     _run_and_store(
         context,
-        ["snmpget", "-v3", "-l", "authNoPriv", "-u", user, "-a", "SHA-256", "-A", password,
-         "-On", "-t", "5", "-r", "1", _agent_addr(context), oid],
+        [
+            "snmpget",
+            "-v3",
+            "-l",
+            "authNoPriv",
+            "-u",
+            user,
+            "-a",
+            "SHA-256",
+            "-A",
+            password,
+            "-On",
+            "-t",
+            "5",
+            "-r",
+            "1",
+            _agent_addr(context),
+            oid,
+        ],
     )
 
 
-@when('snmpget at authNoPriv with wrong context engine ID "{context_engine_id}" with user "{user}" and password "{password}" queries OID "{oid}" from the agent')
-def step_snmpget_auth_no_priv_wrong_context_engine_id(context, context_engine_id, user, password, oid):
+@when(
+    'snmpget at authNoPriv with wrong context engine ID "{context_engine_id}" with user "{user}" and password "{password}" queries OID "{oid}" from the agent'
+)
+def step_snmpget_auth_no_priv_wrong_context_engine_id(
+    context, context_engine_id, user, password, oid
+):
     # -e (from _auth_no_priv_flags) sets the authoritative engine ID correctly;
     # -E sets the contextEngineID to a wrong value to trigger REQ-0104.
     _run_and_store(
@@ -327,36 +405,67 @@ def step_snmpget_no_auth_no_priv(context, user, oid):
     # so there is no need to wait for the default retry window.
     _run_and_store(
         context,
-        ["snmpget", "-v3", "-l", "noAuthNoPriv", "-u", user, "-On",
-         "-e", context.agent_engine_id, "-t", "2", "-r", "0",
-         _agent_addr(context), oid],
+        [
+            "snmpget",
+            "-v3",
+            "-l",
+            "noAuthNoPriv",
+            "-u",
+            user,
+            "-On",
+            "-e",
+            context.agent_engine_id,
+            "-t",
+            "2",
+            "-r",
+            "0",
+            _agent_addr(context),
+            oid,
+        ],
     )
 
 
 @given('a test-agent-mib-auth-priv instance is running with engine ID "{engine_id}"')
 def step_start_test_agent_mib_auth_priv(context, engine_id):
     context.agent_container = _start_agent_container(
-        context, "test-agent-mib-auth-priv", context.test_agent_mib_auth_priv_image, "test-agent-mib-auth-priv ready"
+        context,
+        "test-agent-mib-auth-priv",
+        context.test_agent_mib_auth_priv_image,
+        "test-agent-mib-auth-priv ready",
     )
     context.agent_engine_id = engine_id
 
 
-def _auth_priv_flags(user: str, auth_password: str, priv_password: str, engine_id: str) -> list[str]:
+def _auth_priv_flags(
+    user: str, auth_password: str, priv_password: str, engine_id: str
+) -> list[str]:
     # SNMPv3 authPriv flags: HMAC-SHA-256 authentication and AES-128-CFB encryption.
     # -u sets the security name, -a the auth protocol, -A the auth passphrase,
     # -x the priv protocol, -X the priv passphrase,
     # -e the authoritative engine ID, -On prints OIDs in numeric form.
     return [
-        "-v3", "-l", "authPriv",
-        "-u", user,
-        "-a", "SHA-256", "-A", auth_password,
-        "-x", "AES", "-X", priv_password,
-        "-e", engine_id,
+        "-v3",
+        "-l",
+        "authPriv",
+        "-u",
+        user,
+        "-a",
+        "SHA-256",
+        "-A",
+        auth_password,
+        "-x",
+        "AES",
+        "-X",
+        priv_password,
+        "-e",
+        engine_id,
         "-On",
     ]
 
 
-@when('snmpget at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" queries OID "{oid}" from the agent')
+@when(
+    'snmpget at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" queries OID "{oid}" from the agent'
+)
 def step_snmpget_auth_priv(context, user, auth_password, priv_password, oid):
     _run_and_store(
         context,
@@ -366,7 +475,9 @@ def step_snmpget_auth_priv(context, user, auth_password, priv_password, oid):
     )
 
 
-@when('snmpgetnext at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" queries OID "{oid}" from the agent')
+@when(
+    'snmpgetnext at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" queries OID "{oid}" from the agent'
+)
 def step_snmpgetnext_auth_priv(context, user, auth_password, priv_password, oid):
     _run_and_store(
         context,
@@ -376,14 +487,21 @@ def step_snmpgetnext_auth_priv(context, user, auth_password, priv_password, oid)
     )
 
 
-@when('snmpbulkget at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}", non-repeaters={non_repeaters:d} and max-repetitions={max_repetitions:d} queries OID "{oid}" from the agent')
-def step_snmpbulkget_auth_priv(context, user, auth_password, priv_password, non_repeaters, max_repetitions, oid):
+@when(
+    'snmpbulkget at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}", non-repeaters={non_repeaters:d} and max-repetitions={max_repetitions:d} queries OID "{oid}" from the agent'
+)
+def step_snmpbulkget_auth_priv(
+    context, user, auth_password, priv_password, non_repeaters, max_repetitions, oid
+):
     _run_and_store(
         context,
         ["snmpbulkget"]
         + _auth_priv_flags(user, auth_password, priv_password, context.agent_engine_id)
         + [
-            "-t", "5", "-r", "1",
+            "-t",
+            "5",
+            "-r",
+            "1",
             f"-Cn{non_repeaters}",
             f"-Cr{max_repetitions}",
             _agent_addr(context),
@@ -392,23 +510,49 @@ def step_snmpbulkget_auth_priv(context, user, auth_password, priv_password, non_
     )
 
 
-@when('snmpget at authPriv without explicit engine ID with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" queries OID "{oid}" from the agent')
-def step_snmpget_auth_priv_no_engine_id(context, user, auth_password, priv_password, oid):
+@when(
+    'snmpget at authPriv without explicit engine ID with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" queries OID "{oid}" from the agent'
+)
+def step_snmpget_auth_priv_no_engine_id(
+    context, user, auth_password, priv_password, oid
+):
     # Omitting -e forces net-snmp to perform engine-ID discovery (RFC 3414 §4)
     # before sending the authenticated, encrypted GET. This exercises REQ-0080:
     # discovery must succeed regardless of the configured security level.
     _run_and_store(
         context,
-        ["snmpget", "-v3", "-l", "authPriv",
-         "-u", user,
-         "-a", "SHA-256", "-A", auth_password,
-         "-x", "AES", "-X", priv_password,
-         "-On", "-t", "5", "-r", "1", _agent_addr(context), oid],
+        [
+            "snmpget",
+            "-v3",
+            "-l",
+            "authPriv",
+            "-u",
+            user,
+            "-a",
+            "SHA-256",
+            "-A",
+            auth_password,
+            "-x",
+            "AES",
+            "-X",
+            priv_password,
+            "-On",
+            "-t",
+            "5",
+            "-r",
+            "1",
+            _agent_addr(context),
+            oid,
+        ],
     )
 
 
-@when('snmpget at authPriv with wrong context engine ID "{context_engine_id}" with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" queries OID "{oid}" from the agent')
-def step_snmpget_auth_priv_wrong_context_engine_id(context, context_engine_id, user, auth_password, priv_password, oid):
+@when(
+    'snmpget at authPriv with wrong context engine ID "{context_engine_id}" with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" queries OID "{oid}" from the agent'
+)
+def step_snmpget_auth_priv_wrong_context_engine_id(
+    context, context_engine_id, user, auth_password, priv_password, oid
+):
     # -e (from _auth_priv_flags) sets the authoritative engine ID correctly;
     # -E sets the contextEngineID to a wrong value to trigger REQ-0104.
     _run_and_store(

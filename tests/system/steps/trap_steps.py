@@ -22,10 +22,10 @@ import time
 
 from behave import given, then, when
 
-
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _dot(oid: str) -> str:
     """Return *oid* with a leading dot, matching snmptrapd's numeric output."""
@@ -59,11 +59,16 @@ def _run_agent_docker(
 
     result = subprocess.run(
         [
-            "docker", "run", "--rm",
-            "--network", context.docker_network,
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            context.docker_network,
             *env_args,
-            "-v", f"{path}:/trap.json",
-            context.test_agent_image, "/trap.json",
+            "-v",
+            f"{path}:/trap.json",
+            context.test_agent_image,
+            "/trap.json",
         ],
         capture_output=True,
         text=True,
@@ -126,6 +131,7 @@ def _poll_for_trap(
 # Given steps
 # ---------------------------------------------------------------------------
 
+
 @given("snmptrapd is running")
 def step_snmptrapd_is_running(context):
     result = subprocess.run(
@@ -134,9 +140,9 @@ def step_snmptrapd_is_running(context):
         text=True,
         check=False,
     )
-    assert result.stdout.strip(), (
-        f"snmptrapd container '{context.snmptrapd_container}' is not running"
-    )
+    assert (
+        result.stdout.strip()
+    ), f"snmptrapd container '{context.snmptrapd_container}' is not running"
 
 
 @given('a second snmptrapd named "{receiver_name}" is running')
@@ -144,9 +150,14 @@ def step_second_snmptrapd_running(context, receiver_name):
     container_name = f"snmptrapd-{receiver_name}-test"
     subprocess.run(
         [
-            "docker", "run", "-d", "--rm",
-            "--name", container_name,
-            "--network", context.docker_network,
+            "docker",
+            "run",
+            "-d",
+            "--rm",
+            "--name",
+            container_name,
+            "--network",
+            context.docker_network,
             context.snmptrapd_image,
         ],
         check=True,
@@ -162,29 +173,36 @@ def step_second_snmptrapd_running(context, receiver_name):
 # When steps
 # ---------------------------------------------------------------------------
 
+
 @when('the agent sends a trap with OID "{trap_oid}"')
 def step_send_trap(context, trap_oid):
-    _run_agent_docker(context, [
-        {
-            "request_id": 1,
-            "trap_oid": trap_oid,
-            "destinations": ["snmptrapd:162"],
-            "varbinds": [],
-        }
-    ])
+    _run_agent_docker(
+        context,
+        [
+            {
+                "request_id": 1,
+                "trap_oid": trap_oid,
+                "destinations": ["snmptrapd:162"],
+                "varbinds": [],
+            }
+        ],
+    )
 
 
 @when('the agent sends a trap with OID "{trap_oid}" and varbinds')
 def step_send_trap_with_varbinds(context, trap_oid):
     varbinds = _parse_varbind_table(context)
-    _run_agent_docker(context, [
-        {
-            "request_id": 1,
-            "trap_oid": trap_oid,
-            "destinations": ["snmptrapd:162"],
-            "varbinds": varbinds,
-        }
-    ])
+    _run_agent_docker(
+        context,
+        [
+            {
+                "request_id": 1,
+                "trap_oid": trap_oid,
+                "destinations": ["snmptrapd:162"],
+                "varbinds": varbinds,
+            }
+        ],
+    )
 
 
 def _receiver_dest(context, receiver_name: str) -> str:
@@ -194,18 +212,23 @@ def _receiver_dest(context, receiver_name: str) -> str:
     return f"{context.extra_container_map[receiver_name]}:162"
 
 
-@when('the agent sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"')
+@when(
+    'the agent sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"'
+)
 def step_send_trap_to_two_receivers(context, receiver1, receiver2, trap_oid):
     dest1 = _receiver_dest(context, receiver1)
     dest2 = _receiver_dest(context, receiver2)
-    _run_agent_docker(context, [
-        {
-            "request_id": 1,
-            "trap_oid": trap_oid,
-            "destinations": [dest1, dest2],
-            "varbinds": [],
-        }
-    ])
+    _run_agent_docker(
+        context,
+        [
+            {
+                "request_id": 1,
+                "trap_oid": trap_oid,
+                "destinations": [dest1, dest2],
+                "varbinds": [],
+            }
+        ],
+    )
 
 
 @when('the agent sends an oversized trap with OID "{trap_oid}"')
@@ -216,202 +239,269 @@ def step_send_oversized_trap(context, trap_oid):
         {"oid": f"1.3.6.1.2.1.1.{i}.0", "type": "OctetString", "data": "A" * 200}
         for i in range(10)
     ]
-    _run_agent_docker(context, [
-        {
-            "request_id": 1,
-            "trap_oid": trap_oid,
-            "destinations": ["snmptrapd:162"],
-            "varbinds": varbinds,
-        }
-    ])
+    _run_agent_docker(
+        context,
+        [
+            {
+                "request_id": 1,
+                "trap_oid": trap_oid,
+                "destinations": ["snmptrapd:162"],
+                "varbinds": varbinds,
+            }
+        ],
+    )
 
 
 @when('the agent sends a trap with OID "{trap_oid}" to no destinations')
 def step_send_trap_no_destinations(context, trap_oid):
-    _run_agent_docker(context, [
-        {
-            "request_id": 1,
-            "trap_oid": trap_oid,
-            "destinations": [],
-            "varbinds": [],
-        }
-    ])
+    _run_agent_docker(
+        context,
+        [
+            {
+                "request_id": 1,
+                "trap_oid": trap_oid,
+                "destinations": [],
+                "varbinds": [],
+            }
+        ],
+    )
 
 
-@when('the agent at authNoPriv with user "{user}" and password "{password}" sends a trap with OID "{trap_oid}"')
+@when(
+    'the agent at authNoPriv with user "{user}" and password "{password}" sends a trap with OID "{trap_oid}"'
+)
 def step_send_trap_auth_no_priv(context, user, password, trap_oid):
-    _run_agent_docker(context, [
-        {
-            "request_id": 1,
-            "trap_oid": trap_oid,
-            "destinations": ["snmptrapd:162"],
-            "varbinds": [],
-        }
-    ], env_vars={
-        "USM_ENGINE_ID": _TRAP_AUTH_NP_ENGINE_ID,
-        "USM_USER": user,
-        "USM_AUTH_PROTO": "SHA-256",
-        "USM_AUTH_PASS": password,
-        "USM_SECURITY_LEVEL": "authNoPriv",
-    })
+    _run_agent_docker(
+        context,
+        [
+            {
+                "request_id": 1,
+                "trap_oid": trap_oid,
+                "destinations": ["snmptrapd:162"],
+                "varbinds": [],
+            }
+        ],
+        env_vars={
+            "USM_ENGINE_ID": _TRAP_AUTH_NP_ENGINE_ID,
+            "USM_USER": user,
+            "USM_AUTH_PROTO": "SHA-256",
+            "USM_AUTH_PASS": password,
+            "USM_SECURITY_LEVEL": "authNoPriv",
+        },
+    )
 
 
-@when('the agent at authNoPriv with user "{user}" and password "{password}" sends a trap with OID "{trap_oid}" and varbinds')
+@when(
+    'the agent at authNoPriv with user "{user}" and password "{password}" sends a trap with OID "{trap_oid}" and varbinds'
+)
 def step_send_trap_auth_no_priv_with_varbinds(context, user, password, trap_oid):
     varbinds = _parse_varbind_table(context)
-    _run_agent_docker(context, [
-        {
-            "request_id": 1,
-            "trap_oid": trap_oid,
-            "destinations": ["snmptrapd:162"],
-            "varbinds": varbinds,
-        }
-    ], env_vars={
-        "USM_ENGINE_ID": _TRAP_AUTH_NP_ENGINE_ID,
-        "USM_USER": user,
-        "USM_AUTH_PROTO": "SHA-256",
-        "USM_AUTH_PASS": password,
-        "USM_SECURITY_LEVEL": "authNoPriv",
-    })
+    _run_agent_docker(
+        context,
+        [
+            {
+                "request_id": 1,
+                "trap_oid": trap_oid,
+                "destinations": ["snmptrapd:162"],
+                "varbinds": varbinds,
+            }
+        ],
+        env_vars={
+            "USM_ENGINE_ID": _TRAP_AUTH_NP_ENGINE_ID,
+            "USM_USER": user,
+            "USM_AUTH_PROTO": "SHA-256",
+            "USM_AUTH_PASS": password,
+            "USM_SECURITY_LEVEL": "authNoPriv",
+        },
+    )
 
 
-@when('the agent at authNoPriv with user "{user}" and password "{password}" sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"')
-def step_send_trap_auth_no_priv_to_two_receivers(context, user, password, receiver1, receiver2, trap_oid):
+@when(
+    'the agent at authNoPriv with user "{user}" and password "{password}" sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"'
+)
+def step_send_trap_auth_no_priv_to_two_receivers(
+    context, user, password, receiver1, receiver2, trap_oid
+):
     dest1 = _receiver_dest(context, receiver1)
     dest2 = _receiver_dest(context, receiver2)
-    _run_agent_docker(context, [
-        {
-            "request_id": 1,
-            "trap_oid": trap_oid,
-            "destinations": [dest1, dest2],
-            "varbinds": [],
-        }
-    ], env_vars={
-        "USM_ENGINE_ID": _TRAP_AUTH_NP_ENGINE_ID,
-        "USM_USER": user,
-        "USM_AUTH_PROTO": "SHA-256",
-        "USM_AUTH_PASS": password,
-        "USM_SECURITY_LEVEL": "authNoPriv",
-    })
+    _run_agent_docker(
+        context,
+        [
+            {
+                "request_id": 1,
+                "trap_oid": trap_oid,
+                "destinations": [dest1, dest2],
+                "varbinds": [],
+            }
+        ],
+        env_vars={
+            "USM_ENGINE_ID": _TRAP_AUTH_NP_ENGINE_ID,
+            "USM_USER": user,
+            "USM_AUTH_PROTO": "SHA-256",
+            "USM_AUTH_PASS": password,
+            "USM_SECURITY_LEVEL": "authNoPriv",
+        },
+    )
 
 
-@when('the agent at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" sends a trap with OID "{trap_oid}"')
+@when(
+    'the agent at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" sends a trap with OID "{trap_oid}"'
+)
 def step_send_trap_auth_priv(context, user, auth_password, priv_password, trap_oid):
-    _run_agent_docker(context, [
-        {
-            "request_id": 1,
-            "trap_oid": trap_oid,
-            "destinations": ["snmptrapd:162"],
-            "varbinds": [],
-        }
-    ], env_vars={
-        "USM_ENGINE_ID": _TRAP_AUTH_PRIV_ENGINE_ID,
-        "USM_USER": user,
-        "USM_AUTH_PROTO": "SHA-256",
-        "USM_AUTH_PASS": auth_password,
-        "USM_PRIV_PROTO": "AES-128",
-        "USM_PRIV_PASS": priv_password,
-        "USM_SECURITY_LEVEL": "authPriv",
-    })
+    _run_agent_docker(
+        context,
+        [
+            {
+                "request_id": 1,
+                "trap_oid": trap_oid,
+                "destinations": ["snmptrapd:162"],
+                "varbinds": [],
+            }
+        ],
+        env_vars={
+            "USM_ENGINE_ID": _TRAP_AUTH_PRIV_ENGINE_ID,
+            "USM_USER": user,
+            "USM_AUTH_PROTO": "SHA-256",
+            "USM_AUTH_PASS": auth_password,
+            "USM_PRIV_PROTO": "AES-128",
+            "USM_PRIV_PASS": priv_password,
+            "USM_SECURITY_LEVEL": "authPriv",
+        },
+    )
 
 
-@when('the agent at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" sends a trap with OID "{trap_oid}" and varbinds')
-def step_send_trap_auth_priv_with_varbinds(context, user, auth_password, priv_password, trap_oid):
+@when(
+    'the agent at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" sends a trap with OID "{trap_oid}" and varbinds'
+)
+def step_send_trap_auth_priv_with_varbinds(
+    context, user, auth_password, priv_password, trap_oid
+):
     varbinds = _parse_varbind_table(context)
-    _run_agent_docker(context, [
-        {
-            "request_id": 1,
-            "trap_oid": trap_oid,
-            "destinations": ["snmptrapd:162"],
-            "varbinds": varbinds,
-        }
-    ], env_vars={
-        "USM_ENGINE_ID": _TRAP_AUTH_PRIV_ENGINE_ID,
-        "USM_USER": user,
-        "USM_AUTH_PROTO": "SHA-256",
-        "USM_AUTH_PASS": auth_password,
-        "USM_PRIV_PROTO": "AES-128",
-        "USM_PRIV_PASS": priv_password,
-        "USM_SECURITY_LEVEL": "authPriv",
-    })
+    _run_agent_docker(
+        context,
+        [
+            {
+                "request_id": 1,
+                "trap_oid": trap_oid,
+                "destinations": ["snmptrapd:162"],
+                "varbinds": varbinds,
+            }
+        ],
+        env_vars={
+            "USM_ENGINE_ID": _TRAP_AUTH_PRIV_ENGINE_ID,
+            "USM_USER": user,
+            "USM_AUTH_PROTO": "SHA-256",
+            "USM_AUTH_PASS": auth_password,
+            "USM_PRIV_PROTO": "AES-128",
+            "USM_PRIV_PASS": priv_password,
+            "USM_SECURITY_LEVEL": "authPriv",
+        },
+    )
 
 
-@when('the agent at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"')
-def step_send_trap_auth_priv_to_two_receivers(context, user, auth_password, priv_password, receiver1, receiver2, trap_oid):
+@when(
+    'the agent at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"'
+)
+def step_send_trap_auth_priv_to_two_receivers(
+    context, user, auth_password, priv_password, receiver1, receiver2, trap_oid
+):
     dest1 = _receiver_dest(context, receiver1)
     dest2 = _receiver_dest(context, receiver2)
-    _run_agent_docker(context, [
-        {
-            "request_id": 1,
-            "trap_oid": trap_oid,
-            "destinations": [dest1, dest2],
-            "varbinds": [],
-        }
-    ], env_vars={
-        "USM_ENGINE_ID": _TRAP_AUTH_PRIV_ENGINE_ID,
-        "USM_USER": user,
-        "USM_AUTH_PROTO": "SHA-256",
-        "USM_AUTH_PASS": auth_password,
-        "USM_PRIV_PROTO": "AES-128",
-        "USM_PRIV_PASS": priv_password,
-        "USM_SECURITY_LEVEL": "authPriv",
-    })
+    _run_agent_docker(
+        context,
+        [
+            {
+                "request_id": 1,
+                "trap_oid": trap_oid,
+                "destinations": [dest1, dest2],
+                "varbinds": [],
+            }
+        ],
+        env_vars={
+            "USM_ENGINE_ID": _TRAP_AUTH_PRIV_ENGINE_ID,
+            "USM_USER": user,
+            "USM_AUTH_PROTO": "SHA-256",
+            "USM_AUTH_PASS": auth_password,
+            "USM_PRIV_PROTO": "AES-128",
+            "USM_PRIV_PASS": priv_password,
+            "USM_SECURITY_LEVEL": "authPriv",
+        },
+    )
 
 
 @when('the agent at noAuthNoPriv with user "{user}" sends a trap with OID "{trap_oid}"')
 def step_send_trap_no_auth_no_priv(context, user, trap_oid):
-    _run_agent_docker(context, [
-        {
-            "request_id": 1,
-            "trap_oid": trap_oid,
-            "destinations": ["snmptrapd:162"],
-            "varbinds": [],
-        }
-    ], env_vars={
-        "USM_ENGINE_ID": _TRAP_NOAUTH_ENGINE_ID,
-        "USM_USER": user,
-        "USM_SECURITY_LEVEL": "noAuthNoPriv",
-    })
+    _run_agent_docker(
+        context,
+        [
+            {
+                "request_id": 1,
+                "trap_oid": trap_oid,
+                "destinations": ["snmptrapd:162"],
+                "varbinds": [],
+            }
+        ],
+        env_vars={
+            "USM_ENGINE_ID": _TRAP_NOAUTH_ENGINE_ID,
+            "USM_USER": user,
+            "USM_SECURITY_LEVEL": "noAuthNoPriv",
+        },
+    )
 
 
-@when('the agent at noAuthNoPriv with user "{user}" sends a trap with OID "{trap_oid}" and varbinds')
+@when(
+    'the agent at noAuthNoPriv with user "{user}" sends a trap with OID "{trap_oid}" and varbinds'
+)
 def step_send_trap_no_auth_no_priv_with_varbinds(context, user, trap_oid):
     varbinds = _parse_varbind_table(context)
-    _run_agent_docker(context, [
-        {
-            "request_id": 1,
-            "trap_oid": trap_oid,
-            "destinations": ["snmptrapd:162"],
-            "varbinds": varbinds,
-        }
-    ], env_vars={
-        "USM_ENGINE_ID": _TRAP_NOAUTH_ENGINE_ID,
-        "USM_USER": user,
-        "USM_SECURITY_LEVEL": "noAuthNoPriv",
-    })
+    _run_agent_docker(
+        context,
+        [
+            {
+                "request_id": 1,
+                "trap_oid": trap_oid,
+                "destinations": ["snmptrapd:162"],
+                "varbinds": varbinds,
+            }
+        ],
+        env_vars={
+            "USM_ENGINE_ID": _TRAP_NOAUTH_ENGINE_ID,
+            "USM_USER": user,
+            "USM_SECURITY_LEVEL": "noAuthNoPriv",
+        },
+    )
 
 
-@when('the agent at noAuthNoPriv with user "{user}" sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"')
-def step_send_trap_no_auth_no_priv_to_two_receivers(context, user, receiver1, receiver2, trap_oid):
+@when(
+    'the agent at noAuthNoPriv with user "{user}" sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"'
+)
+def step_send_trap_no_auth_no_priv_to_two_receivers(
+    context, user, receiver1, receiver2, trap_oid
+):
     dest1 = _receiver_dest(context, receiver1)
     dest2 = _receiver_dest(context, receiver2)
-    _run_agent_docker(context, [
-        {
-            "request_id": 1,
-            "trap_oid": trap_oid,
-            "destinations": [dest1, dest2],
-            "varbinds": [],
-        }
-    ], env_vars={
-        "USM_ENGINE_ID": _TRAP_NOAUTH_ENGINE_ID,
-        "USM_USER": user,
-        "USM_SECURITY_LEVEL": "noAuthNoPriv",
-    })
+    _run_agent_docker(
+        context,
+        [
+            {
+                "request_id": 1,
+                "trap_oid": trap_oid,
+                "destinations": [dest1, dest2],
+                "varbinds": [],
+            }
+        ],
+        env_vars={
+            "USM_ENGINE_ID": _TRAP_NOAUTH_ENGINE_ID,
+            "USM_USER": user,
+            "USM_SECURITY_LEVEL": "noAuthNoPriv",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
 # Then steps
 # ---------------------------------------------------------------------------
+
 
 @then('snmptrapd receives a trap named "{name}"')
 def step_snmptrapd_receives_trap(context, name):
@@ -463,9 +553,9 @@ def step_trap_has_varbind(context, name, oid):
 
 @then('the agent reports an error containing "{substring}"')
 def step_agent_reports_error(context, substring):
-    assert substring in context.last_agent_output, (
-        f"Expected '{substring}' in agent output.\nOutput:\n{context.last_agent_output}"
-    )
+    assert (
+        substring in context.last_agent_output
+    ), f"Expected '{substring}' in agent output.\nOutput:\n{context.last_agent_output}"
 
 
 @then("snmptrapd receives no traps")
@@ -473,7 +563,8 @@ def step_snmptrapd_receives_no_traps(context):
     # Wait briefly to give any errant datagram time to arrive and be recorded.
     time.sleep(1)
     traps = _read_traps(context.snmptrapd_container)
-    assert not traps, (
-        f"Expected no traps but snmptrapd recorded {len(traps)}:\n"
-        + "\n".join(json.dumps(t) for t in traps)
+    assert (
+        not traps
+    ), f"Expected no traps but snmptrapd recorded {len(traps)}:\n" + "\n".join(
+        json.dumps(t) for t in traps
     )

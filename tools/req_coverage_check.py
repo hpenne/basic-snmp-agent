@@ -132,7 +132,9 @@ def collect_requirements_from_rfc(rfc: ImplementedRfc) -> set[str]:
             clause_path = rfc.rfc_dir / clause_relative_path
             with clause_path.open("rb") as toml_file:
                 clause_toml = tomllib.load(toml_file)
-            req_ids |= extract_req_ids_from_clause_text(clause_toml.get("content", {}).get("text", ""))
+            req_ids |= extract_req_ids_from_clause_text(
+                clause_toml.get("content", {}).get("text", "")
+            )
     return req_ids
 
 
