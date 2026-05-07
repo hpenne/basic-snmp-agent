@@ -10,9 +10,13 @@ Lifecycle:
 - after_all:       Tear down all Compose services.
 """
 
+from __future__ import annotations
+
 import os
 import subprocess
 import time
+
+from context_protocol import SnmpAgentContext
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -53,7 +57,7 @@ def _compose(*args: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def before_all(context):
+def before_all(context: SnmpAgentContext) -> None:
     subprocess.run(_compose("--profile", "build-only", "build"), check=True)
     subprocess.run(_compose("up", "-d", "snmptrapd"), check=True)
     # Allow snmptrapd time to bind its UDP socket before tests send traps.
@@ -69,7 +73,7 @@ def before_all(context):
     context.snmp_client_image = SNMP_CLIENT_IMAGE
 
 
-def before_scenario(context, scenario):
+def before_scenario(context: SnmpAgentContext, scenario: object) -> None:
     # Clear the trap record file so each scenario starts with an empty store.
     subprocess.run(
         [
@@ -95,7 +99,7 @@ def before_scenario(context, scenario):
     context.agent_container = None
 
 
-def after_scenario(context, scenario):
+def after_scenario(context: SnmpAgentContext, scenario: object) -> None:
     if context.agent_container is not None:
         subprocess.run(
             ["docker", "stop", "--time", "1", context.agent_container],
@@ -115,7 +119,7 @@ def after_scenario(context, scenario):
             pass
 
 
-def after_all(context):
+def after_all(context: SnmpAgentContext) -> None:
     subprocess.run(
         _compose("down", "--remove-orphans"), check=False, capture_output=True
     )

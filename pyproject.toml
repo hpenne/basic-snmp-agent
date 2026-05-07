@@ -8,12 +8,18 @@ warn_return_any = true
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["behave", "behave.*"]
+module = ["behave"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["tomli"]
 ignore_missing_imports = true
+
+# The @given/@when/@then decorators from behave are untyped; suppress the
+# resulting untyped-decorator errors in all Behave step and environment files.
+[[tool.mypy.overrides]]
+module = ["environment", "mib_read_steps", "trap_steps"]
+disable_error_code = ["untyped-decorator"]
 
 [tool.pylint.main]
 load-plugins = []

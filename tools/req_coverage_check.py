@@ -18,13 +18,13 @@ import argparse
 import re
 import sys
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 try:
     import tomllib
 except ImportError:
     try:
-        import tomli as tomllib  # type: ignore[no-reuse-def]
+        import tomli as tomllib  # type: ignore[no-redef]
     except ImportError as exc:
         raise ImportError(
             "Python 3.11+ is required, or install the 'tomli' package "
@@ -51,7 +51,7 @@ class ImplementedRfc(NamedTuple):
     """Pairs an RFC's filesystem directory with its parsed TOML record."""
 
     rfc_dir: Path
-    record: dict
+    record: dict[str, Any]
 
 
 # ---------------------------------------------------------------------------

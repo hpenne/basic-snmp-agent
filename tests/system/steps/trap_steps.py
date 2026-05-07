@@ -14,13 +14,18 @@ Design principles
   on Linux CI runners alike.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import subprocess
 import tempfile
 import time
+from typing import Any
 
 from behave import given, then, when
+
+from context_protocol import SnmpAgentContext
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -43,10 +48,10 @@ _TRAP_NOAUTH_ENGINE_ID = "80001f8804747261702d6e6f61757468"
 
 
 def _run_agent_docker(
-    context,
-    trap_defs: list,
-    env_vars: dict | None = None,
-) -> subprocess.CompletedProcess:
+    context: SnmpAgentContext,
+    trap_defs: list[dict[str, Any]],
+    env_vars: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     """Serialise *trap_defs* to a temp JSON file and run the test-agent container."""
     fd, path = tempfile.mkstemp(suffix=".json")
     context.temp_files.append(path)
@@ -77,19 +82,19 @@ def _run_agent_docker(
     return result
 
 
-def _parse_varbind_table(context) -> list[dict]:
+def _parse_varbind_table(context: SnmpAgentContext) -> list[dict[str, str | int]]:
     """Convert a Behave table of (oid, type, value) rows into trap-definition varbinds."""
-    varbinds = []
+    varbinds: list[dict[str, str | int]] = []
     for row in context.table:
         try:
-            value = int(row["value"])
+            value: str | int = int(row["value"])
         except ValueError:
             value = row["value"]
         varbinds.append({"oid": row["oid"], "type": row["type"], "data": value})
     return varbinds
 
 
-def _read_traps(container: str) -> list[dict]:
+def _read_traps(container: str) -> list[dict[str, Any]]:
     """Return all trap records from *container*'s JSON store, or [] if none."""
     result = subprocess.run(
         ["docker", "exec", container, "cat", "/traps/received.jsonl"],
@@ -97,7 +102,7 @@ def _read_traps(container: str) -> list[dict]:
         text=True,
         check=False,
     )
-    traps = []
+    traps: list[dict[str, Any]] = []
     for line in result.stdout.splitlines():
         line = line.strip()
         if line:
@@ -113,7 +118,7 @@ def _poll_for_trap(
     attempts: int = 10,
     interval: float = 0.5,
     min_count: int = 1,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Poll *container*'s trap store until at least *min_count* traps appear.
 
     Returns all traps received so far once the threshold is met, or the last
@@ -133,7 +138,7 @@ def _poll_for_trap(
 
 
 @given("snmptrapd is running")
-def step_snmptrapd_is_running(context):
+def step_snmptrapd_is_running(context: SnmpAgentContext) -> None:
     result = subprocess.run(
         ["docker", "ps", "-q", "-f", f"name={context.snmptrapd_container}"],
         capture_output=True,
@@ -146,7 +151,9 @@ def step_snmptrapd_is_running(context):
 
 
 @given('a second snmptrapd named "{receiver_name}" is running')
-def step_second_snmptrapd_running(context, receiver_name):
+def step_second_snmptrapd_running(
+    context: SnmpAgentContext, receiver_name: str
+) -> None:
     container_name = f"snmptrapd-{receiver_name}-test"
     subprocess.run(
         [
@@ -175,7 +182,7 @@ def step_second_snmptrapd_running(context, receiver_name):
 
 
 @when('the agent sends a trap with OID "{trap_oid}"')
-def step_send_trap(context, trap_oid):
+def step_send_trap(context: SnmpAgentContext, trap_oid: str) -> None:
     _run_agent_docker(
         context,
         [
@@ -190,7 +197,7 @@ def step_send_trap(context, trap_oid):
 
 
 @when('the agent sends a trap with OID "{trap_oid}" and varbinds')
-def step_send_trap_with_varbinds(context, trap_oid):
+def step_send_trap_with_varbinds(context: SnmpAgentContext, trap_oid: str) -> None:
     varbinds = _parse_varbind_table(context)
     _run_agent_docker(
         context,
@@ -205,7 +212,7 @@ def step_send_trap_with_varbinds(context, trap_oid):
     )
 
 
-def _receiver_dest(context, receiver_name: str) -> str:
+def _receiver_dest(context: SnmpAgentContext, receiver_name: str) -> str:
     """Return the ``host:port`` destination address for a named receiver."""
     if receiver_name == "snmptrapd":
         return "snmptrapd:162"
@@ -215,7 +222,9 @@ def _receiver_dest(context, receiver_name: str) -> str:
 @when(
     'the agent sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"'
 )
-def step_send_trap_to_two_receivers(context, receiver1, receiver2, trap_oid):
+def step_send_trap_to_two_receivers(
+    context: SnmpAgentContext, receiver1: str, receiver2: str, trap_oid: str
+) -> None:
     dest1 = _receiver_dest(context, receiver1)
     dest2 = _receiver_dest(context, receiver2)
     _run_agent_docker(
@@ -232,7 +241,7 @@ def step_send_trap_to_two_receivers(context, receiver1, receiver2, trap_oid):
 
 
 @when('the agent sends an oversized trap with OID "{trap_oid}"')
-def step_send_oversized_trap(context, trap_oid):
+def step_send_oversized_trap(context: SnmpAgentContext, trap_oid: str) -> None:
     # 10 × 200-byte OctetString varbinds produce ~2 000+ bytes after BER
     # overhead, comfortably exceeding the 1 500-byte MTU cap.
     varbinds = [
@@ -253,7 +262,7 @@ def step_send_oversized_trap(context, trap_oid):
 
 
 @when('the agent sends a trap with OID "{trap_oid}" to no destinations')
-def step_send_trap_no_destinations(context, trap_oid):
+def step_send_trap_no_destinations(context: SnmpAgentContext, trap_oid: str) -> None:
     _run_agent_docker(
         context,
         [
@@ -270,7 +279,9 @@ def step_send_trap_no_destinations(context, trap_oid):
 @when(
     'the agent at authNoPriv with user "{user}" and password "{password}" sends a trap with OID "{trap_oid}"'
 )
-def step_send_trap_auth_no_priv(context, user, password, trap_oid):
+def step_send_trap_auth_no_priv(
+    context: SnmpAgentContext, user: str, password: str, trap_oid: str
+) -> None:
     _run_agent_docker(
         context,
         [
@@ -294,7 +305,9 @@ def step_send_trap_auth_no_priv(context, user, password, trap_oid):
 @when(
     'the agent at authNoPriv with user "{user}" and password "{password}" sends a trap with OID "{trap_oid}" and varbinds'
 )
-def step_send_trap_auth_no_priv_with_varbinds(context, user, password, trap_oid):
+def step_send_trap_auth_no_priv_with_varbinds(
+    context: SnmpAgentContext, user: str, password: str, trap_oid: str
+) -> None:
     varbinds = _parse_varbind_table(context)
     _run_agent_docker(
         context,
@@ -320,8 +333,13 @@ def step_send_trap_auth_no_priv_with_varbinds(context, user, password, trap_oid)
     'the agent at authNoPriv with user "{user}" and password "{password}" sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"'
 )
 def step_send_trap_auth_no_priv_to_two_receivers(
-    context, user, password, receiver1, receiver2, trap_oid
-):
+    context: SnmpAgentContext,
+    user: str,
+    password: str,
+    receiver1: str,
+    receiver2: str,
+    trap_oid: str,
+) -> None:
     dest1 = _receiver_dest(context, receiver1)
     dest2 = _receiver_dest(context, receiver2)
     _run_agent_docker(
@@ -347,7 +365,13 @@ def step_send_trap_auth_no_priv_to_two_receivers(
 @when(
     'the agent at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" sends a trap with OID "{trap_oid}"'
 )
-def step_send_trap_auth_priv(context, user, auth_password, priv_password, trap_oid):
+def step_send_trap_auth_priv(
+    context: SnmpAgentContext,
+    user: str,
+    auth_password: str,
+    priv_password: str,
+    trap_oid: str,
+) -> None:
     _run_agent_docker(
         context,
         [
@@ -374,8 +398,12 @@ def step_send_trap_auth_priv(context, user, auth_password, priv_password, trap_o
     'the agent at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" sends a trap with OID "{trap_oid}" and varbinds'
 )
 def step_send_trap_auth_priv_with_varbinds(
-    context, user, auth_password, priv_password, trap_oid
-):
+    context: SnmpAgentContext,
+    user: str,
+    auth_password: str,
+    priv_password: str,
+    trap_oid: str,
+) -> None:
     varbinds = _parse_varbind_table(context)
     _run_agent_docker(
         context,
@@ -403,8 +431,14 @@ def step_send_trap_auth_priv_with_varbinds(
     'the agent at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"'
 )
 def step_send_trap_auth_priv_to_two_receivers(
-    context, user, auth_password, priv_password, receiver1, receiver2, trap_oid
-):
+    context: SnmpAgentContext,
+    user: str,
+    auth_password: str,
+    priv_password: str,
+    receiver1: str,
+    receiver2: str,
+    trap_oid: str,
+) -> None:
     dest1 = _receiver_dest(context, receiver1)
     dest2 = _receiver_dest(context, receiver2)
     _run_agent_docker(
@@ -430,7 +464,9 @@ def step_send_trap_auth_priv_to_two_receivers(
 
 
 @when('the agent at noAuthNoPriv with user "{user}" sends a trap with OID "{trap_oid}"')
-def step_send_trap_no_auth_no_priv(context, user, trap_oid):
+def step_send_trap_no_auth_no_priv(
+    context: SnmpAgentContext, user: str, trap_oid: str
+) -> None:
     _run_agent_docker(
         context,
         [
@@ -452,7 +488,9 @@ def step_send_trap_no_auth_no_priv(context, user, trap_oid):
 @when(
     'the agent at noAuthNoPriv with user "{user}" sends a trap with OID "{trap_oid}" and varbinds'
 )
-def step_send_trap_no_auth_no_priv_with_varbinds(context, user, trap_oid):
+def step_send_trap_no_auth_no_priv_with_varbinds(
+    context: SnmpAgentContext, user: str, trap_oid: str
+) -> None:
     varbinds = _parse_varbind_table(context)
     _run_agent_docker(
         context,
@@ -476,8 +514,12 @@ def step_send_trap_no_auth_no_priv_with_varbinds(context, user, trap_oid):
     'the agent at noAuthNoPriv with user "{user}" sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"'
 )
 def step_send_trap_no_auth_no_priv_to_two_receivers(
-    context, user, receiver1, receiver2, trap_oid
-):
+    context: SnmpAgentContext,
+    user: str,
+    receiver1: str,
+    receiver2: str,
+    trap_oid: str,
+) -> None:
     dest1 = _receiver_dest(context, receiver1)
     dest2 = _receiver_dest(context, receiver2)
     _run_agent_docker(
@@ -504,14 +546,16 @@ def step_send_trap_no_auth_no_priv_to_two_receivers(
 
 
 @then('snmptrapd receives a trap named "{name}"')
-def step_snmptrapd_receives_trap(context, name):
+def step_snmptrapd_receives_trap(context: SnmpAgentContext, name: str) -> None:
     traps = _poll_for_trap(context.snmptrapd_container)
     assert traps, "snmptrapd did not receive any trap within the timeout"
     context.named_traps[name] = traps[0]
 
 
 @then('"{receiver_name}" receives a trap named "{name}"')
-def step_receiver_receives_trap(context, receiver_name, name):
+def step_receiver_receives_trap(
+    context: SnmpAgentContext, receiver_name: str, name: str
+) -> None:
     container = context.extra_container_map[receiver_name]
     traps = _poll_for_trap(container)
     assert traps, (
@@ -522,7 +566,9 @@ def step_receiver_receives_trap(context, receiver_name, name):
 
 
 @then('trap "{name}" has varbind "{oid}" with value "{expected_value}"')
-def step_trap_has_varbind_with_value(context, name, oid, expected_value):
+def step_trap_has_varbind_with_value(
+    context: SnmpAgentContext, name: str, oid: str, expected_value: str
+) -> None:
     trap = context.named_traps[name]
     dot_oid = _dot(oid)
     dot_val = _dot(expected_value) if "." in expected_value else expected_value
@@ -541,7 +587,7 @@ def step_trap_has_varbind_with_value(context, name, oid, expected_value):
 
 
 @then('trap "{name}" has varbind "{oid}"')
-def step_trap_has_varbind(context, name, oid):
+def step_trap_has_varbind(context: SnmpAgentContext, name: str, oid: str) -> None:
     trap = context.named_traps[name]
     dot_oid = _dot(oid)
     matching = [v for v in trap["varbinds"] if v["oid"] == dot_oid]
@@ -552,14 +598,14 @@ def step_trap_has_varbind(context, name, oid):
 
 
 @then('the agent reports an error containing "{substring}"')
-def step_agent_reports_error(context, substring):
+def step_agent_reports_error(context: SnmpAgentContext, substring: str) -> None:
     assert (
         substring in context.last_agent_output
     ), f"Expected '{substring}' in agent output.\nOutput:\n{context.last_agent_output}"
 
 
 @then("snmptrapd receives no traps")
-def step_snmptrapd_receives_no_traps(context):
+def step_snmptrapd_receives_no_traps(context: SnmpAgentContext) -> None:
     # Wait briefly to give any errant datagram time to arrive and be recorded.
     time.sleep(1)
     traps = _read_traps(context.snmptrapd_container)

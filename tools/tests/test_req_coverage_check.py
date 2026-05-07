@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -45,7 +46,7 @@ def make_rfc_dir(
     tmp_path: Path,
     rfc_id: str,
     phase: str,
-    clauses: list[dict],
+    clauses: list[dict[str, str]],
 ) -> Path:
     """Create a minimal RFC directory structure under *tmp_path* and return it."""
     rfc_dir = tmp_path / "gov" / "rfc" / rfc_id
@@ -82,7 +83,7 @@ def make_rfc_dir(
     return rfc_dir
 
 
-def make_gap_toml(tmp_path: Path, entries: list[dict]) -> Path:
+def make_gap_toml(tmp_path: Path, entries: list[dict[str, Any]]) -> Path:
     """Write a ``gov/req-coverage-gaps.toml`` file and return its path."""
     gov_dir = tmp_path / "gov"
     gov_dir.mkdir(parents=True, exist_ok=True)
@@ -98,7 +99,7 @@ def make_gap_toml(tmp_path: Path, entries: list[dict]) -> Path:
     return gov_dir / "req-coverage-gaps.toml"
 
 
-def _load_toml(path: Path) -> dict:
+def _load_toml(path: Path) -> dict[str, Any]:
     """Open *path* in binary mode and return the parsed TOML document."""
     with path.open("rb") as toml_file:
         return tomllib.load(toml_file)
@@ -787,7 +788,7 @@ class TestRunCheck:
         )
 
     def test_passes_when_all_requirements_are_fully_covered(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         self._build_full_project(tmp_path)
 
@@ -798,7 +799,7 @@ class TestRunCheck:
         assert "PASSED" in output
 
     def test_fails_when_a_requirement_is_missing_coverage(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         clauses = [
             {"clause_id": "C-TRAPS", "text": "[REQ-0099] The agent MUST send traps."}
@@ -814,7 +815,7 @@ class TestRunCheck:
         assert "FAILED" in output
 
     def test_passes_when_missing_coverage_is_fully_exempted(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         clauses = [
             {
@@ -841,7 +842,7 @@ class TestRunCheck:
         assert "PASSED" in output
 
     def test_reports_correct_rfc_and_requirement_counts(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         self._build_full_project(tmp_path)
 
@@ -852,7 +853,7 @@ class TestRunCheck:
         assert "2 requirements" in output
 
     def test_pre_completion_rfc_requirements_are_not_checked(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         # RFCs in spec, impl, or draft phases are not yet complete — their
         # requirements must not be checked.
@@ -868,7 +869,7 @@ class TestRunCheck:
         assert "0 implemented RFC(s)" in output
 
     def test_strict_mode_fails_on_orphaned_annotation(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         # RFC defines only REQ-0001, but the Rust file also annotates REQ-9999.
         clauses = [{"clause_id": "C-A", "text": "[REQ-0001] MUST do something."}]
@@ -895,7 +896,7 @@ class TestRunCheck:
         assert "ORPHAN REQ-9999" in output
 
     def test_strict_mode_passes_when_no_orphaned_annotations(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         self._build_full_project(tmp_path)
 
@@ -906,7 +907,7 @@ class TestRunCheck:
         assert "ORPHAN" not in output
 
     def test_non_strict_mode_ignores_orphaned_annotations(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         # REQ-9999 is annotated but undefined; without --strict this must not fail.
         clauses = [{"clause_id": "C-A", "text": "[REQ-0001] MUST do something."}]
@@ -933,7 +934,7 @@ class TestRunCheck:
         assert "ORPHAN" not in output
 
     def test_warns_on_duplicate_req_ids_across_rfcs(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         # REQ-0001 is claimed by both RFCs — a governance error that must be
         # printed as a WARNING regardless of --strict.
