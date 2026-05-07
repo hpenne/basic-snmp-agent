@@ -1,9 +1,14 @@
-.PHONY: test trace clippy rust-test python-test behave-test fuzz-gen-seeds fuzz-1s fuzz-1m fuzz-10m fuzz-30m
+PYTHON_FILES := tools/req_coverage_check.py tools/tests/test_req_coverage_check.py \
+	tests/system/context_protocol.py tests/system/environment.py \
+	tests/system/steps/mib_read_steps.py tests/system/steps/trap_steps.py \
+	tests/system/docker/snmptrapd/record-trap.py
+
+.PHONY: test trace clippy rust-test python-test python-lint behave-test fuzz-gen-seeds fuzz-1s fuzz-1m fuzz-10m fuzz-30m
 
 # Run the full test suite: lint, Rust unit/doc tests, Python unit tests, and Behave system tests.
 test: clippy rust-test python-test behave-test
 
-pre-commit: clippy rust-test python-test fuzz-gen-seeds fuzz-1s trace check-format
+pre-commit: clippy rust-test python-test python-lint fuzz-gen-seeds fuzz-1s trace check-format
 
 # Lint with pedantic Clippy warnings.
 clippy:
@@ -17,6 +22,12 @@ rust-test:
 # Python unit tests for the tooling scripts.
 python-test:
 	python3 -m pytest tools/tests/ -v
+
+# Python linting: formatting check, type checking, and static analysis.
+python-lint:
+	python3 -m black --check $(PYTHON_FILES)
+	python3 -m mypy $(PYTHON_FILES)
+	python3 -m pylint $(PYTHON_FILES)
 
 # Behave system tests (requires Docker).
 behave-test:
