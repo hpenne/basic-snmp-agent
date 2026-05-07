@@ -22,7 +22,9 @@ The Arbitrary struct should cover:
 
 The arbitrary crate is added to fuzz/Cargo.toml only (the fuzz workspace is excluded from the main workspace, so this has no impact on the agent binary's dependency tree).
 
-Depends on [[WI-2026-05-07-001]] (dictionary and CI time changes should land first).
+Also reduce the ClusterFuzzLite daily batch run from 600s to 300s to avoid exhausting CI CPU budget now that additional fuzz targets are being added.
+
+Depends on [[WI-2026-05-07-001]] (dictionary should land first).
 
 Implementation plan:
 - [ ] Add arbitrary crate dependency to fuzz/Cargo.toml
@@ -31,7 +33,8 @@ Implementation plan:
 - [ ] Create snmpv3_request_structured fuzz target
 - [ ] Create snmpv3_request_auth_structured fuzz target
 - [ ] Add seed generation for structured targets to generate_seeds.rs
-- [ ] Register new targets in fuzz/Cargo.toml and Makefile"""
+- [ ] Register new targets in fuzz/Cargo.toml and Makefile
+- [ ] Update cflite_daily.yml fuzz-seconds from 600 to 300"""
 
 [[content.acceptance_criteria]]
 text = "snmpv3_request_structured fuzz target using Arbitrary to generate valid-by-construction BER messages"
@@ -62,3 +65,8 @@ category = "chore"
 text = "arbitrary crate added to fuzz/Cargo.toml"
 status = "pending"
 category = "chore"
+
+[[content.acceptance_criteria]]
+text = "ClusterFuzzLite daily fuzz-seconds reduced from 600 to 300"
+status = "pending"
+category = "fixed"
