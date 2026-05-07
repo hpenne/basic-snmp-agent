@@ -73,7 +73,7 @@ def before_all(context: SnmpAgentContext) -> None:
     context.snmp_client_image = SNMP_CLIENT_IMAGE
 
 
-def before_scenario(context: SnmpAgentContext, scenario: object) -> None:
+def before_scenario(context: SnmpAgentContext, _scenario: object) -> None:
     # Clear the trap record file so each scenario starts with an empty store.
     subprocess.run(
         [
@@ -99,7 +99,7 @@ def before_scenario(context: SnmpAgentContext, scenario: object) -> None:
     context.agent_container = None
 
 
-def after_scenario(context: SnmpAgentContext, scenario: object) -> None:
+def after_scenario(context: SnmpAgentContext, _scenario: object) -> None:
     if context.agent_container is not None:
         subprocess.run(
             ["docker", "stop", "--time", "1", context.agent_container],
@@ -119,7 +119,7 @@ def after_scenario(context: SnmpAgentContext, scenario: object) -> None:
             pass
 
 
-def after_all(context: SnmpAgentContext) -> None:
+def after_all(_context: SnmpAgentContext) -> None:
     subprocess.run(
         _compose("down", "--remove-orphans"), check=False, capture_output=True
     )

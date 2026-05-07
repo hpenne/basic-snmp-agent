@@ -31,7 +31,9 @@ disable = [
     "too-many-arguments",
     "too-many-positional-arguments",
     "line-too-long",
+    "missing-class-docstring",
+    "too-few-public-methods",
+    "duplicate-code",
+    "use-implicit-booleaness-not-comparison",
 ]
 
-[tool.pylint.format]
-max-line-length = 88

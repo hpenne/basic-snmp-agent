@@ -11,7 +11,11 @@ import subprocess
 import time
 import uuid
 
-from behave import given, then, when
+from behave import (  # pylint: disable=no-name-in-module  # behave uses lazy imports
+    given,
+    then,
+    when,
+)
 
 from context_protocol import SnmpAgentContext
 
@@ -41,6 +45,7 @@ def _snmp_client_run(
         + snmp_cmd,
         capture_output=True,
         text=True,
+        check=False,
     )
     return result
 
@@ -88,6 +93,7 @@ def _start_agent_container(
             ["docker", "logs", container_name],
             capture_output=True,
             text=True,
+            check=False,
         )
         if ready_sentinel in logs.stdout + logs.stderr:
             return container_name

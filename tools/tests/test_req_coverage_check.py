@@ -16,7 +16,7 @@ import pytest
 # Allow importing the script from the parent directory without installing it.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from req_coverage_check import (  # noqa: E402
+from req_coverage_check import (  # noqa: E402  # pylint: disable=wrong-import-position
     COVERAGE_KINDS,
     ImplementedRfc,
     build_coverage_map,

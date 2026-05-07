@@ -342,7 +342,8 @@ def find_orphaned_annotations(
 # ---------------------------------------------------------------------------
 
 
-def run_check(
+# Each local has a distinct role in the linear orchestration; splitting would obscure the flow.
+def run_check(  # pylint: disable=too-many-locals
     project_root: Path,
     strict: bool = False,
     force_rfc_ids: set[str] | None = None,

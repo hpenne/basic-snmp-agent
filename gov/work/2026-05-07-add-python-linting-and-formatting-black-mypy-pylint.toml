@@ -22,7 +22,7 @@ Implementation plan:
 - [x] Run black and commit the one-shot reformatting
 - [x] Define a typed context Protocol for Behave steps (declares attributes set on context with their known types)
 - [x] Add type annotations to all functions and get mypy passing
-- [ ] Get pylint passing (fix findings or add targeted disables with justification)
+- [x] Get pylint passing (fix findings or add targeted disables with justification)
 - [ ] Add Makefile targets: black --check, mypy, pylint (integrate into pre-commit)
 - [ ] Add black/mypy/pylint to CI workflow"""
 

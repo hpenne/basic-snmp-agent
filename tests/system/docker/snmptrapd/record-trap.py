@@ -18,6 +18,8 @@ so that behave step definitions can read and assert on trap content without
 parsing unstructured log output.
 """
 
+# pylint: disable=invalid-name  # Hyphenated module name required by Docker handler convention.
+
 from __future__ import annotations
 
 import json
@@ -56,6 +58,6 @@ record: dict[str, str | list[dict[str, str]]] = {
 }
 
 os.makedirs("/traps", exist_ok=True)
-with open("/traps/received.jsonl", "a") as fh:
+with open("/traps/received.jsonl", "a", encoding="utf-8") as fh:
     fh.write(json.dumps(record) + "\n")
     fh.flush()

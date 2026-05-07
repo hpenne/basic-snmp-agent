@@ -23,7 +23,11 @@ import tempfile
 import time
 from typing import Any
 
-from behave import given, then, when
+from behave import (  # pylint: disable=no-name-in-module  # behave uses lazy imports
+    given,
+    then,
+    when,
+)
 
 from context_protocol import SnmpAgentContext
 
@@ -77,6 +81,7 @@ def _run_agent_docker(
         ],
         capture_output=True,
         text=True,
+        check=False,
     )
     context.last_agent_output = result.stdout + result.stderr
     return result
