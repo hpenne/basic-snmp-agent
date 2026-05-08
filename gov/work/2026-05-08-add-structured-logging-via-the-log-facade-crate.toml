@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-05-08-001"
 title = "Add structured logging via the log facade crate"
-status = "active"
+status = "done"
 created = "2026-05-08"
 started = "2026-05-08"
+completed = "2026-05-08"
 refs = ["RFC-0009"]
 
 [content]
@@ -35,10 +36,10 @@ category = "chore"
 
 [[content.acceptance_criteria]]
 text = "Compile out logging in fuzz targets for performance"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "Enable log backend in Behave system tests for debugging"
-status = "pending"
+status = "done"
 category = "added"
