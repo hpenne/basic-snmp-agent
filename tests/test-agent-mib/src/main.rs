@@ -10,6 +10,8 @@
 use basic_snmp_agent::AgentBuilder;
 
 fn main() {
+    test_agent_mib_common::init_logging();
+
     let agent = AgentBuilder::new()
         .listen_addr("0.0.0.0:10161".parse().expect("listen address is valid"))
         .engine_id(b"\x80\x00\x1f\x88\x04test-agent-mib".to_vec())

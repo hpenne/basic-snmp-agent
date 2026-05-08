@@ -6,3 +6,4 @@ publish = false
 
 [dependencies]
 basic-snmp-agent = { path = "../../" }
+log = "0.4"

@@ -1,6 +1,47 @@
-//! Shared test-agent MIB seeding utility for system-level MIB read tests.
+//! Shared test-agent MIB seeding utility and logging initialisation for system-level tests.
 
 use basic_snmp_agent::{Agent, Value};
+
+/// A minimal logger that writes to stderr, used by test agent binaries.
+struct StderrLogger {
+    level_filter: log::LevelFilter,
+}
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= self.level_filter
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("[{} {}] {}", record.level(), record.target(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+/// Initialise stderr logging for test agent binaries.
+///
+/// Reads the `RUST_LOG` environment variable and parses it as a log level name
+/// (case-insensitive). Recognised values are `off`, `error`, `warn`, `info`,
+/// `debug`, and `trace`. If the variable is unset or contains an unrecognised
+/// value, logging is disabled (`LevelFilter::Off`).
+///
+/// # Panics
+///
+/// Panics if a logger has already been installed in the current process.
+pub fn init_logging() {
+    let level_filter = std::env::var("RUST_LOG")
+        .ok()
+        .and_then(|level_name| level_name.parse().ok())
+        .unwrap_or(log::LevelFilter::Off);
+
+    // log::set_logger requires a &'static reference; Box::leak provides one.
+    let logger = Box::leak(Box::new(StderrLogger { level_filter }));
+    log::set_logger(logger).expect("logger must not already be set in test agents");
+    log::set_max_level(level_filter);
+}
 
 /// Populate the MIB store with the fixed OIDs used by the Behave test suite.
 ///
