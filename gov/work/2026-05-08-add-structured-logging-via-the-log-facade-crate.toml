@@ -1,0 +1,33 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-05-08-001"
+title = "Add structured logging via the log facade crate"
+status = "active"
+created = "2026-05-08"
+started = "2026-05-08"
+
+[content]
+description = """
+Describe the work to be done.
+What is the goal? What are the acceptance criteria?"""
+
+[[content.acceptance_criteria]]
+text = "Integrate the log facade crate for structured logging"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = 'Replace all eprintln\! calls in production code with appropriate log macros'
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "cargo clippy and cargo test pass"
+status = "pending"
+category = "chore"
