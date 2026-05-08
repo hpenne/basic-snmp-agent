@@ -72,6 +72,7 @@ dependencies = [
  "arbitrary",
  "basic-snmp-agent",
  "libfuzzer-sys",
+ "log",
  "snmpv3-frames",
 ]
 
