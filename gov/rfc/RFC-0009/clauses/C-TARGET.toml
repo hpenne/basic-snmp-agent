@@ -5,6 +5,7 @@ id = "C-TARGET"
 title = "Log target conventions"
 kind = "normative"
 status = "active"
+since = "0.1.0"
 
 [content]
 text = """

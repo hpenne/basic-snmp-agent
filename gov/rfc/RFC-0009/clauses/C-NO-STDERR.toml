@@ -5,6 +5,7 @@ id = "C-NO-STDERR"
 title = "No direct stderr or stdout output"
 kind = "normative"
 status = "active"
+since = "0.1.0"
 
 [content]
 text = '''

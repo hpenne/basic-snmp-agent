@@ -4,10 +4,11 @@
 id = "RFC-0009"
 title = "Logging"
 version = "0.1.0"
-status = "draft"
-phase = "spec"
+status = "normative"
+phase = "impl"
 owners = ["@hpenne"]
 created = "2026-05-08"
+updated = "2026-05-08"
 
 [[sections]]
 title = "Summary"

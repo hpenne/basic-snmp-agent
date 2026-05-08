@@ -5,6 +5,7 @@ id = "C-DOS"
 title = "DoS safety by log level"
 kind = "normative"
 status = "active"
+since = "0.1.0"
 
 [content]
 text = """
