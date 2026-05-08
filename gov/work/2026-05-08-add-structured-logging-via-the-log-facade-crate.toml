@@ -15,20 +15,30 @@ What is the goal? What are the acceptance criteria?"""
 
 [[content.acceptance_criteria]]
 text = "Integrate the log facade crate for structured logging"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = 'Replace all eprintln\! calls in production code with appropriate log macros'
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "govctl check passes"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "cargo clippy and cargo test pass"
+status = "done"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Compile out logging in fuzz targets for performance"
 status = "pending"
 category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Enable log backend in Behave system tests for debugging"
+status = "pending"
+category = "added"
