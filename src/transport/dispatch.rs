@@ -6,6 +6,8 @@
 
 use crate::transport::event_loop::MAX_BULK_REPETITIONS;
 use crate::transport::request;
+// Implements: [[RFC-0009:C-FACADE]]
+use log::{debug, trace};
 
 // Implements: REQ-0093, REQ-0104
 static UNKNOWN_ENGINE_IDS_OID: std::sync::LazyLock<crate::codec::Oid> =
@@ -141,6 +143,7 @@ fn emit_decryption_error_response(
 ) -> Option<Vec<u8>> {
     *ctx.decryption_errors_counter = ctx.decryption_errors_counter.saturating_add(1);
     if security_flags & REPORTABLE_FLAG == 0 {
+        trace!("decryption error with reportableFlag unset, discarding silently");
         return None;
     }
     crate::codec::encode_v3_report(
@@ -151,6 +154,7 @@ fn emit_decryption_error_response(
         &DECRYPTION_ERRORS_OID,
         *ctx.decryption_errors_counter,
     )
+    .inspect_err(|encode_error| debug!("failed to encode decryption-error report: {encode_error}"))
     .ok()
 }
 
@@ -167,6 +171,7 @@ fn emit_unknown_engine_id_response(
 ) -> Option<Vec<u8>> {
     *ctx.unknown_engine_ids_counter = ctx.unknown_engine_ids_counter.saturating_add(1);
     if security_flags & REPORTABLE_FLAG == 0 {
+        trace!("unknown engine ID with reportableFlag unset, discarding silently");
         return None;
     }
     crate::codec::encode_v3_report(
@@ -177,6 +182,7 @@ fn emit_unknown_engine_id_response(
         &UNKNOWN_ENGINE_IDS_OID,
         *ctx.unknown_engine_ids_counter,
     )
+    .inspect_err(|encode_error| debug!("failed to encode unknown-engine-id report: {encode_error}"))
     .ok()
 }
 
@@ -192,6 +198,7 @@ fn emit_unknown_security_model_response(
 ) -> Option<Vec<u8>> {
     *ctx.unknown_security_models_counter = ctx.unknown_security_models_counter.saturating_add(1);
     if security_flags & REPORTABLE_FLAG == 0 {
+        trace!("unknown security model with reportableFlag unset, discarding silently");
         return None;
     }
     crate::codec::encode_v3_report(
@@ -202,6 +209,9 @@ fn emit_unknown_security_model_response(
         &UNKNOWN_SECURITY_MODELS_OID,
         *ctx.unknown_security_models_counter,
     )
+    .inspect_err(|encode_error| {
+        debug!("failed to encode unknown-security-model report: {encode_error}");
+    })
     .ok()
 }
 
@@ -264,7 +274,9 @@ pub fn process_snmpv3_request(
 ) -> Option<Vec<u8>> {
     // Decode as an SNMPv3 message. Non-v3 messages are silently discarded
     // per REQ-0073.
-    let v3_msg = crate::codec::decode_v3_message(frame).ok()?;
+    let v3_msg = crate::codec::decode_v3_message(frame)
+        .inspect_err(|decode_error| debug!("failed to decode SNMPv3 message: {decode_error}"))
+        .ok()?;
 
     // RFC 3412 §7.2 step 2: reject messages with unsupported security models.
     // Implements: REQ-0115
@@ -280,6 +292,7 @@ pub fn process_snmpv3_request(
         *ctx.unknown_engine_ids_counter = ctx.unknown_engine_ids_counter.saturating_add(1);
         // RFC 3412 §7.1.3a: if the reportableFlag is not set, discard without response.
         if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
+            trace!("engine-ID discovery probe with reportableFlag unset, discarding silently");
             return None;
         }
         return crate::codec::encode_v3_report(
@@ -290,6 +303,9 @@ pub fn process_snmpv3_request(
             &UNKNOWN_ENGINE_IDS_OID,
             *ctx.unknown_engine_ids_counter,
         )
+        .inspect_err(|encode_error| {
+            debug!("failed to encode engine-id discovery report: {encode_error}");
+        })
         .ok();
     }
 
@@ -311,6 +327,7 @@ pub fn process_snmpv3_request(
     {
         *ctx.unknown_user_names_counter = ctx.unknown_user_names_counter.saturating_add(1);
         if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
+            trace!("unknown user name with reportableFlag unset, discarding silently");
             return None;
         }
         return crate::codec::encode_v3_report(
@@ -321,6 +338,9 @@ pub fn process_snmpv3_request(
             &UNKNOWN_USER_NAMES_OID,
             *ctx.unknown_user_names_counter,
         )
+        .inspect_err(|encode_error| {
+            debug!("failed to encode unknown-user-name report: {encode_error}");
+        })
         .ok();
     }
 
@@ -335,6 +355,7 @@ pub fn process_snmpv3_request(
             *ctx.unsupported_sec_levels_counter =
                 ctx.unsupported_sec_levels_counter.saturating_add(1);
             if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
+                trace!("unsupported security level with reportableFlag unset, discarding silently");
                 return None;
             }
             return crate::codec::encode_v3_report(
@@ -345,6 +366,9 @@ pub fn process_snmpv3_request(
                 &UNSUPPORTED_SEC_LEVELS_OID,
                 *ctx.unsupported_sec_levels_counter,
             )
+            .inspect_err(|encode_error| {
+                debug!("failed to encode unsupported-sec-level report: {encode_error}");
+            })
             .ok();
         }
     }
@@ -356,20 +380,19 @@ pub fn process_snmpv3_request(
         && let (Some(auth_protocol), Some(auth_key)) = (user.auth_protocol(), user.auth_key())
     {
         let auth_params = &v3_msg.usm.auth_params;
-        let hmac_ok = match v3_msg.auth_params_offset {
-            Some(offset) => {
-                let zeroed =
-                    zero_auth_params_in_message(v3_msg.raw_message, offset, auth_params.len());
-                auth_protocol
-                    .verify_mac(auth_key, &zeroed, auth_params)
-                    .is_ok()
-            }
-            // Empty auth_params for an auth user is always wrong.
-            None => false,
+        let hmac_ok = if let Some(offset) = v3_msg.auth_params_offset {
+            let zeroed = zero_auth_params_in_message(v3_msg.raw_message, offset, auth_params.len());
+            auth_protocol
+                .verify_mac(auth_key, &zeroed, auth_params)
+                .is_ok()
+        } else {
+            trace!("auth_params_offset absent, treating as HMAC failure");
+            false
         };
         if !hmac_ok {
             *ctx.wrong_digests_counter = ctx.wrong_digests_counter.saturating_add(1);
             if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
+                trace!("wrong digest with reportableFlag unset, discarding silently");
                 return None;
             }
             return crate::codec::encode_v3_report(
@@ -380,6 +403,9 @@ pub fn process_snmpv3_request(
                 &WRONG_DIGESTS_OID,
                 *ctx.wrong_digests_counter,
             )
+            .inspect_err(|encode_error| {
+                debug!("failed to encode wrong-digest report: {encode_error}");
+            })
             .ok();
         }
     }
@@ -397,6 +423,7 @@ pub fn process_snmpv3_request(
     {
         *ctx.not_in_time_windows_counter = ctx.not_in_time_windows_counter.saturating_add(1);
         if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
+            trace!("not-in-time-window with reportableFlag unset, discarding silently");
             return None;
         }
         return crate::codec::encode_v3_report(
@@ -407,6 +434,9 @@ pub fn process_snmpv3_request(
             &NOT_IN_TIME_WINDOWS_OID,
             *ctx.not_in_time_windows_counter,
         )
+        .inspect_err(|encode_error| {
+            debug!("failed to encode not-in-time-window report: {encode_error}");
+        })
         .ok();
     }
 
@@ -414,6 +444,7 @@ pub fn process_snmpv3_request(
     // For authPriv messages the context_name is inside the encrypted blob and is validated
     // after decryption below. For cleartext messages it is already decoded.
     if !v3_msg.context_name.is_empty() {
+        debug!("unsupported context name (plaintext), discarding");
         return None;
     }
 
@@ -432,12 +463,14 @@ pub fn process_snmpv3_request(
                 .and_then(|user| user.priv_protocol().zip(user.priv_key()))
             else {
                 // No configured user or no privacy credentials — can't decrypt, discard.
+                debug!("encrypted message but no privacy credentials configured, discarding");
                 return None;
             };
 
             // msgPrivacyParameters must be exactly 8 bytes (the AES salt per RFC 3826 §2.2).
             let priv_params = &v3_msg.usm.priv_params;
             if priv_params.len() != 8 {
+                debug!("msgPrivacyParameters length {} != 8", priv_params.len());
                 return emit_decryption_error_response(
                     ctx,
                     v3_msg.msg_id,
@@ -453,6 +486,7 @@ pub fn process_snmpv3_request(
             aes_iv[8..16].copy_from_slice(priv_params);
 
             let Ok(scoped_pdu_bytes) = priv_protocol.decrypt(priv_key, &aes_iv, &ciphertext) else {
+                debug!("AES-CFB128 decryption failed");
                 return emit_decryption_error_response(
                     ctx,
                     v3_msg.msg_id,
@@ -461,6 +495,7 @@ pub fn process_snmpv3_request(
             };
 
             let Ok(decoded) = crate::codec::decode_scoped_pdu(&scoped_pdu_bytes) else {
+                debug!("failed to decode decrypted ScopedPDU");
                 return emit_decryption_error_response(
                     ctx,
                     v3_msg.msg_id,
@@ -480,6 +515,7 @@ pub fn process_snmpv3_request(
 
             // Context name validated after decryption; only the default (empty) context is supported.
             if !decoded.context_name.is_empty() {
+                debug!("unsupported context name (decrypted), discarding");
                 return None;
             }
 
@@ -514,6 +550,7 @@ pub fn process_snmpv3_request(
         response_priv,
         &response,
     )
+    .inspect_err(|encode_error| debug!("failed to encode SNMPv3 response: {encode_error}"))
     .ok()
 }
 
