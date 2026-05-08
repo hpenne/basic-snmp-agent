@@ -1,0 +1,12 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-TARGET"
+title = "Log target conventions"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+Log messages SHOULD use the module path as the log target (the default behaviour of the `log` macros).
+Custom targets MUST NOT be used unless there is a clear need for filtering granularity beyond the module path."""

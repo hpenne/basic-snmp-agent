@@ -6,6 +6,7 @@ title = "Add structured logging via the log facade crate"
 status = "active"
 created = "2026-05-08"
 started = "2026-05-08"
+refs = ["RFC-0009"]
 
 [content]
 description = """

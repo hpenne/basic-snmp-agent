@@ -1,0 +1,18 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-DOS"
+title = "DoS safety by log level"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+Log levels `warn` and `error` are designated as DoS-safe.
+Messages at these levels MUST only be emitted for events whose rate is bounded independently of traffic volume.
+They MUST NOT be emitted per-packet, per-request, or per-connection.
+
+Log level `info` MAY include per-connection events (e.g. connection accepted, connection closed) but MUST NOT include per-packet or per-request events.
+Operators should be aware that `info` may produce moderate volume under connection-flood conditions.
+
+Log levels `debug` and `trace` carry no rate guarantees and MAY fire per-packet."""

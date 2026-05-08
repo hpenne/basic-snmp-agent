@@ -1,0 +1,17 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-LEVELS"
+title = "Log level conventions"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+Log statements MUST use the standard log levels with the following conventions:
+
+- `error`: unrecoverable failures that terminate an operation (e.g. socket errors that close a connection, resource exhaustion).
+- `warn`: recoverable problems (e.g. malformed packets, authentication failures, idle-timeout disconnects).
+- `info`: significant lifecycle events (e.g. listener bound, listener stopped, shutdown received) and per-connection events (e.g. connection accepted, connection closed).
+- `debug`: per-request and per-packet detail useful for operational troubleshooting.
+- `trace`: internal codec, protocol, and cryptographic detail."""

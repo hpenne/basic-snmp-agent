@@ -1,0 +1,28 @@
+#:schema ../../schema/rfc.schema.json
+
+[govctl]
+id = "RFC-0009"
+title = "Logging"
+version = "0.1.0"
+status = "draft"
+phase = "spec"
+owners = ["@hpenne"]
+created = "2026-05-08"
+
+[[sections]]
+title = "Summary"
+
+[[sections]]
+title = "Specification"
+clauses = [
+    "clauses/C-FACADE.toml",
+    "clauses/C-LEVELS.toml",
+    "clauses/C-NO-STDERR.toml",
+    "clauses/C-TARGET.toml",
+    "clauses/C-DOS.toml",
+]
+
+[[changelog]]
+version = "0.1.0"
+date = "2026-05-08"
+notes = "Initial draft"

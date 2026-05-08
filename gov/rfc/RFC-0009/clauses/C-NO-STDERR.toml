@@ -1,0 +1,13 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-NO-STDERR"
+title = "No direct stderr or stdout output"
+kind = "normative"
+status = "active"
+
+[content]
+text = '''
+Production code MUST NOT use `eprintln\!`, `eprint\!`, `println\!`, or `print\!` for operational output.
+All operational output MUST go through the `log` facade macros.
+This clause does not apply to doc-comment examples or test code.'''

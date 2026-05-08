@@ -1,0 +1,13 @@
+#:schema ../../../schema/clause.schema.json
+
+[govctl]
+id = "C-FACADE"
+title = "Log facade dependency"
+kind = "normative"
+status = "active"
+
+[content]
+text = """
+The crate MUST depend on the `log` crate as its logging facade.
+The crate MUST NOT depend on any specific logging backend.
+Selecting and configuring a backend is the responsibility of the consuming application."""
