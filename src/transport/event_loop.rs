@@ -23,6 +23,9 @@ use std::time::{Duration, Instant};
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
 
+// Implements: [[RFC-0009:C-FACADE]]
+use log::{debug, info};
+
 /// mio token for the TCP listener.
 const LISTENER_TOKEN: Token = Token(0);
 
@@ -499,6 +502,7 @@ impl EventLoop {
     ///
     /// Returns an error if `mio::Poll::poll` fails unrecoverably.
     pub fn run(mut self) -> io::Result<()> {
+        info!("event loop started");
         let mut events = Events::with_capacity(128);
 
         'outer: loop {
@@ -549,8 +553,8 @@ impl EventLoop {
             // kernel backlog buffers the excess; they will be accepted once
             // existing connections close.
             if self.connections.len() >= self.max_connections {
-                eprintln!(
-                    "[event_loop] connection limit ({}) reached, not accepting new connections",
+                debug!(
+                    "connection limit ({}) reached, not accepting new connections",
                     self.max_connections
                 );
                 break;
@@ -564,14 +568,10 @@ impl EventLoop {
                             .registry()
                             .register(&mut stream, token, Interest::READABLE)
                     {
-                        eprintln!(
-                            "[event_loop] failed to register connection from {peer_addr}: {e}"
-                        );
+                        debug!("failed to register connection from {peer_addr}: {e}");
                         continue;
                     }
-                    eprintln!(
-                        "[event_loop] accepted connection from {peer_addr} (token {token:?})"
-                    );
+                    info!("accepted connection from {peer_addr} (token {token:?})");
                     self.connections.insert(
                         token,
                         ConnectionState {
@@ -584,7 +584,7 @@ impl EventLoop {
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) => {
                     // Transient errors should not kill the event loop.
-                    eprintln!("[event_loop] accept error (continuing): {e}");
+                    debug!("accept error (continuing): {e}");
                     // TODO: On transient errors (e.g. EMFILE) we break rather
                     // than continue, so connections still in the kernel backlog
                     // are not drained until the next poll wakeup. A retry loop
@@ -607,7 +607,7 @@ impl EventLoop {
                     self.store.set(oid, value);
                 }
                 Ok(Command::Shutdown) => {
-                    eprintln!("[event_loop] received Shutdown, exiting");
+                    info!("received Shutdown, exiting");
                     return true;
                 }
                 #[cfg(test)]
@@ -619,7 +619,7 @@ impl EventLoop {
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
                     // All senders have been dropped; treat as shutdown.
-                    eprintln!("[event_loop] command channel disconnected, exiting");
+                    info!("command channel disconnected, exiting");
                     return true;
                 }
             }
@@ -670,7 +670,7 @@ impl EventLoop {
                 Err(e) => {
                     // Non-WouldBlock errors (e.g. ConnectionReset) mean the
                     // connection is broken; close it rather than killing the loop.
-                    eprintln!("[event_loop] connection error (token {token:?}): {e}");
+                    debug!("connection error (token {token:?}): {e}");
                     closed = true;
                     break;
                 }
@@ -688,8 +688,8 @@ impl EventLoop {
             // RFC 3430: frames must begin with the SEQUENCE tag (0x30).
             // A different tag indicates a corrupt or non-SNMP stream.
             if conn.read_buf[0] != 0x30 {
-                eprintln!(
-                    "[event_loop] non-SEQUENCE tag {:#04x} on token {token:?}, closing",
+                debug!(
+                    "non-SEQUENCE tag {:#04x} on token {token:?}, closing",
                     conn.read_buf[0]
                 );
                 closed = true;
@@ -703,9 +703,7 @@ impl EventLoop {
                 Err(_) => {
                     // Invalid BER length encoding (e.g., indefinite-length form 0x80).
                     // The stream is unrecoverable; close the connection.
-                    eprintln!(
-                        "[event_loop] invalid BER length encoding on token {token:?}, closing"
-                    );
+                    debug!("invalid BER length encoding on token {token:?}, closing");
                     closed = true;
                     break;
                 }
@@ -715,9 +713,7 @@ impl EventLoop {
             // Implements: REQ-0117
             if total_frame_bytes > MAX_FRAME_SIZE {
                 // Reject oversized frames to prevent memory exhaustion.
-                eprintln!(
-                    "[event_loop] oversized frame ({total_frame_bytes} bytes) on token {token:?}, closing"
-                );
+                debug!("oversized frame ({total_frame_bytes} bytes) on token {token:?}, closing");
                 closed = true;
                 break;
             }
@@ -755,7 +751,7 @@ impl EventLoop {
                 // write_all on a non-blocking socket may have written a partial
                 // response before returning WouldBlock, leaving the framing stream
                 // in a corrupt state. Closing is the only safe option.
-                eprintln!("[event_loop] write error (token {token:?}): {write_error}, closing");
+                debug!("write error (token {token:?}): {write_error}, closing");
                 closed = true;
                 break;
             }
@@ -763,9 +759,9 @@ impl EventLoop {
 
         if closed && let Some(mut conn) = self.connections.remove(&token) {
             if let Err(e) = self.poll.registry().deregister(&mut conn.stream) {
-                eprintln!("[event_loop] deregister error (token {token:?}): {e}");
+                debug!("deregister error (token {token:?}): {e}");
             }
-            eprintln!("[event_loop] connection closed (token {token:?})");
+            info!("connection closed (token {token:?})");
         }
     }
 
@@ -806,7 +802,7 @@ impl EventLoop {
         for token in stale_tokens {
             if let Some(mut conn) = self.connections.remove(&token) {
                 let _ = self.poll.registry().deregister(&mut conn.stream);
-                eprintln!("[event_loop] closed idle connection (token {token:?})");
+                info!("closed idle connection (token {token:?})");
             }
         }
     }

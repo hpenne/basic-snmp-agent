@@ -16,6 +16,7 @@ hmac = "0.12"
 sha2 = "0.10"
 aes = "0.8"
 cfb-mode = "0.8"
+log = "0.4"
 
 [dev-dependencies]
 rasn = "0.22"

@@ -51,6 +51,7 @@ dependencies = [
  "cfb-mode",
  "hmac",
  "libc",
+ "log",
  "mio",
  "rasn",
  "rasn-smi",
