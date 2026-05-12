@@ -406,18 +406,18 @@ impl<'a> BerReader<'a> {
     pub(crate) fn read_tlv(&mut self) -> Result<(u8, &'a [u8]), BerError> {
         let tag = self.read_tag()?;
         let length = self.read_length()?;
-        // Guard against overflow in `self.position + length` for absurdly large
-        // length values that fit in usize but exceed the remaining input.
-        let remaining = self.input.len() - self.position;
-        if length > remaining {
-            return Err(BerError::new(format!(
-                "BER: truncated value: length field ({length}) exceeds remaining input \
-                 ({remaining} bytes) for tag 0x{tag:02X} at offset {}",
-                self.offset()
-            )));
-        }
-        // The guard above ensures self.position + length <= self.input.len().
-        let value_slice = &self.input[self.position..self.position + length];
+        let value_slice = self
+            .position
+            .checked_add(length)
+            .and_then(|end| self.input.get(self.position..end))
+            .ok_or_else(|| {
+                BerError::new(format!(
+                    "BER: truncated value: length field ({length}) exceeds remaining input \
+                     ({} bytes) for tag 0x{tag:02X} at offset {}",
+                    self.input.len().saturating_sub(self.position),
+                    self.offset()
+                ))
+            })?;
         self.position += length;
         Ok((tag, value_slice))
     }
@@ -521,8 +521,9 @@ impl<'a> BerReader<'a> {
 
     /// Returns the bytes remaining in this reader (from the current position).
     pub(crate) fn remaining(&self) -> &'a [u8] {
-        // position is always within bounds because read_tlv ensures it.
-        &self.input[self.position..]
+        self.input
+            .get(self.position..)
+            .expect("position is always within bounds because read_tlv ensures it")
     }
 
     /// Returns `true` if there are no more bytes to read.
@@ -554,7 +555,9 @@ fn encode_length(dest: &mut Vec<u8>, length: usize) {
         let length_bytes = length.to_be_bytes();
         let leading_zero_bytes =
             usize::try_from(length.leading_zeros()).expect("leading_zeros fits in usize") / 8;
-        let significant_bytes = &length_bytes[leading_zero_bytes..];
+        let significant_bytes = length_bytes
+            .get(leading_zero_bytes..)
+            .expect("length > 127 so leading_zero_bytes < length_bytes.len()");
         // X.690 §8.1.3.5: long-form length-of-length byte = 0x80 + number of subsequent octets.
         dest.push(
             0x80 + u8::try_from(significant_bytes.len()).expect("byte count of usize fits in u8"),
@@ -576,25 +579,28 @@ fn encode_signed_i32(value: i32) -> Vec<u8> {
     let raw_bytes = value.to_be_bytes();
     let strip_byte = if value >= 0 { 0x00u8 } else { 0xFFu8 };
 
-    // Find the first byte that is not the strippable prefix byte, but stop
-    // one byte early so we never produce an empty slice.
-    let first_significant = raw_bytes
+    // Count leading redundant bytes, but keep at least one byte.
+    let skip_count = raw_bytes
         .iter()
-        .position(|&byte| byte != strip_byte)
-        .unwrap_or(raw_bytes.len() - 1);
+        .take(raw_bytes.len() - 1)
+        .take_while(|&&byte| byte == strip_byte)
+        .count();
 
-    // If the remaining high bit has the wrong sign, back up one byte.
-    let start = if value > 0 && raw_bytes[first_significant] & 0x80 != 0 {
-        // High bit set on a positive value — need the preceding 0x00 byte.
-        first_significant.saturating_sub(1)
-    } else if value < 0 && raw_bytes[first_significant] & 0x80 == 0 {
-        // High bit clear on a negative value — need the preceding 0xFF byte.
-        first_significant.saturating_sub(1)
+    // If the remaining first byte has the wrong sign bit, back up one byte.
+    let needs_sign_preservation = raw_bytes
+        .get(skip_count)
+        .is_some_and(|&byte| (value > 0 && byte & 0x80 != 0) || (value < 0 && byte & 0x80 == 0));
+
+    let start = if needs_sign_preservation {
+        skip_count.saturating_sub(1)
     } else {
-        first_significant
+        skip_count
     };
 
-    raw_bytes[start..].to_vec()
+    raw_bytes
+        .get(start..)
+        .expect("start is always within raw_bytes bounds")
+        .to_vec()
 }
 
 /// Encodes `value` as the minimal unsigned big-endian byte sequence for an
@@ -613,20 +619,24 @@ fn encode_unsigned_u64(value: u64) -> Vec<u8> {
 /// a `0x00` sign byte if the first remaining byte has its high bit set.
 fn encode_unsigned_bytes(raw_bytes: &[u8]) -> Vec<u8> {
     // Strip leading zeros, keeping at least one byte.
-    let first_nonzero = raw_bytes
+    let skip_count = raw_bytes
         .iter()
-        .position(|&byte| byte != 0)
-        .unwrap_or(raw_bytes.len() - 1);
-    let significant = &raw_bytes[first_nonzero..];
+        .take(raw_bytes.len().saturating_sub(1))
+        .take_while(|&&byte| byte == 0)
+        .count();
+    let significant = raw_bytes
+        .get(skip_count..)
+        .expect("skip_count preserves at least one byte");
 
-    if significant[0] & 0x80 != 0 {
-        // Prepend sign byte so ASN.1 INTEGER sees a positive value.
-        let mut result = Vec::with_capacity(significant.len() + 1);
-        result.push(0x00);
-        result.extend_from_slice(significant);
-        result
-    } else {
-        significant.to_vec()
+    match significant.first() {
+        Some(&first_byte) if first_byte & 0x80 != 0 => {
+            // Prepend sign byte so ASN.1 INTEGER sees a positive value.
+            let mut result = Vec::with_capacity(significant.len() + 1);
+            result.push(0x00);
+            result.extend_from_slice(significant);
+            result
+        }
+        _ => significant.to_vec(),
     }
 }
 
@@ -647,15 +657,20 @@ fn decode_signed_i32(integer_bytes: &[u8], error_offset: usize) -> Result<i32, B
     // Strip redundant padding bytes before the length check.
     // A leading 0x00 is redundant when the next byte has bit 7 clear (positive sign preserved).
     // A leading 0xFF is redundant when the next byte has bit 7 set (negative sign preserved).
-    let is_negative = integer_bytes[0] & 0x80 != 0;
+    let is_negative = integer_bytes.first().is_some_and(|&byte| byte & 0x80 != 0);
     let significant = if integer_bytes.len() > 1 {
         let redundant_byte = if is_negative { 0xFF } else { 0x00 };
         let sign_bit_of_next = if is_negative { 0x80 } else { 0x00 };
         let first_significant = integer_bytes
-            .windows(2)
-            .position(|pair| pair[0] != redundant_byte || (pair[1] & 0x80) != sign_bit_of_next)
+            .iter()
+            .zip(integer_bytes.iter().skip(1))
+            .position(|(&leading, &next)| {
+                leading != redundant_byte || (next & 0x80) != sign_bit_of_next
+            })
             .unwrap_or(integer_bytes.len() - 1);
-        &integer_bytes[first_significant..]
+        integer_bytes
+            .get(first_significant..)
+            .expect("first_significant is from position() on integer_bytes")
     } else {
         integer_bytes
     };
@@ -666,14 +681,16 @@ fn decode_signed_i32(integer_bytes: &[u8], error_offset: usize) -> Result<i32, B
         )));
     }
     // Sign-extend the leading byte into a 4-byte buffer.
-    let sign_byte = if significant[0] & 0x80 != 0 {
+    let sign_byte: u8 = if significant.first().is_some_and(|&byte| byte & 0x80 != 0) {
         0xFF
     } else {
         0x00
     };
     let mut word = [sign_byte; 4];
     let start = 4 - significant.len();
-    word[start..].copy_from_slice(significant);
+    word.get_mut(start..)
+        .expect("significant.len() <= 4 so start is within bounds")
+        .copy_from_slice(significant);
     Ok(i32::from_be_bytes(word))
 }
 
@@ -689,17 +706,18 @@ fn decode_unsigned(
     max_width: usize,
     error_offset: usize,
 ) -> Result<u64, BerError> {
-    if integer_bytes.is_empty() {
-        return Err(BerError::new(format!(
-            "BER: INTEGER value has zero length at offset {error_offset}"
-        )));
-    }
-    // A first byte with the high bit set means a negative value in ASN.1
-    // two's-complement; reject it as unsigned values cannot be negative.
-    if integer_bytes[0] & 0x80 != 0 {
-        return Err(BerError::new(format!(
-            "BER: negative INTEGER cannot be decoded as unsigned at offset {error_offset}"
-        )));
+    match integer_bytes.first() {
+        None => {
+            return Err(BerError::new(format!(
+                "BER: INTEGER value has zero length at offset {error_offset}"
+            )));
+        }
+        Some(&first_byte) if first_byte & 0x80 != 0 => {
+            return Err(BerError::new(format!(
+                "BER: negative INTEGER cannot be decoded as unsigned at offset {error_offset}"
+            )));
+        }
+        _ => {}
     }
     // BER permits any number of redundant leading 0x00 sign bytes; strip all of them
     // before checking the byte count so that non-minimal encodings from peer
@@ -710,7 +728,9 @@ fn decode_unsigned(
             .iter()
             .position(|&b| b != 0x00)
             .unwrap_or(integer_bytes.len() - 1);
-        &integer_bytes[first_nonzero..]
+        integer_bytes
+            .get(first_nonzero..)
+            .expect("first_nonzero is from position() on integer_bytes")
     } else {
         integer_bytes
     };
@@ -723,7 +743,9 @@ fn decode_unsigned(
     }
     let mut word = [0u8; 8];
     let start = 8 - significant.len();
-    word[start..].copy_from_slice(significant);
+    word.get_mut(start..)
+        .expect("significant.len() <= max_width <= 8 so start is within word bounds")
+        .copy_from_slice(significant);
     Ok(u64::from_be_bytes(word))
 }
 
@@ -753,10 +775,10 @@ fn decode_unsigned_u64(integer_bytes: &[u8], error_offset: usize) -> Result<u64,
 /// The combined value is computed as u64 to avoid overflow when the first arc
 /// is 2 and the second arc is large (e.g., `2.999999999`).
 fn encode_oid(oid: &Oid) -> Vec<u8> {
-    let arcs = oid.as_slice();
-    // Validated OIDs always have at least two arcs.
-    let first_combined = u64::from(arcs[0]) * 40 + u64::from(arcs[1]);
-    let remaining_arcs = &arcs[2..];
+    let [first_arc, second_arc, remaining_arcs @ ..] = oid.as_slice() else {
+        unreachable!("Oid validation guarantees at least two arcs")
+    };
+    let first_combined = u64::from(*first_arc) * 40 + u64::from(*second_arc);
 
     let mut encoded = Vec::new();
     encode_base128(&mut encoded, first_combined);
@@ -765,9 +787,6 @@ fn encode_oid(oid: &Oid) -> Vec<u8> {
     }
     encoded
 }
-
-// ceil(u64::BITS / 7) = ceil(64/7) = 10
-const MAX_BASE128_GROUPS: usize = 10;
 
 /// Appends the base-128 variable-length encoding of `value` to `dest`.
 ///
@@ -781,21 +800,18 @@ fn encode_base128(dest: &mut Vec<u8>, value: u64) {
         dest.push(0x00);
         return;
     }
-    // Collect groups of 7 bits from most-significant to least-significant.
-    let mut groups = [0u8; MAX_BASE128_GROUPS];
+    // Collect groups of 7 bits from least-significant to most-significant.
+    let mut groups = Vec::with_capacity(10);
     let mut remaining = value;
-    let mut group_count = 0;
     while remaining > 0 {
-        groups[group_count] =
-            u8::try_from(remaining & 0x7F).expect("masking to 7 bits always fits in u8");
+        groups.push(u8::try_from(remaining & 0x7F).expect("masking to 7 bits always fits in u8"));
         remaining >>= 7;
-        group_count += 1;
     }
     // Emit groups in big-endian order (most significant first).
-    for i in (0..group_count).rev() {
-        let high_bit = if i > 0 { 0x80 } else { 0x00 };
+    for (index, &group) in groups.iter().enumerate().rev() {
+        let high_bit = if index > 0 { 0x80 } else { 0x00 };
         // + rather than | so that operator mutations (+ → −) are detectable by tests.
-        dest.push(groups[i] + high_bit);
+        dest.push(group + high_bit);
     }
 }
 
@@ -822,13 +838,19 @@ fn decode_oid(oid_bytes: &[u8], error_offset: usize) -> Result<Oid, BerError> {
             )));
         }
         sub_identifiers.push(sub_id);
-        remaining = &remaining[bytes_consumed..];
+        remaining = remaining
+            .get(bytes_consumed..)
+            .expect("bytes_consumed <= remaining.len(): decode_base128 only reads existing bytes");
     }
 
     // Split the first combined sub-identifier back into two arcs.
     // X.690 §8.19.4: first = combined / 40, second = combined % 40,
     // but when combined >= 80 the first arc is always 2.
-    let first_combined = sub_identifiers[0];
+    let Some(&first_combined) = sub_identifiers.first() else {
+        return Err(BerError::new(format!(
+            "BER: OID has no sub-identifiers at offset {error_offset}"
+        )));
+    };
     let (first_arc, second_arc) = if first_combined < 40 {
         (0u64, first_combined)
     } else if first_combined < 80 {
@@ -852,7 +874,10 @@ fn decode_oid(oid_bytes: &[u8], error_offset: usize) -> Result<Oid, BerError> {
     let mut arcs = Vec::with_capacity(sub_identifiers.len() + 1);
     arcs.push(first_arc_u32);
     arcs.push(second_arc_u32);
-    for sub_id in &sub_identifiers[1..] {
+    for sub_id in sub_identifiers
+        .get(1..)
+        .expect("sub_identifiers has at least one element")
+    {
         let arc_u32 = u32::try_from(*sub_id).map_err(|_| {
             BerError::new(format!(
                 "BER: OID arc overflows u32 at offset {error_offset}"

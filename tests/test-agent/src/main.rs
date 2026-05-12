@@ -293,8 +293,7 @@ fn decode_hex_engine_id(hex_str: &str) -> Vec<u8> {
         .chunks_exact(2)
         .enumerate()
         .map(|(chunk_idx, pair)| {
-            let octet_str =
-                std::str::from_utf8(pair).expect("ASCII hex subset is valid UTF-8");
+            let octet_str = std::str::from_utf8(pair).expect("ASCII hex subset is valid UTF-8");
             u8::from_str_radix(octet_str, 16).unwrap_or_else(|e| {
                 let position = chunk_idx * 2;
                 eprintln!("error: invalid hex in USM_ENGINE_ID at position {position}: {e}");
