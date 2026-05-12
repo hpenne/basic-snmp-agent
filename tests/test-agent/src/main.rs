@@ -74,7 +74,8 @@ fn main() {
 
     // Use port 0 so the OS assigns a free TCP port; no inbound requests are
     // served in this binary, but the event loop must bind a listener.
-    let mut builder = AgentBuilder::new().listen_addr("0.0.0.0:0".parse().unwrap());
+    let mut builder =
+        AgentBuilder::new().listen_addr("0.0.0.0:0".parse().expect("listen address is valid"));
 
     if let Some((engine_id, usm_user)) = parse_usm_env() {
         builder = builder.engine_id(engine_id).usm_user(usm_user);
@@ -287,11 +288,16 @@ fn decode_hex_engine_id(hex_str: &str) -> Vec<u8> {
         eprintln!("error: USM_ENGINE_ID has odd number of hex digits");
         process::exit(1);
     }
-    (0..hex_str.len())
-        .step_by(2)
-        .map(|octet_start| {
-            u8::from_str_radix(&hex_str[octet_start..octet_start + 2], 16).unwrap_or_else(|e| {
-                eprintln!("error: invalid hex in USM_ENGINE_ID at position {octet_start}: {e}");
+    hex_str
+        .as_bytes()
+        .chunks_exact(2)
+        .enumerate()
+        .map(|(chunk_idx, pair)| {
+            let octet_str =
+                std::str::from_utf8(pair).expect("ASCII hex subset is valid UTF-8");
+            u8::from_str_radix(octet_str, 16).unwrap_or_else(|e| {
+                let position = chunk_idx * 2;
+                eprintln!("error: invalid hex in USM_ENGINE_ID at position {position}: {e}");
                 process::exit(1);
             })
         })
