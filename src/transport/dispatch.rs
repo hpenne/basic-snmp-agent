@@ -127,7 +127,14 @@ fn zero_auth_params_in_message(
         "caller must check auth_params is non-empty"
     );
     let mut zeroed = raw_message.to_vec();
-    zeroed[auth_params_offset..auth_params_offset + auth_params_len].fill(0);
+    // A crafted packet could supply an out-of-range offset/length; if the
+    // range is invalid the zeroing is skipped and the downstream HMAC check
+    // will reject the message harmlessly.
+    if let Some(end) = auth_params_offset.checked_add(auth_params_len)
+        && let Some(target) = zeroed.get_mut(auth_params_offset..end)
+    {
+        target.fill(0);
+    }
     zeroed
 }
 

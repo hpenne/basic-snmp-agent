@@ -223,9 +223,10 @@ fn parse_usm_env() -> Option<(Vec<u8>, UsmUser)> {
                 eprintln!("error: failed to derive priv key: {e}");
                 process::exit(1);
             });
-            let priv_key = SecretKey::new_from_exposed_slice(
-                &priv_key_full.as_bytes()[..priv_protocol.key_len()],
-            );
+            // password_to_localised_key guarantees output length >= priv_protocol.key_len();
+            // split_at panicking here would indicate a bug in the KDF.
+            let (priv_key_bytes, _) = priv_key_full.as_bytes().split_at(priv_protocol.key_len());
+            let priv_key = SecretKey::new_from_exposed_slice(priv_key_bytes);
 
             UsmUser::auth_priv(
                 parsed_user_name,
@@ -384,11 +385,12 @@ fn to_value(def: &VarbindDef) -> Result<Value, String> {
                 ));
             }
             let mut octets = [0u8; 4];
-            for (octet_index, octet_element) in arr.iter().enumerate() {
+            for (octet_index, (octet_dest, octet_element)) in octets.iter_mut().zip(arr).enumerate()
+            {
                 let raw_octet = octet_element
                     .as_u64()
                     .ok_or_else(|| format!("IpAddress: element {octet_index} is not an integer"))?;
-                octets[octet_index] = u8::try_from(raw_octet).map_err(|_| {
+                *octet_dest = u8::try_from(raw_octet).map_err(|_| {
                     format!("IpAddress: element {octet_index} value {raw_octet} is out of u8 range")
                 })?;
             }

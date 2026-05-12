@@ -225,7 +225,13 @@ fn encode_v3_envelope(
             .compute_mac(auth_key, &encoded_message)
             .map_err(|e| EncodeError::new(format!("HMAC computation failed: {e}")))?;
 
-        encoded_message[offset..offset + mac_len].copy_from_slice(&mac);
+        let end = offset
+            .checked_add(mac_len)
+            .ok_or_else(|| EncodeError::new("auth params range overflow"))?;
+        encoded_message
+            .get_mut(offset..end)
+            .ok_or_else(|| EncodeError::new("auth params range exceeds encoded message length"))?
+            .copy_from_slice(&mac);
     }
 
     Ok(encoded_message)

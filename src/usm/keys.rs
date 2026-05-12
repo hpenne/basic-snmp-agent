@@ -166,7 +166,8 @@ impl SecretKey {
         // allocation. Zeroize the tail first — Vec::truncate only adjusts
         // the length and does not clear the freed bytes.
         let mut vec = std::mem::take(&mut self.0).into_vec();
-        zeroize_slice(&mut vec[new_len..]);
+        let (_, tail) = vec.split_at_mut(new_len);
+        zeroize_slice(tail);
         vec.truncate(new_len);
         self.0 = vec.into_boxed_slice();
     }

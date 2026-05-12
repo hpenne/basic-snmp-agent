@@ -661,7 +661,9 @@ impl EventLoop {
                     break;
                 }
                 Ok(bytes_read) => {
-                    conn.read_buf.extend_from_slice(&chunk[..bytes_read]);
+                    // bytes_read <= chunk.len() is guaranteed by Read::read contract
+                    let (received, _) = chunk.split_at(bytes_read);
+                    conn.read_buf.extend_from_slice(received);
                     // Record activity so the idle-connection sweep does not
                     // evict a connection that is actively receiving data.
                     conn.last_activity = Instant::now();
@@ -678,26 +680,17 @@ impl EventLoop {
         }
 
         // Process all complete RFC 3430 BER frames from the buffer.
-        // Each frame is a raw BER SEQUENCE: tag 0x30, BER-encoded length, content.
-        loop {
-            // Need at least 2 bytes to read the tag and the first length byte.
-            if conn.read_buf.len() < 2 {
-                break;
-            }
-
-            // RFC 3430: frames must begin with the SEQUENCE tag (0x30).
-            // A different tag indicates a corrupt or non-SNMP stream.
-            if conn.read_buf[0] != 0x30 {
-                debug!(
-                    "non-SEQUENCE tag {:#04x} on token {token:?}, closing",
-                    conn.read_buf[0]
-                );
+        // Each frame starts with tag 0x30 (SEQUENCE); a different tag indicates
+        // a corrupt or non-SNMP stream.
+        while let Some((&tag_byte, after_tag)) = conn.read_buf.split_first() {
+            if tag_byte != 0x30 {
+                debug!("non-SEQUENCE tag {tag_byte:#04x} on token {token:?}, closing");
                 closed = true;
                 break;
             }
 
             // Distinguish incomplete data (wait for more) from invalid encoding (close).
-            let (content_length, length_field_bytes) = match parse_ber_length(&conn.read_buf[1..]) {
+            let (content_length, length_field_bytes) = match parse_ber_length(after_tag) {
                 Ok(Some(parsed)) => parsed,
                 Ok(None) => break,
                 Err(_) => {
@@ -717,13 +710,13 @@ impl EventLoop {
                 closed = true;
                 break;
             }
-            if conn.read_buf.len() < total_frame_bytes {
-                // Frame is incomplete; wait for more data on the next read event.
-                break;
-            }
 
             // The full BER frame (tag + length field + content) is the payload.
-            let ber_frame: Vec<u8> = conn.read_buf[..total_frame_bytes].to_vec();
+            let Some(frame_bytes) = conn.read_buf.get(..total_frame_bytes) else {
+                // Frame is incomplete; wait for more data on the next read event.
+                break;
+            };
+            let ber_frame: Vec<u8> = frame_bytes.to_vec();
             conn.read_buf.drain(..total_frame_bytes);
 
             let Some(encoded_response) = Self::dispatch_snmpv3_frame(
@@ -901,25 +894,25 @@ fn drain_pipe(fd: RawFd) {
 /// close the connection on error, as the stream is unrecoverable.
 // Implements: REQ-0071
 pub fn parse_ber_length(buf: &[u8]) -> Result<Option<(usize, usize)>, BerLengthError> {
-    if buf.is_empty() {
+    let Some((&first_byte, rest)) = buf.split_first() else {
         return Ok(None);
-    }
-    if buf[0] & 0x80 == 0 {
+    };
+    if first_byte & 0x80 == 0 {
         // Short form: the byte itself is the length.
-        return Ok(Some((usize::from(buf[0]), 1)));
+        return Ok(Some((usize::from(first_byte), 1)));
     }
-    let num_octets = usize::from(buf[0] & 0x7f);
+    let num_octets = usize::from(first_byte & 0x7f);
     if num_octets == 0 || num_octets > 4 {
         // Indefinite-length (0x80) or absurdly large (>4 bytes) is a protocol
         // error; the connection cannot recover.
         return Err(BerLengthError);
     }
-    if buf.len() < 1 + num_octets {
+    let Some(length_bytes) = rest.get(..num_octets) else {
         // Incomplete length field; caller should wait for more data.
         return Ok(None);
-    }
+    };
     let mut content_length: usize = 0;
-    for &byte in &buf[1..=num_octets] {
+    for &byte in length_bytes {
         content_length = (content_length << 8) | usize::from(byte);
     }
     Ok(Some((content_length, 1 + num_octets)))

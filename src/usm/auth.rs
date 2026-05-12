@@ -87,7 +87,7 @@ impl AuthProtocol {
                 actual: key.len(),
             });
         }
-        let mac = match self {
+        let mut mac = match self {
             Self::HmacSha256 => {
                 // `new_from_slice` only fails if the key is empty for some
                 // digest types; HMAC accepts any key length, so this is
@@ -104,7 +104,8 @@ impl AuthProtocol {
                 hmac.finalize().into_bytes().to_vec()
             }
         };
-        Ok(mac[..self.mac_len()].to_vec())
+        mac.truncate(self.mac_len());
+        Ok(mac)
     }
 
     /// Verify a truncated HMAC over `message` using `key`.

@@ -144,15 +144,14 @@ pub(crate) fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, 
             "BER: msgMaxSize must be at least 484 per RFC 3412 §6.6",
         ));
     }
-    let flags_bytes = header_reader.read_octet_string()?;
     // RFC 3412 §6.6: msgFlags must be exactly 1 byte.
-    if flags_bytes.len() != 1 {
+    let flags_bytes = header_reader.read_octet_string()?;
+    let &[security_flags] = flags_bytes else {
         return Err(BerError::new(format!(
             "BER: msgFlags must be exactly 1 byte, got {}",
             flags_bytes.len()
         )));
-    }
-    let security_flags = flags_bytes[0];
+    };
     let security_model = header_reader.read_integer()?;
 
     // Read the security_parameters OCTET STRING and track the absolute offset

@@ -329,11 +329,9 @@ impl std::error::Error for OidErrorKind {
 
 /// Validates OID structural rules, returning an `OidErrorKind` on violation.
 fn validate_oid_components(components: &[u32]) -> Result<(), OidErrorKind> {
-    if components.len() < 2 {
+    let &[first, second, ..] = components else {
         return Err(OidErrorKind::TooFewComponents(components.len()));
-    }
-    let first = components[0];
-    let second = components[1];
+    };
     if first > 2 {
         return Err(OidErrorKind::InvalidFirstArc(first));
     }
