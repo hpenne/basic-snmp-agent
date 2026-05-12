@@ -50,10 +50,6 @@ pub(crate) const TAG_RESPONSE: u8 = 0xA2;
 /// BER tag for `SNMPv2` `SetRequest-PDU` (context 3, constructed).
 pub(crate) const TAG_SET_REQUEST: u8 = 0xA3;
 
-/// BER tag for `SNMPv1` `Trap-PDU` (context 4, constructed).
-/// Not used in SNMPv2c/v3 but defined for completeness in PDU identification.
-pub(crate) const TAG_TRAP_V1: u8 = 0xA4;
-
 /// BER tag for `SNMPv2` `GetBulkRequest-PDU` (context 5, constructed).
 pub(crate) const TAG_GET_BULK_REQUEST: u8 = 0xA5;
 
@@ -162,6 +158,13 @@ impl BerWriter {
     }
 
     /// Creates a new writer pre-allocated for `cap` bytes.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "BER writer primitives are built out ahead of production callers"
+        )
+    )]
     pub(crate) fn with_capacity(cap: usize) -> Self {
         Self {
             buffer: Vec::with_capacity(cap),
@@ -203,6 +206,13 @@ impl BerWriter {
     /// A leading `0x00` byte is prepended when the high bit of the first
     /// significant byte is set, ensuring the value is interpreted as positive
     /// in the ASN.1 INTEGER two's-complement interpretation.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "BER writer primitives are built out ahead of production callers"
+        )
+    )]
     pub(crate) fn write_unsigned32(&mut self, value: u32) {
         let encoded_value = encode_unsigned_u32(value);
         self.write_tlv(TAG_INTEGER, &encoded_value);
@@ -212,6 +222,13 @@ impl BerWriter {
     ///
     /// A leading `0x00` byte is prepended when the high bit of the first
     /// significant byte is set (same sign-extension rule as `write_unsigned32`).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "BER writer primitives are built out ahead of production callers"
+        )
+    )]
     pub(crate) fn write_unsigned64(&mut self, value: u64) {
         let encoded_value = encode_unsigned_u64(value);
         self.write_tlv(TAG_INTEGER, &encoded_value);
@@ -237,6 +254,13 @@ impl BerWriter {
     }
 
     /// Appends a NULL TLV (`0x05 0x00`).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "BER writer primitives are built out ahead of production callers"
+        )
+    )]
     pub(crate) fn write_null(&mut self) {
         self.buffer.push(TAG_NULL);
         self.buffer.push(0x00);
@@ -258,6 +282,13 @@ impl BerWriter {
     }
 
     /// Returns the number of bytes accumulated so far.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "BER writer primitives are built out ahead of production callers"
+        )
+    )]
     pub(crate) fn len(&self) -> usize {
         self.buffer.len()
     }
@@ -468,12 +499,26 @@ impl<'a> BerReader<'a> {
     }
 
     /// Reads an INTEGER TLV and returns its value as an unsigned `u32`.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "BER reader primitives are built out ahead of production callers"
+        )
+    )]
     pub(crate) fn read_unsigned32(&mut self) -> Result<u32, BerError> {
         let (tag_start_offset, integer_bytes) = self.read_expected_tlv(TAG_INTEGER, "INTEGER")?;
         decode_unsigned_u32(integer_bytes, tag_start_offset)
     }
 
     /// Reads an INTEGER TLV and returns its value as an unsigned `u64`.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "BER reader primitives are built out ahead of production callers"
+        )
+    )]
     pub(crate) fn read_unsigned64(&mut self) -> Result<u64, BerError> {
         let (tag_start_offset, integer_bytes) = self.read_expected_tlv(TAG_INTEGER, "INTEGER")?;
         decode_unsigned_u64(integer_bytes, tag_start_offset)
@@ -481,6 +526,13 @@ impl<'a> BerReader<'a> {
 
     /// Reads an unsigned 32-bit INTEGER value with a specific expected tag.
     /// Used for APPLICATION-tagged `SMIv2` types.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "BER reader primitives are built out ahead of production callers"
+        )
+    )]
     pub(crate) fn read_tagged_unsigned32(&mut self, expected_tag: u8) -> Result<u32, BerError> {
         let (tag_start_offset, integer_bytes) =
             self.read_expected_tlv(expected_tag, "tagged unsigned32")?;
@@ -489,6 +541,13 @@ impl<'a> BerReader<'a> {
 
     /// Reads an unsigned 64-bit INTEGER value with a specific expected tag.
     /// Used for APPLICATION-tagged Counter64.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "BER reader primitives are built out ahead of production callers"
+        )
+    )]
     pub(crate) fn read_tagged_unsigned64(&mut self, expected_tag: u8) -> Result<u64, BerError> {
         let (tag_start_offset, integer_bytes) =
             self.read_expected_tlv(expected_tag, "tagged unsigned64")?;

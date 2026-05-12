@@ -376,9 +376,10 @@ impl fmt::Display for UsmUser {
 
 // ── UserCredentials ───────────────────────────────────────────────────────────
 
-// The `Priv` postfix shared by all variants is RFC 3414 terminology; renaming
-// would harm clarity. The lint is suppressed intentionally.
-#[allow(clippy::enum_variant_names)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "NoAuthNoPriv / AuthNoPriv / AuthPriv are RFC 3414 security-level names; renaming would harm clarity"
+)]
 enum UserCredentials {
     NoAuthNoPriv,
     AuthNoPriv {

@@ -22,8 +22,22 @@ pub(crate) enum DecodedPdu {
         /// PDU request identifier.
         request_id: i32,
         /// Error status (0 = `noError`).
+        #[cfg_attr(
+            not(test),
+            expect(
+                dead_code,
+                reason = "decoded from inbound PDUs; dispatch currently discards error fields from requests"
+            )
+        )]
         error_status: i32,
         /// 1-based index of the first errored varbind, or 0.
+        #[cfg_attr(
+            not(test),
+            expect(
+                dead_code,
+                reason = "decoded from inbound PDUs; dispatch currently discards error fields from requests"
+            )
+        )]
         error_index: i32,
         /// Raw `SEQUENCE OF VarBind` bytes (the full SEQUENCE TLV).
         raw_varbind_list: Vec<u8>,
@@ -173,6 +187,13 @@ pub(crate) fn encode_pdu(
 ///
 /// `raw_varbind_list` is a pre-encoded `VarBindList` SEQUENCE (including the
 /// SEQUENCE TLV wrapper).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "BER PDU primitives are built out ahead of production callers"
+    )
+)]
 pub(crate) fn encode_bulk_pdu(
     request_id: i32,
     non_repeaters: i32,

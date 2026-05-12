@@ -46,8 +46,8 @@ infallible_try_from = "warn"
 dbg_macro = "warn"
 
 # Don't `allow` Your Way Around These Lints
-# allow_attributes = "warn" ToDO
-# allow_attributes_without_reason = "warn" ToDO
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
 
 [package]
 name = "basic-snmp-agent"

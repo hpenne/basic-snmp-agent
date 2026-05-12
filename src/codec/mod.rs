@@ -12,7 +12,6 @@
 //! - [`pdu`]: SNMP PDU types and BER encode/decode functions for SNMPv2/v3
 //!   agents (RFC 3416).
 
-#[allow(dead_code)]
 pub(crate) mod ber;
 mod oid;
 mod pdu;

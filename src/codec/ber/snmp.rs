@@ -28,6 +28,13 @@ pub(crate) struct V3MessageEnvelope<'a> {
     /// Message ID from `HeaderData`; echoed in the `SNMPv3` response.
     pub msg_id: i32,
     /// Maximum message size from `HeaderData`.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "decoded envelope fields are built out ahead of production callers in the dispatch layer"
+        )
+    )]
     pub max_size: i32,
     /// Security flags byte from `HeaderData`.
     pub security_flags: u8,
@@ -38,6 +45,13 @@ pub(crate) struct V3MessageEnvelope<'a> {
     /// Decoded `ScopedPduData` — either plaintext or encrypted.
     pub scoped_data: ScopedData,
     /// Reference to the raw bytes of the complete `SNMPv3` message as received.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "decoded envelope fields are built out ahead of production callers in the dispatch layer"
+        )
+    )]
     pub raw_message: &'a [u8],
     /// Byte offset of `msgAuthenticationParameters` VALUE within `raw_message`.
     ///
@@ -320,7 +334,10 @@ pub(crate) fn encode_header_data(
 ///
 /// Returns a [`BerError`] if re-parsing the encoded message to locate the
 /// `auth_params` offset fails (should be unreachable for well-formed inputs).
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the SNMPv3 message structure fields from RFC 3412/3414"
+)]
 pub(crate) fn encode_v3_message(
     msg_id: i32,
     max_size: i32,

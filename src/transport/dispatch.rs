@@ -271,9 +271,10 @@ fn emit_unknown_security_model_response(
 /// assert!(result.is_none());
 /// ```
 #[must_use]
-// Each branch implements a sequential RFC 3414 security check; extracting them
-// into helpers would obscure the mandated processing order.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "sequential RFC 3414 security checks; splitting would obscure the mandated processing order"
+)]
 pub fn process_snmpv3_request(
     frame: &[u8],
     ctx: &mut DispatchContext<'_>,
@@ -2069,7 +2070,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn given_correct_priv_key_when_process_authpriv_then_decrypts_and_responds() {
         // Verifies: REQ-0101, REQ-0107, REQ-0109
         use crate::usm::auth::AuthProtocol;

@@ -132,7 +132,10 @@ fn next_privacy_salt() -> [u8; 8] {
 // Shared V3 message-building logic: wraps pre-encoded PDU bytes in a ScopedPdu,
 // optionally encrypts it, adds USM params, and signs with HMAC.
 // Implements: REQ-0068, REQ-0070, REQ-0072, REQ-0100, REQ-0101, REQ-0105, REQ-0106, REQ-0107, REQ-0109, REQ-0110, REQ-0111, REQ-0112
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the SNMPv3 message structure fields from RFC 3412/3414"
+)]
 fn encode_v3_envelope(
     msg_id: i32,
     engine_id: &[u8],
@@ -290,7 +293,10 @@ fn encode_v3_envelope(
 /// let bytes = encode_v3_response(1, b"engine", b"user", b"", 0, 0, None, None, &pdu).unwrap();
 /// assert!(!bytes.is_empty());
 /// ```
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the SNMPv3 message structure fields from RFC 3412/3414"
+)]
 pub fn encode_v3_response(
     msg_id: i32,
     engine_id: &[u8],
@@ -367,7 +373,10 @@ pub fn encode_v3_response(
 /// let bytes = encode_v3_trap(1, b"engine", b"user", b"", 0, 0, None, None, &pdu).unwrap();
 /// assert!(!bytes.is_empty());
 /// ```
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the SNMPv3 message structure fields from RFC 3412/3414"
+)]
 pub fn encode_v3_trap(
     msg_id: i32,
     engine_id: &[u8],
@@ -901,7 +910,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "comprehensive auth+priv round-trip test; splitting would obscure the test scenario"
+    )]
     fn given_auth_priv_when_encode_v3_response_then_scoped_pdu_is_encrypted_and_decryptable() {
         // Verifies: REQ-0101, REQ-0107, REQ-0109, REQ-0111, REQ-0112
         use crate::usm::auth::AuthProtocol;
@@ -1230,7 +1242,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn given_trap_pdu_when_encode_v3_trap_auth_priv_then_encrypted_and_decryptable() {
         // Verifies: REQ-0105
         use crate::usm::auth::AuthProtocol;
