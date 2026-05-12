@@ -21,24 +21,6 @@ pub(crate) enum DecodedPdu {
         tag: u8,
         /// PDU request identifier.
         request_id: i32,
-        /// Error status (0 = `noError`).
-        #[cfg_attr(
-            not(test),
-            expect(
-                dead_code,
-                reason = "decoded from inbound PDUs; dispatch currently discards error fields from requests"
-            )
-        )]
-        error_status: i32,
-        /// 1-based index of the first errored varbind, or 0.
-        #[cfg_attr(
-            not(test),
-            expect(
-                dead_code,
-                reason = "decoded from inbound PDUs; dispatch currently discards error fields from requests"
-            )
-        )]
-        error_index: i32,
         /// Raw `SEQUENCE OF VarBind` bytes (the full SEQUENCE TLV).
         raw_varbind_list: Vec<u8>,
     },
@@ -100,14 +82,16 @@ pub(crate) fn decode_pdu(raw_pdu_bytes: &[u8]) -> Result<DecodedPdu, BerError> {
         }
         TAG_GET_REQUEST | TAG_GET_NEXT_REQUEST | TAG_RESPONSE | TAG_SET_REQUEST
         | TAG_INFORM_REQUEST | TAG_TRAP | TAG_REPORT => {
-            let error_status = pdu_reader.read_integer()?;
-            let error_index = pdu_reader.read_integer()?;
+            // RFC 3416 §3 requires error-status and error-index to be zero in request PDUs.
+            // Non-request types (Response, Trap, etc.) are rejected by decoded_pdu_to_inbound,
+            // so these values are never needed. We advance the reader past them but do not
+            // store them.
+            let _ = pdu_reader.read_integer()?;
+            let _ = pdu_reader.read_integer()?;
             let raw_varbind_list = read_validated_varbind_list(&mut pdu_reader)?;
             Ok(DecodedPdu::Standard {
                 tag: pdu_tag,
                 request_id,
-                error_status,
-                error_index,
                 raw_varbind_list,
             })
         }
@@ -253,14 +237,10 @@ mod tests {
             DecodedPdu::Standard {
                 tag,
                 request_id,
-                error_status,
-                error_index,
                 raw_varbind_list,
             } => {
                 assert_eq!(tag, TAG_GET_REQUEST);
                 assert_eq!(request_id, 42);
-                assert_eq!(error_status, 0);
-                assert_eq!(error_index, 0);
                 assert_eq!(raw_varbind_list, &[0x30, 0x00]);
             }
             DecodedPdu::Bulk { .. } => panic!("expected Standard variant"),
@@ -291,14 +271,10 @@ mod tests {
             DecodedPdu::Standard {
                 tag,
                 request_id,
-                error_status,
-                error_index,
                 raw_varbind_list,
             } => {
                 assert_eq!(tag, TAG_RESPONSE);
                 assert_eq!(request_id, 42);
-                assert_eq!(error_status, 0);
-                assert_eq!(error_index, 0);
                 assert_eq!(raw_varbind_list, &[0x30, 0x00]);
             }
             DecodedPdu::Bulk { .. } => panic!("expected Standard variant"),
@@ -373,14 +349,10 @@ mod tests {
             DecodedPdu::Standard {
                 tag,
                 request_id,
-                error_status,
-                error_index,
                 raw_varbind_list,
             } => {
                 assert_eq!(tag, TAG_TRAP);
                 assert_eq!(request_id, 1);
-                assert_eq!(error_status, 0);
-                assert_eq!(error_index, 0);
                 assert_eq!(raw_varbind_list, &[0x30, 0x00]);
             }
             DecodedPdu::Bulk { .. } => panic!("expected Standard variant"),
@@ -419,14 +391,10 @@ mod tests {
             DecodedPdu::Standard {
                 tag,
                 request_id,
-                error_status,
-                error_index,
                 raw_varbind_list,
             } => {
                 assert_eq!(tag, TAG_REPORT);
                 assert_eq!(request_id, 99);
-                assert_eq!(error_status, 0);
-                assert_eq!(error_index, 0);
                 assert_eq!(raw_varbind_list, &[0x30, 0x00]);
             }
             DecodedPdu::Bulk { .. } => panic!("expected Standard variant"),
@@ -482,14 +450,10 @@ mod tests {
             DecodedPdu::Standard {
                 tag,
                 request_id,
-                error_status,
-                error_index,
                 raw_varbind_list,
             } => {
                 assert_eq!(tag, TAG_GET_NEXT_REQUEST);
                 assert_eq!(request_id, 100);
-                assert_eq!(error_status, 0);
-                assert_eq!(error_index, 0);
                 assert_eq!(raw_varbind_list, VARBIND_LIST_WIRE);
             }
             DecodedPdu::Bulk { .. } => panic!("expected Standard variant"),
@@ -609,14 +573,10 @@ mod tests {
             DecodedPdu::Standard {
                 tag,
                 request_id,
-                error_status,
-                error_index,
                 raw_varbind_list,
             } => {
                 assert_eq!(tag, TAG_SET_REQUEST);
                 assert_eq!(request_id, 55);
-                assert_eq!(error_status, 0);
-                assert_eq!(error_index, 0);
                 assert_eq!(raw_varbind_list, &[0x30, 0x00]);
             }
             DecodedPdu::Bulk { .. } => panic!("expected Standard variant"),
@@ -634,14 +594,10 @@ mod tests {
             DecodedPdu::Standard {
                 tag,
                 request_id,
-                error_status,
-                error_index,
                 raw_varbind_list,
             } => {
                 assert_eq!(tag, TAG_INFORM_REQUEST);
                 assert_eq!(request_id, 200);
-                assert_eq!(error_status, 0);
-                assert_eq!(error_index, 0);
                 assert_eq!(raw_varbind_list, &[0x30, 0x00]);
             }
             DecodedPdu::Bulk { .. } => panic!("expected Standard variant"),
@@ -706,5 +662,46 @@ mod tests {
             ber_error.to_string(),
             "BER: trailing bytes after VarBindList in PDU"
         );
+    }
+
+    // ── Test: Non-zero error_status/error_index are skipped harmlessly ───────
+
+    // GetRequest with request_id=77, error_status=3, error_index=5, empty VarBindList.
+    //
+    // RFC 3416 §3 mandates these fields are zero in request PDUs; however, a
+    // misbehaving peer might send non-zero values. The decoder must advance past
+    // them without corrupting the request_id or raw_varbind_list.
+    //
+    // Inner TLVs:
+    //   INTEGER 77:  02 01 4D   (3 bytes)
+    //   INTEGER 3:   02 01 03   (3 bytes)
+    //   INTEGER 5:   02 01 05   (3 bytes)
+    //   SEQUENCE {}: 30 00      (2 bytes)
+    // Total inner = 11 bytes
+    // Outer: A0 0B [11 bytes]
+    const GET_REQUEST_NONZERO_ERROR_FIELDS_WIRE: &[u8] = &[
+        0xA0, 0x0B, // GetRequest-PDU, length 11
+        0x02, 0x01, 0x4D, // INTEGER 77
+        0x02, 0x01, 0x03, // INTEGER 3  (non-zero error_status)
+        0x02, 0x01, 0x05, // INTEGER 5  (non-zero error_index)
+        0x30, 0x00, // SEQUENCE {} (empty VarBindList)
+    ];
+
+    #[test]
+    fn given_pdu_with_nonzero_error_fields_when_decoded_then_succeeds_with_correct_fields() {
+        let decoded =
+            decode_pdu(GET_REQUEST_NONZERO_ERROR_FIELDS_WIRE).expect("must decode successfully");
+        match decoded {
+            DecodedPdu::Standard {
+                tag,
+                request_id,
+                raw_varbind_list,
+            } => {
+                assert_eq!(tag, TAG_GET_REQUEST);
+                assert_eq!(request_id, 77);
+                assert_eq!(raw_varbind_list, &[0x30, 0x00]);
+            }
+            DecodedPdu::Bulk { .. } => panic!("expected Standard variant"),
+        }
     }
 }
