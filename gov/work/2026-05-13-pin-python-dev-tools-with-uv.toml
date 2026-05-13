@@ -1,0 +1,66 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-05-13-001"
+title = "Pin Python dev tools with uv"
+status = "queue"
+created = "2026-05-13"
+
+[content]
+description = """
+Replace bare `pip install` with uv for all Python tooling in CI and local development.
+Currently CI installs black, mypy, pylint, and pytest without version pins, meaning any new release can break the build — the same class of problem we solved for Rust with rust-toolchain.toml.
+
+uv manages a lockfile (uv.lock) that pins exact versions, and `uv run <tool>` auto-syncs the virtual environment, so local and CI builds stay in lockstep with no manual install step.
+
+## Implementation plan
+
+- [ ] Add `[project.optional-dependencies]` dev group to pyproject.toml with pinned versions
+- [ ] Add behave and its dependencies to pyproject.toml (replacing tests/system/requirements.txt)
+- [ ] Run `uv lock` to generate uv.lock
+- [ ] Update CI python-lint job: install uv, replace pip install with uv sync
+- [ ] Update CI system-tests job: replace pip install with uv sync
+- [ ] Update CI trace job if it uses Python tools
+- [ ] Update Makefile targets to use `uv run`
+- [ ] Remove tests/system/requirements.txt
+- [ ] Verify all CI jobs pass"""
+
+[[content.acceptance_criteria]]
+text = "pyproject.toml declares dev dependencies (black, mypy, pylint, pytest) with pinned versions"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "uv.lock committed to the repository"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "CI python-lint job installs tools via uv instead of bare pip"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "CI system-tests job installs behave via uv instead of bare pip"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Makefile python-lint target uses uv run"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "requirements-dev.txt and tests/system/requirements.txt removed (superseded by pyproject.toml)"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "All existing CI jobs pass"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"
