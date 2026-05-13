@@ -358,7 +358,7 @@ pub fn process_snmpv3_request(
     // authFlag) is treated as a mismatch. For noAuthNoPriv messages that pass this
     // check, authentication and decryption are skipped naturally (REQ-0103).
     if let Some(user) = ctx.usm_user {
-        let msg_level = crate::usm::user::SecurityLevel::from_msg_flags(v3_msg.usm.security_flags);
+        let msg_level = crate::usm::user::SecurityLevel::try_from(v3_msg.usm.security_flags);
         if msg_level.ok() != Some(user.security_level()) {
             *ctx.unsupported_sec_levels_counter =
                 ctx.unsupported_sec_levels_counter.saturating_add(1);
