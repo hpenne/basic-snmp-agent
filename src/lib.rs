@@ -650,10 +650,16 @@ mod tests {
         struct ObservableStore(Arc<Mutex<TrackingStore>>);
         impl EngineBootsStore for ObservableStore {
             fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> {
-                self.0.lock().unwrap().load()
+                self.0
+                    .lock()
+                    .map_err(|_| std::io::Error::other("store lock poisoned"))?
+                    .load()
             }
             fn save(&mut self, engine_id: &[u8], boots: u32) -> Result<(), std::io::Error> {
-                self.0.lock().unwrap().save(engine_id, boots)
+                self.0
+                    .lock()
+                    .map_err(|_| std::io::Error::other("store lock poisoned"))?
+                    .save(engine_id, boots)
             }
         }
 
@@ -693,6 +699,10 @@ mod tests {
                     boots: MAX_ENGINE_BOOTS,
                 }))
             }
+            #[expect(
+                clippy::unreachable,
+                reason = "test assertion: save must never be called when boots is at the ceiling"
+            )]
             fn save(&mut self, _engine_id: &[u8], _boots: u32) -> Result<(), std::io::Error> {
                 unreachable!("save must not be called at ceiling")
             }

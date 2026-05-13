@@ -37,7 +37,7 @@ pub struct Varbind {
 // ── ErrorStatus ───────────────────────────────────────────────────────────────
 
 /// SNMP error-status codes as defined in RFC 3416 §3.
-#[repr(u32)]
+#[repr(i32)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ErrorStatus {
     /// No error occurred.
@@ -114,7 +114,7 @@ impl ErrorStatus {
 impl fmt::Display for ErrorStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (name, code) = match self {
-            Self::NoError => ("noError", 0u32),
+            Self::NoError => ("noError", 0),
             Self::TooBig => ("tooBig", 1),
             Self::NoSuchName => ("noSuchName", 2),
             Self::BadValue => ("badValue", 3),
@@ -135,6 +135,12 @@ impl fmt::Display for ErrorStatus {
             Self::InconsistentName => ("inconsistentName", 18),
         };
         write!(f, "{name}({code})")
+    }
+}
+
+impl From<ErrorStatus> for i32 {
+    fn from(status: ErrorStatus) -> Self {
+        status as i32
     }
 }
 
@@ -581,6 +587,13 @@ mod tests {
             ErrorStatus::InconsistentName.to_string(),
             "inconsistentName(18)"
         );
+    }
+
+    #[test]
+    fn error_status_into_i32_boundary_and_middle_values() {
+        assert_eq!(i32::from(ErrorStatus::NoError), 0);
+        assert_eq!(i32::from(ErrorStatus::GenErr), 5);
+        assert_eq!(i32::from(ErrorStatus::InconsistentName), 18);
     }
 
     // ── GetResponse construction ───────────────────────────────────────────────

@@ -70,6 +70,10 @@ impl Oid {
     /// assert_eq!(oid2.to_string(), "2.999");
     /// ```
     #[must_use]
+    #[expect(
+        clippy::panic,
+        reason = "from_slice is a documented panicking constructor; TryFrom is the fallible alternative"
+    )]
     pub fn from_slice(components: &[u32]) -> Self {
         if let Err(kind) = validate_oid_components(components) {
             panic!("{}", ParseOidError { kind });
@@ -81,6 +85,22 @@ impl Oid {
     #[must_use]
     pub fn as_slice(&self) -> &[u32] {
         &self.0
+    }
+
+    /// Decomposes the OID into its first arc, second arc, and remaining arcs.
+    ///
+    /// This is a zero-cost convenience for BER encoding, which must combine
+    /// the first two arcs as `40 * first + second` (X.690 §8.19.4).
+    ///
+    /// # Invariant
+    ///
+    /// Relies on the `Oid` construction invariant of at least two arcs.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Oid construction validates at least two arcs, so indices 0 and 1 always exist"
+    )]
+    pub(crate) fn decompose(&self) -> (u32, u32, &[u32]) {
+        (self.0[0], self.0[1], &self.0[2..])
     }
 }
 
@@ -766,5 +786,19 @@ mod tests {
             parse_error.to_string().contains("129"),
             "error must report the actual count, got: {parse_error}"
         );
+    }
+
+    // --- Oid::decompose ---
+
+    #[test]
+    fn oid_decompose_with_remaining_arcs() {
+        let oid = Oid::from_slice(&[1, 3, 6, 1]);
+        assert_eq!(oid.decompose(), (1, 3, [6u32, 1].as_slice()));
+    }
+
+    #[test]
+    fn oid_decompose_minimum_two_arc_oid() {
+        let oid = Oid::from_slice(&[2, 999]);
+        assert_eq!(oid.decompose(), (2, 999, [].as_slice()));
     }
 }

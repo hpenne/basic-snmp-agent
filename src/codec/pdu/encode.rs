@@ -48,8 +48,7 @@ fn encode_varbinds(varbinds: &[Varbind]) -> Result<Vec<u8>, EncodeError> {
 /// ```
 pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
     let raw_varbind_list = encode_varbinds(&pdu.varbinds)?;
-    let error_status =
-        i32::try_from(pdu.error_status as u32).expect("ErrorStatus values 0–18 always fit in i32");
+    let error_status = i32::from(pdu.error_status);
     let error_index = i32::try_from(pdu.error_index).map_err(|_| {
         EncodeError::new(format!(
             "error_index {} exceeds maximum representable value in BER",
@@ -312,8 +311,7 @@ pub fn encode_v3_response(
     pdu: &GetResponse,
 ) -> Result<Vec<u8>, EncodeError> {
     let raw_varbind_list = encode_varbinds(&pdu.varbinds)?;
-    let error_status =
-        i32::try_from(pdu.error_status as u32).expect("ErrorStatus values 0–18 always fit in i32");
+    let error_status = i32::from(pdu.error_status);
     let error_index = i32::try_from(pdu.error_index).map_err(|_| {
         EncodeError::new(format!(
             "error_index {} exceeds maximum representable value in BER",
@@ -914,6 +912,10 @@ mod tests {
         clippy::too_many_lines,
         reason = "comprehensive auth+priv round-trip test; splitting would obscure the test scenario"
     )]
+    #[expect(
+        clippy::unreachable,
+        reason = "test assertion: match extracts EncryptedPdu variant after assert confirms it"
+    )]
     fn given_auth_priv_when_encode_v3_response_then_scoped_pdu_is_encrypted_and_decryptable() {
         // Verifies: REQ-0101, REQ-0107, REQ-0109, REQ-0111, REQ-0112
         use crate::usm::auth::AuthProtocol;
@@ -1242,6 +1244,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::unreachable,
+        reason = "test assertion: match extracts EncryptedPdu variant after assert confirms it"
+    )]
     fn given_trap_pdu_when_encode_v3_trap_auth_priv_then_encrypted_and_decryptable() {
         // Verifies: REQ-0105
         use crate::usm::auth::AuthProtocol;

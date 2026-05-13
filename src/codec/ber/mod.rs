@@ -811,11 +811,13 @@ fn decode_unsigned(
 /// Decodes a BER-encoded unsigned INTEGER into a `u32`.
 fn decode_unsigned_u32(integer_bytes: &[u8], error_offset: usize) -> Result<u32, BerError> {
     let value = decode_unsigned(integer_bytes, 4, error_offset)?;
-    // Safe: decode_unsigned with max_width=4 guarantees value fits in u32.
-    Ok(
-        u32::try_from(value)
-            .expect("decode_unsigned with max_width=4 guarantees value fits in u32"),
-    )
+    // decode_unsigned with max_width=4 bounds the result to <= u32::MAX; the map_err
+    // is a defensive fallback that is never reached in practice.
+    u32::try_from(value).map_err(|_| {
+        BerError::new(format!(
+            "BER: decoded unsigned value {value} exceeds u32 range at offset {error_offset}"
+        ))
+    })
 }
 
 /// Decodes a BER-encoded unsigned INTEGER into a `u64`.
@@ -834,10 +836,8 @@ fn decode_unsigned_u64(integer_bytes: &[u8], error_offset: usize) -> Result<u64,
 /// The combined value is computed as u64 to avoid overflow when the first arc
 /// is 2 and the second arc is large (e.g., `2.999999999`).
 fn encode_oid(oid: &Oid) -> Vec<u8> {
-    let [first_arc, second_arc, remaining_arcs @ ..] = oid.as_slice() else {
-        unreachable!("Oid validation guarantees at least two arcs")
-    };
-    let first_combined = u64::from(*first_arc) * 40 + u64::from(*second_arc);
+    let (first_arc, second_arc, remaining_arcs) = oid.decompose();
+    let first_combined = u64::from(first_arc) * 40 + u64::from(second_arc);
 
     let mut encoded = Vec::new();
     encode_base128(&mut encoded, first_combined);

@@ -71,15 +71,11 @@ impl AuthProtocol {
     /// # Requirements
     /// Implements: REQ-0083, REQ-0086, REQ-0087, REQ-0112
     ///
-    /// # Panics
-    ///
-    /// Unreachable in practice: the HMAC constructor is guarded by the
-    /// key-length check above it; HMAC also accepts any key length regardless.
-    ///
     /// # Errors
     ///
     /// Returns [`AuthError::InvalidKeyLength`] if the key length does not match
-    /// the protocol's required length.
+    /// the protocol's required length, or [`AuthError::HmacInitialisation`] if
+    /// the HMAC constructor unexpectedly rejects the key.
     pub fn compute_mac(self, key: &SecretKey, message: &[u8]) -> Result<Vec<u8>, AuthError> {
         if key.len() != self.key_len() {
             return Err(AuthError::InvalidKeyLength {
@@ -89,17 +85,16 @@ impl AuthProtocol {
         }
         let mut mac = match self {
             Self::HmacSha256 => {
-                // `new_from_slice` only fails if the key is empty for some
-                // digest types; HMAC accepts any key length, so this is
-                // unreachable after the length check above.
+                // `new_from_slice` only fails if the key length is rejected by
+                // the digest; HMAC accepts any key length, so this is defensive.
                 let mut hmac = Hmac::<Sha256>::new_from_slice(key.as_bytes())
-                    .expect("HMAC accepts any key length");
+                    .map_err(|_| AuthError::HmacInitialisation)?;
                 hmac.update(message);
                 hmac.finalize().into_bytes().to_vec()
             }
             Self::HmacSha512 => {
                 let mut hmac = Hmac::<Sha512>::new_from_slice(key.as_bytes())
-                    .expect("HMAC accepts any key length");
+                    .map_err(|_| AuthError::HmacInitialisation)?;
                 hmac.update(message);
                 hmac.finalize().into_bytes().to_vec()
             }
@@ -116,17 +111,13 @@ impl AuthProtocol {
     /// # Requirements
     /// Implements: REQ-0083, REQ-0086, REQ-0087, REQ-0100, REQ-0112, REQ-0113
     ///
-    /// # Panics
-    ///
-    /// Unreachable in practice: the HMAC constructor is guarded by the
-    /// key-length check above it; HMAC also accepts any key length regardless.
-    ///
     /// # Errors
     ///
     /// Returns [`AuthError::InvalidKeyLength`] if the key length does not match
     /// the protocol's required length, [`AuthError::InvalidMacLength`] if the
-    /// MAC is not exactly [`mac_len`][Self::mac_len] bytes, or
-    /// [`AuthError::MacMismatch`] if the MAC does not match.
+    /// MAC is not exactly [`mac_len`][Self::mac_len] bytes,
+    /// [`AuthError::MacMismatch`] if the MAC does not match, or
+    /// [`AuthError::HmacInitialisation`] if the HMAC constructor unexpectedly rejects the key.
     pub fn verify_mac(
         self,
         key: &SecretKey,
@@ -154,13 +145,13 @@ impl AuthProtocol {
         let result = match self {
             Self::HmacSha256 => {
                 let mut h = Hmac::<Sha256>::new_from_slice(key.as_bytes())
-                    .expect("HMAC accepts any key length");
+                    .map_err(|_| AuthError::HmacInitialisation)?;
                 h.update(message);
                 h.verify_truncated_left(expected_mac)
             }
             Self::HmacSha512 => {
                 let mut h = Hmac::<Sha512>::new_from_slice(key.as_bytes())
-                    .expect("HMAC accepts any key length");
+                    .map_err(|_| AuthError::HmacInitialisation)?;
                 h.update(message);
                 h.verify_truncated_left(expected_mac)
             }
@@ -180,6 +171,8 @@ pub enum AuthError {
     InvalidMacLength { expected: usize, actual: usize },
     /// The MAC did not match.
     MacMismatch,
+    /// Internal error: HMAC initialisation failed despite validated parameters.
+    HmacInitialisation,
 }
 
 impl std::fmt::Display for AuthError {
@@ -194,6 +187,7 @@ impl std::fmt::Display for AuthError {
                 "invalid MAC length: expected {expected} bytes, got {actual}"
             ),
             Self::MacMismatch => write!(f, "authentication MAC mismatch"),
+            Self::HmacInitialisation => write!(f, "HMAC initialisation failed"),
         }
     }
 }
@@ -516,6 +510,12 @@ mod tests {
     fn auth_error_mac_mismatch_display() {
         let e = AuthError::MacMismatch;
         assert_eq!(e.to_string(), "authentication MAC mismatch");
+    }
+
+    #[test]
+    fn auth_error_hmac_initialisation_display() {
+        let e = AuthError::HmacInitialisation;
+        assert_eq!(e.to_string(), "HMAC initialisation failed");
     }
 
     #[test]
