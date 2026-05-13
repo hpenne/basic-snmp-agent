@@ -20,8 +20,9 @@ pub use encode::{
 };
 pub use types::{
     DecodeError, DecodeErrorKind, DecodedScopedPdu, EncodeError, ErrorStatus, GetBulkRequest,
-    GetNextRequest, GetRequest, GetResponse, InboundPdu, SecurityModel, SetRequest,
-    UsmSecurityFields, V3InboundMessage, V3ScopedData, Varbind, VarbindValue, WireTrapPdu,
+    GetNextRequest, GetRequest, GetResponse, InboundPdu, InvalidErrorStatus, SecurityModel,
+    SetRequest, UsmSecurityFields, V3InboundMessage, V3ScopedData, Varbind, VarbindValue,
+    WireTrapPdu,
 };
 
 // Cross-module round-trip tests that exercise both encode and decode.

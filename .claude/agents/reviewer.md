@@ -20,6 +20,8 @@ Review for:
 - Conformance to CLAUDE.md coding conventions: descriptive names, "why" comments, documented public APIs with examples, no unnecessary complexity, no docstrings or comments added to unchanged code
 - Code duplication (which should usually be "SHOULD FIX", not "suggestion")
 
+The implementer will sometimes take shortcuts and make judgements calls (lax interpretation of Claude.md) to avoid work. Call this out in the review, do **NOT** let it pass.
+
 Output a structured review with: MUST FIX, SHOULD FIX, and SUGGESTIONS sections.
 Be strict - *ALWAYS* use SHOULD FIX instead of SUGGESTION unless fixing the issue has no benefit.
 Be specific — reference file names and line numbers.

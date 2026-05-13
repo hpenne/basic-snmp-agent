@@ -1407,8 +1407,11 @@ mod tests {
         };
         match scoped_pdu.data {
             rasn_snmp::v2::Pdus::Response(inner) => {
-                let error_status = crate::codec::ErrorStatus::from_u32(inner.0.error_status)
-                    .expect("valid error status");
+                let error_status = crate::codec::ErrorStatus::try_from(
+                    i32::try_from(inner.0.error_status)
+                        .expect("wire error_status exceeds i32::MAX"),
+                )
+                .expect("valid error status");
                 let varbinds = inner
                     .0
                     .variable_bindings
