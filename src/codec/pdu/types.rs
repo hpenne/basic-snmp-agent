@@ -37,7 +37,7 @@ pub struct Varbind {
 // ── ErrorStatus ───────────────────────────────────────────────────────────────
 
 /// SNMP error-status codes as defined in RFC 3416 §3.
-#[repr(u32)]
+#[repr(i32)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ErrorStatus {
     /// No error occurred.
@@ -80,41 +80,10 @@ pub enum ErrorStatus {
     InconsistentName = 18,
 }
 
-impl ErrorStatus {
-    /// Converts a raw RFC 3416 integer error-status code into an [`ErrorStatus`].
-    ///
-    /// Returns `None` if `code` is not a defined error-status value.
-    #[must_use]
-    pub fn from_u32(code: u32) -> Option<Self> {
-        match code {
-            0 => Some(Self::NoError),
-            1 => Some(Self::TooBig),
-            2 => Some(Self::NoSuchName),
-            3 => Some(Self::BadValue),
-            4 => Some(Self::ReadOnly),
-            5 => Some(Self::GenErr),
-            6 => Some(Self::NoAccess),
-            7 => Some(Self::WrongType),
-            8 => Some(Self::WrongLength),
-            9 => Some(Self::WrongEncoding),
-            10 => Some(Self::WrongValue),
-            11 => Some(Self::NoCreation),
-            12 => Some(Self::InconsistentValue),
-            13 => Some(Self::ResourceUnavailable),
-            14 => Some(Self::CommitFailed),
-            15 => Some(Self::UndoFailed),
-            16 => Some(Self::AuthorizationError),
-            17 => Some(Self::NotWritable),
-            18 => Some(Self::InconsistentName),
-            _ => None,
-        }
-    }
-}
-
 impl fmt::Display for ErrorStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (name, code) = match self {
-            Self::NoError => ("noError", 0u32),
+            Self::NoError => ("noError", 0),
             Self::TooBig => ("tooBig", 1),
             Self::NoSuchName => ("noSuchName", 2),
             Self::BadValue => ("badValue", 3),
@@ -135,6 +104,62 @@ impl fmt::Display for ErrorStatus {
             Self::InconsistentName => ("inconsistentName", 18),
         };
         write!(f, "{name}({code})")
+    }
+}
+
+impl From<ErrorStatus> for i32 {
+    fn from(status: ErrorStatus) -> Self {
+        status as i32
+    }
+}
+
+/// Error returned when an `i32` does not correspond to a defined
+/// [`ErrorStatus`] variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidErrorStatus(i32);
+
+impl InvalidErrorStatus {
+    /// Returns the invalid error-status code that was rejected.
+    #[must_use]
+    pub fn code(self) -> i32 {
+        self.0
+    }
+}
+
+impl fmt::Display for InvalidErrorStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid SNMP error-status code: {}", self.0)
+    }
+}
+
+impl std::error::Error for InvalidErrorStatus {}
+
+impl TryFrom<i32> for ErrorStatus {
+    type Error = InvalidErrorStatus;
+
+    fn try_from(code: i32) -> Result<Self, Self::Error> {
+        match code {
+            0 => Ok(Self::NoError),
+            1 => Ok(Self::TooBig),
+            2 => Ok(Self::NoSuchName),
+            3 => Ok(Self::BadValue),
+            4 => Ok(Self::ReadOnly),
+            5 => Ok(Self::GenErr),
+            6 => Ok(Self::NoAccess),
+            7 => Ok(Self::WrongType),
+            8 => Ok(Self::WrongLength),
+            9 => Ok(Self::WrongEncoding),
+            10 => Ok(Self::WrongValue),
+            11 => Ok(Self::NoCreation),
+            12 => Ok(Self::InconsistentValue),
+            13 => Ok(Self::ResourceUnavailable),
+            14 => Ok(Self::CommitFailed),
+            15 => Ok(Self::UndoFailed),
+            16 => Ok(Self::AuthorizationError),
+            17 => Ok(Self::NotWritable),
+            18 => Ok(Self::InconsistentName),
+            _ => Err(InvalidErrorStatus(code)),
+        }
     }
 }
 
@@ -512,40 +537,55 @@ mod tests {
     // ── ErrorStatus ───────────────────────────────────────────────────────────
 
     #[test]
-    fn error_status_values_match_rfc() {
-        assert_eq!(ErrorStatus::NoError as u32, 0);
-        assert_eq!(ErrorStatus::TooBig as u32, 1);
-        assert_eq!(ErrorStatus::NoSuchName as u32, 2);
-        assert_eq!(ErrorStatus::BadValue as u32, 3);
-        assert_eq!(ErrorStatus::ReadOnly as u32, 4);
-        assert_eq!(ErrorStatus::GenErr as u32, 5);
-        assert_eq!(ErrorStatus::NoAccess as u32, 6);
-        assert_eq!(ErrorStatus::WrongType as u32, 7);
-        assert_eq!(ErrorStatus::WrongLength as u32, 8);
-        assert_eq!(ErrorStatus::WrongEncoding as u32, 9);
-        assert_eq!(ErrorStatus::WrongValue as u32, 10);
-        assert_eq!(ErrorStatus::NoCreation as u32, 11);
-        assert_eq!(ErrorStatus::InconsistentValue as u32, 12);
-        assert_eq!(ErrorStatus::ResourceUnavailable as u32, 13);
-        assert_eq!(ErrorStatus::CommitFailed as u32, 14);
-        assert_eq!(ErrorStatus::UndoFailed as u32, 15);
-        assert_eq!(ErrorStatus::AuthorizationError as u32, 16);
-        assert_eq!(ErrorStatus::NotWritable as u32, 17);
-        assert_eq!(ErrorStatus::InconsistentName as u32, 18);
+    fn given_all_variants_when_cast_to_i32_then_values_match_rfc() {
+        assert_eq!(ErrorStatus::NoError as i32, 0);
+        assert_eq!(ErrorStatus::TooBig as i32, 1);
+        assert_eq!(ErrorStatus::NoSuchName as i32, 2);
+        assert_eq!(ErrorStatus::BadValue as i32, 3);
+        assert_eq!(ErrorStatus::ReadOnly as i32, 4);
+        assert_eq!(ErrorStatus::GenErr as i32, 5);
+        assert_eq!(ErrorStatus::NoAccess as i32, 6);
+        assert_eq!(ErrorStatus::WrongType as i32, 7);
+        assert_eq!(ErrorStatus::WrongLength as i32, 8);
+        assert_eq!(ErrorStatus::WrongEncoding as i32, 9);
+        assert_eq!(ErrorStatus::WrongValue as i32, 10);
+        assert_eq!(ErrorStatus::NoCreation as i32, 11);
+        assert_eq!(ErrorStatus::InconsistentValue as i32, 12);
+        assert_eq!(ErrorStatus::ResourceUnavailable as i32, 13);
+        assert_eq!(ErrorStatus::CommitFailed as i32, 14);
+        assert_eq!(ErrorStatus::UndoFailed as i32, 15);
+        assert_eq!(ErrorStatus::AuthorizationError as i32, 16);
+        assert_eq!(ErrorStatus::NotWritable as i32, 17);
+        assert_eq!(ErrorStatus::InconsistentName as i32, 18);
     }
 
     #[test]
-    fn error_status_from_u32_round_trip() {
-        for code in 0u32..=18 {
-            let status = ErrorStatus::from_u32(code).expect("should parse");
-            assert_eq!(status as u32, code);
+    fn given_valid_code_when_try_from_i32_then_round_trips() {
+        for code in 0i32..=18 {
+            let status = ErrorStatus::try_from(code).expect("should parse");
+            assert_eq!(status as i32, code);
         }
     }
 
     #[test]
-    fn error_status_from_u32_unknown_returns_none() {
-        assert!(ErrorStatus::from_u32(19).is_none());
-        assert!(ErrorStatus::from_u32(u32::MAX).is_none());
+    fn given_invalid_code_when_try_from_i32_then_returns_error() {
+        let result = ErrorStatus::try_from(19);
+        assert_eq!(result.unwrap_err().code(), 19);
+
+        let result = ErrorStatus::try_from(-1);
+        assert_eq!(result.unwrap_err().code(), -1);
+
+        let result = ErrorStatus::try_from(i32::MAX);
+        assert_eq!(result.unwrap_err().code(), i32::MAX);
+
+        let result = ErrorStatus::try_from(i32::MIN);
+        assert_eq!(result.unwrap_err().code(), i32::MIN);
+    }
+
+    #[test]
+    fn given_invalid_error_status_when_displayed_then_includes_code() {
+        let error = ErrorStatus::try_from(42).unwrap_err();
+        assert_eq!(error.to_string(), "invalid SNMP error-status code: 42");
     }
 
     #[test]
@@ -581,6 +621,13 @@ mod tests {
             ErrorStatus::InconsistentName.to_string(),
             "inconsistentName(18)"
         );
+    }
+
+    #[test]
+    fn error_status_into_i32_boundary_and_middle_values() {
+        assert_eq!(i32::from(ErrorStatus::NoError), 0);
+        assert_eq!(i32::from(ErrorStatus::GenErr), 5);
+        assert_eq!(i32::from(ErrorStatus::InconsistentName), 18);
     }
 
     // ── GetResponse construction ───────────────────────────────────────────────

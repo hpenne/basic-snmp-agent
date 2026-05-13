@@ -127,7 +127,14 @@ fn zero_auth_params_in_message(
         "caller must check auth_params is non-empty"
     );
     let mut zeroed = raw_message.to_vec();
-    zeroed[auth_params_offset..auth_params_offset + auth_params_len].fill(0);
+    // A crafted packet could supply an out-of-range offset/length; if the
+    // range is invalid the zeroing is skipped and the downstream HMAC check
+    // will reject the message harmlessly.
+    if let Some(end) = auth_params_offset.checked_add(auth_params_len)
+        && let Some(target) = zeroed.get_mut(auth_params_offset..end)
+    {
+        target.fill(0);
+    }
     zeroed
 }
 
@@ -264,9 +271,10 @@ fn emit_unknown_security_model_response(
 /// assert!(result.is_none());
 /// ```
 #[must_use]
-// Each branch implements a sequential RFC 3414 security check; extracting them
-// into helpers would obscure the mandated processing order.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "sequential RFC 3414 security checks; splitting would obscure the mandated processing order"
+)]
 pub fn process_snmpv3_request(
     frame: &[u8],
     ctx: &mut DispatchContext<'_>,
@@ -350,7 +358,7 @@ pub fn process_snmpv3_request(
     // authFlag) is treated as a mismatch. For noAuthNoPriv messages that pass this
     // check, authentication and decryption are skipped naturally (REQ-0103).
     if let Some(user) = ctx.usm_user {
-        let msg_level = crate::usm::user::SecurityLevel::from_msg_flags(v3_msg.usm.security_flags);
+        let msg_level = crate::usm::user::SecurityLevel::try_from(v3_msg.usm.security_flags);
         if msg_level.ok() != Some(user.security_level()) {
             *ctx.unsupported_sec_levels_counter =
                 ctx.unsupported_sec_levels_counter.saturating_add(1);
@@ -710,11 +718,11 @@ mod tests {
             .with_boots_time(3, 100);
         {
             let mut ctx = tc.ctx(None);
-            let _ = process_snmpv3_request(&probe_frame, &mut ctx, &mib);
+            let _response = process_snmpv3_request(&probe_frame, &mut ctx, &mib);
         }
         {
             let mut ctx = tc.ctx(None);
-            let _ = process_snmpv3_request(&probe_frame, &mut ctx, &mib);
+            let _response = process_snmpv3_request(&probe_frame, &mut ctx, &mib);
         }
         assert_eq!(tc.unknown_engine_ids, 7);
     }
@@ -726,10 +734,10 @@ mod tests {
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
         let frame = snmpv3_frames::encode_get_request(test_engine_id(), b"", 1, 2, oid.as_slice());
         let mut tc = TestCtx::new();
-        let _ = {
+        {
             let mut ctx = tc.ctx(None);
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+            let _response = process_snmpv3_request(&frame, &mut ctx, &mib);
+        }
         assert_eq!(tc.unknown_engine_ids, 0);
     }
 
@@ -741,7 +749,7 @@ mod tests {
         let mut tc = TestCtx::new().with_unknown_engine_ids(u32::MAX);
         {
             let mut ctx = tc.ctx(None);
-            let _ = process_snmpv3_request(&probe_frame, &mut ctx, &mib);
+            let _response = process_snmpv3_request(&probe_frame, &mut ctx, &mib);
         }
         assert_eq!(tc.unknown_engine_ids, u32::MAX);
     }
@@ -890,7 +898,7 @@ mod tests {
         let mut tc = TestCtx::new().with_unknown_engine_ids(u32::MAX);
         {
             let mut ctx = tc.ctx(None);
-            let _ = process_snmpv3_request(&frame, &mut ctx, &mib);
+            let _response = process_snmpv3_request(&frame, &mut ctx, &mib);
         }
         assert_eq!(tc.unknown_engine_ids, u32::MAX, "counter must not overflow");
     }
@@ -1088,7 +1096,7 @@ mod tests {
         let mut tc = TestCtx::new().with_unknown_user_names(u32::MAX);
         {
             let mut ctx = tc.ctx(Some(&alice));
-            let _ = process_snmpv3_request(&frame, &mut ctx, &mib);
+            let _response = process_snmpv3_request(&frame, &mut ctx, &mib);
         }
         assert_eq!(tc.unknown_user_names, u32::MAX, "counter must not overflow");
     }
@@ -1299,7 +1307,7 @@ mod tests {
         let mut tc = TestCtx::new().with_unsupported_sec_levels(u32::MAX);
         {
             let mut ctx = tc.ctx(Some(&alice));
-            let _ = process_snmpv3_request(&frame, &mut ctx, &mib);
+            let _response = process_snmpv3_request(&frame, &mut ctx, &mib);
         }
         assert_eq!(
             tc.unsupported_sec_levels,
@@ -1561,7 +1569,7 @@ mod tests {
         let mut tc = TestCtx::new().with_wrong_digests(u32::MAX);
         {
             let mut ctx = tc.ctx(Some(&alice));
-            let _ = process_snmpv3_request(&frame, &mut ctx, &mib);
+            let _response = process_snmpv3_request(&frame, &mut ctx, &mib);
         }
         assert_eq!(tc.wrong_digests, u32::MAX, "counter must not overflow");
     }
@@ -1830,7 +1838,7 @@ mod tests {
             .with_boots_time(1, 0);
         {
             let mut ctx = tc.ctx(Some(&alice));
-            let _ = process_snmpv3_request(&frame, &mut ctx, &mib);
+            let _response = process_snmpv3_request(&frame, &mut ctx, &mib);
         }
         assert_eq!(
             tc.not_in_time_windows,
@@ -2062,7 +2070,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn given_correct_priv_key_when_process_authpriv_then_decrypts_and_responds() {
         // Verifies: REQ-0101, REQ-0107, REQ-0109
         use crate::usm::auth::AuthProtocol;
@@ -2455,7 +2462,7 @@ mod tests {
             .with_decryption_errors(u32::MAX);
         {
             let mut ctx = tc.ctx(Some(&alice));
-            let _ = process_snmpv3_request(&frame, &mut ctx, &mib);
+            let _response = process_snmpv3_request(&frame, &mut ctx, &mib);
         }
         assert_eq!(tc.decryption_errors, u32::MAX, "counter must not overflow");
     }
@@ -2574,7 +2581,7 @@ mod tests {
         let mut tc = TestCtx::new().with_unknown_security_models(u32::MAX);
         {
             let mut ctx = tc.ctx(None);
-            let _ = process_snmpv3_request(&frame, &mut ctx, &mib);
+            let _response = process_snmpv3_request(&frame, &mut ctx, &mib);
         }
         assert_eq!(
             tc.unknown_security_models,

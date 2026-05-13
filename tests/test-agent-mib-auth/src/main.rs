@@ -27,7 +27,8 @@ fn main() {
         std::process::exit(1);
     });
     let usm_user = basic_snmp_agent::usm::user::UsmUser::auth_no_priv(
-        basic_snmp_agent::usm::user::UserName::new("authuser").unwrap(),
+        basic_snmp_agent::usm::user::UserName::new("authuser")
+            .expect("\"authuser\" is a valid user name"),
         AuthProtocol::HmacSha256,
         auth_key,
     );

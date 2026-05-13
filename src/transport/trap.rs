@@ -710,9 +710,21 @@ mod tests {
 
         let pdu = minimal_pdu();
 
-        // Send two traps.
-        let _ = sender.send_trap(&pdu, &[dest]);
-        let _ = sender.send_trap(&pdu, &[dest]);
+        // Send two traps and verify each was delivered.
+        let trap_results_1 = sender.send_trap(&pdu, &[dest]);
+        assert_eq!(trap_results_1.len(), 1);
+        assert_eq!(trap_results_1[0].destination, dest);
+        trap_results_1[0]
+            .outcome
+            .as_ref()
+            .expect("first trap send must succeed");
+        let trap_results_2 = sender.send_trap(&pdu, &[dest]);
+        assert_eq!(trap_results_2.len(), 1);
+        assert_eq!(trap_results_2[0].destination, dest);
+        trap_results_2[0]
+            .outcome
+            .as_ref()
+            .expect("second trap send must succeed");
 
         // Receive both datagrams.
         let mut recv_buf_1 = vec![0u8; TRAP_MTU_BYTES];

@@ -38,11 +38,15 @@ fn main() {
         eprintln!("error: failed to derive priv key: {e}");
         std::process::exit(1);
     });
-    let priv_key = SecretKey::new_from_exposed_slice(
-        &priv_key_full.as_bytes()[..PrivProtocol::Aes128.key_len()],
-    );
+    // password_to_localised_key guarantees output length >= PrivProtocol::Aes128.key_len();
+    // split_at panicking here would indicate a bug in the KDF.
+    let (priv_key_bytes, _) = priv_key_full
+        .as_bytes()
+        .split_at(PrivProtocol::Aes128.key_len());
+    let priv_key = SecretKey::new_from_exposed_slice(priv_key_bytes);
     let usm_user = basic_snmp_agent::usm::user::UsmUser::auth_priv(
-        basic_snmp_agent::usm::user::UserName::new("privuser").unwrap(),
+        basic_snmp_agent::usm::user::UserName::new("privuser")
+            .expect("\"privuser\" is a valid user name"),
         AuthProtocol::HmacSha256,
         auth_key,
         PrivProtocol::Aes128,

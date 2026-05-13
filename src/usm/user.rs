@@ -120,9 +120,9 @@ pub enum SecurityLevel {
     AuthPriv,
 }
 
-/// Error returned by [`SecurityLevel::from_msg_flags`] when the `msgFlags`
-/// byte contains `privFlag` set without `authFlag`, which RFC 3412 §7.1.2a
-/// forbids.
+/// Error returned when converting a `msgFlags` byte to [`SecurityLevel`] via
+/// [`TryFrom<u8>`] and the byte contains `privFlag` set without `authFlag`,
+/// which RFC 3412 §7.1.2a forbids.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InvalidMsgFlags(pub u8);
 
@@ -138,15 +138,16 @@ impl fmt::Display for InvalidMsgFlags {
 
 impl std::error::Error for InvalidMsgFlags {}
 
-impl SecurityLevel {
-    /// Derive the security level from the `msgFlags` byte (RFC 3412 §7.2.4).
-    ///
+/// Derive the security level from the `msgFlags` byte (RFC 3412 §7.2.4).
+///
+/// # Requirements
+/// Implements: REQ-0079
+impl TryFrom<u8> for SecurityLevel {
+    type Error = InvalidMsgFlags;
+
     /// Returns an error for the invalid combination where `privFlag` is set without
     /// `authFlag` (RFC 3412 §7.1.2a forbids this combination). The raw `msgFlags`
     /// byte is preserved in the error for diagnostic purposes.
-    ///
-    /// # Requirements
-    /// Implements: REQ-0079
     ///
     /// # Errors
     ///
@@ -157,14 +158,14 @@ impl SecurityLevel {
     /// ```
     /// use basic_snmp_agent::usm::user::{SecurityLevel, InvalidMsgFlags};
     ///
-    /// assert_eq!(SecurityLevel::from_msg_flags(0x00), Ok(SecurityLevel::NoAuthNoPriv));
-    /// assert_eq!(SecurityLevel::from_msg_flags(0x01), Ok(SecurityLevel::AuthNoPriv));
-    /// assert_eq!(SecurityLevel::from_msg_flags(0x03), Ok(SecurityLevel::AuthPriv));
-    /// assert!(SecurityLevel::from_msg_flags(0x02).is_err()); // privFlag without authFlag
+    /// assert_eq!(SecurityLevel::try_from(0x00_u8), Ok(SecurityLevel::NoAuthNoPriv));
+    /// assert_eq!(SecurityLevel::try_from(0x01_u8), Ok(SecurityLevel::AuthNoPriv));
+    /// assert_eq!(SecurityLevel::try_from(0x03_u8), Ok(SecurityLevel::AuthPriv));
+    /// assert_eq!(SecurityLevel::try_from(0x02_u8), Err(InvalidMsgFlags(0x02)));
     /// // The reportableFlag (bit 2) is ignored:
-    /// assert_eq!(SecurityLevel::from_msg_flags(0x04), Ok(SecurityLevel::NoAuthNoPriv));
+    /// assert_eq!(SecurityLevel::try_from(0x04_u8), Ok(SecurityLevel::NoAuthNoPriv));
     /// ```
-    pub fn from_msg_flags(flags: u8) -> Result<Self, InvalidMsgFlags> {
+    fn try_from(flags: u8) -> Result<Self, Self::Error> {
         match flags & 0x03 {
             0x00 => Ok(SecurityLevel::NoAuthNoPriv),
             0x01 => Ok(SecurityLevel::AuthNoPriv),
@@ -376,9 +377,10 @@ impl fmt::Display for UsmUser {
 
 // ── UserCredentials ───────────────────────────────────────────────────────────
 
-// The `Priv` postfix shared by all variants is RFC 3414 terminology; renaming
-// would harm clarity. The lint is suppressed intentionally.
-#[allow(clippy::enum_variant_names)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "NoAuthNoPriv / AuthNoPriv / AuthPriv are RFC 3414 security-level names; renaming would harm clarity"
+)]
 enum UserCredentials {
     NoAuthNoPriv,
     AuthNoPriv {
@@ -567,68 +569,70 @@ mod tests {
     }
 
     #[test]
-    fn from_msg_flags_maps_flag_bits_correctly() {
+    fn try_from_maps_flag_bits_correctly() {
         // Verifies: REQ-0079
         assert_eq!(
-            SecurityLevel::from_msg_flags(0x00),
+            SecurityLevel::try_from(0x00_u8),
             Ok(SecurityLevel::NoAuthNoPriv)
         );
         assert_eq!(
-            SecurityLevel::from_msg_flags(0x01),
+            SecurityLevel::try_from(0x01_u8),
             Ok(SecurityLevel::AuthNoPriv)
         );
         assert_eq!(
-            SecurityLevel::from_msg_flags(0x03),
+            SecurityLevel::try_from(0x03_u8),
             Ok(SecurityLevel::AuthPriv)
         );
-        assert_eq!(
-            SecurityLevel::from_msg_flags(0x02),
-            Err(InvalidMsgFlags(0x02))
-        );
+        assert_eq!(SecurityLevel::try_from(0x02_u8), Err(InvalidMsgFlags(0x02)));
     }
 
     #[test]
-    fn from_msg_flags_ignores_reportable_bit() {
+    fn try_from_ignores_reportable_bit() {
         // Verifies: REQ-0079
         // Bit 2 (0x04) is the reportableFlag, which must not affect the security level.
         assert_eq!(
-            SecurityLevel::from_msg_flags(0x04),
+            SecurityLevel::try_from(0x04_u8),
             Ok(SecurityLevel::NoAuthNoPriv)
         );
         assert_eq!(
-            SecurityLevel::from_msg_flags(0x05),
+            SecurityLevel::try_from(0x05_u8),
             Ok(SecurityLevel::AuthNoPriv)
         );
         assert_eq!(
-            SecurityLevel::from_msg_flags(0x07),
+            SecurityLevel::try_from(0x07_u8),
             Ok(SecurityLevel::AuthPriv)
         );
+        assert_eq!(SecurityLevel::try_from(0x06_u8), Err(InvalidMsgFlags(0x06)));
     }
 
     #[test]
-    fn from_msg_flags_ignores_reserved_high_bits() {
+    fn try_from_ignores_reserved_high_bits() {
         // Verifies: REQ-0079 — bits 3-7 of msgFlags are reserved and must be masked out
         assert_eq!(
-            SecurityLevel::from_msg_flags(0xF8), // 0xF8 & 0x03 == 0x00 → NoAuthNoPriv
+            SecurityLevel::try_from(0xF8_u8), // 0xF8 & 0x03 == 0x00 → NoAuthNoPriv
             Ok(SecurityLevel::NoAuthNoPriv)
         );
         assert_eq!(
-            SecurityLevel::from_msg_flags(0xF9), // 0xF9 & 0x03 == 0x01 → AuthNoPriv
+            SecurityLevel::try_from(0xF9_u8), // 0xF9 & 0x03 == 0x01 → AuthNoPriv
             Ok(SecurityLevel::AuthNoPriv)
         );
         assert_eq!(
-            SecurityLevel::from_msg_flags(0xFF), // 0xFF & 0x03 == 0x03 → AuthPriv
+            SecurityLevel::try_from(0xFF_u8), // 0xFF & 0x03 == 0x03 → AuthPriv
             Ok(SecurityLevel::AuthPriv)
+        );
+        assert_eq!(
+            SecurityLevel::try_from(0xFA_u8), // 0xFA & 0x03 == 0x02 → error
+            Err(InvalidMsgFlags(0xFA))
         );
     }
 
     #[test]
-    fn from_msg_flags_invalid_combination_carries_raw_byte() {
+    fn try_from_invalid_combination_carries_raw_byte() {
         // Verifies: REQ-0079 — the error carries the raw flags byte for diagnostics
-        let err = SecurityLevel::from_msg_flags(0x02).unwrap_err();
+        let err = SecurityLevel::try_from(0x02_u8).unwrap_err();
         assert_eq!(err, InvalidMsgFlags(0x02));
         // A flags byte with high bits set still produces an error with the full raw value
-        let err = SecurityLevel::from_msg_flags(0xFE).unwrap_err(); // 0xFE & 0x03 == 0x02
+        let err = SecurityLevel::try_from(0xFE_u8).unwrap_err(); // 0xFE & 0x03 == 0x02
         assert_eq!(err, InvalidMsgFlags(0xFE));
         // Display includes the raw byte in hex
         assert!(

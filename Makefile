@@ -9,9 +9,9 @@ test: clippy rust-test python-test behave-test
 
 pre-commit: clippy rust-test python-test python-lint fuzz-gen-seeds fuzz-1s trace check-format
 
-# Lint with pedantic Clippy warnings.
+# Lint — workspace lints are configured in Cargo.toml.
 clippy:
-	cargo clippy --workspace --all-targets -- -W clippy::pedantic -D warnings
+	cargo clippy --workspace --all-targets -- -D warnings
 
 # Rust unit tests and doc tests.
 rust-test:

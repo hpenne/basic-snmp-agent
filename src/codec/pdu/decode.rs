@@ -16,8 +16,6 @@ fn decoded_pdu_to_inbound(decoded: ber::pdu::DecodedPdu) -> Result<InboundPdu, D
         ber::pdu::DecodedPdu::Standard {
             tag: TAG_GET_REQUEST,
             request_id,
-            error_status: _,
-            error_index: _,
             raw_varbind_list,
         } => {
             let varbinds = decode_varbind_list_to_varbinds(&raw_varbind_list)?;
@@ -29,8 +27,6 @@ fn decoded_pdu_to_inbound(decoded: ber::pdu::DecodedPdu) -> Result<InboundPdu, D
         ber::pdu::DecodedPdu::Standard {
             tag: TAG_GET_NEXT_REQUEST,
             request_id,
-            error_status: _,
-            error_index: _,
             raw_varbind_list,
         } => {
             let varbinds = decode_varbind_list_to_varbinds(&raw_varbind_list)?;
@@ -42,8 +38,6 @@ fn decoded_pdu_to_inbound(decoded: ber::pdu::DecodedPdu) -> Result<InboundPdu, D
         ber::pdu::DecodedPdu::Standard {
             tag: TAG_SET_REQUEST,
             request_id,
-            error_status: _,
-            error_index: _,
             raw_varbind_list,
         } => {
             let varbinds = decode_varbind_list_to_varbinds(&raw_varbind_list)?;

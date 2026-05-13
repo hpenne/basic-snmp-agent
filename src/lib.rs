@@ -71,7 +71,7 @@ struct AgentInner {
 impl Drop for AgentInner {
     fn drop(&mut self) {
         // Errors are ignored: the event loop may have already exited.
-        let _ = self.command_sender.send(Command::Shutdown);
+        let _send_result = self.command_sender.send(Command::Shutdown);
         // `unwrap_or_else` recovers a poisoned mutex so the thread handle is
         // always joined, even if a panic occurred while the lock was held.
         let mut guard = self
@@ -79,7 +79,9 @@ impl Drop for AgentInner {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(handle) = guard.take() {
-            let _ = handle.join();
+            // Panics and I/O errors from the event loop thread cannot be
+            // propagated from Drop and are non-actionable during shutdown.
+            let _join_result = handle.join();
         }
     }
 }
@@ -650,10 +652,16 @@ mod tests {
         struct ObservableStore(Arc<Mutex<TrackingStore>>);
         impl EngineBootsStore for ObservableStore {
             fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> {
-                self.0.lock().unwrap().load()
+                self.0
+                    .lock()
+                    .map_err(|_| std::io::Error::other("store lock poisoned"))?
+                    .load()
             }
             fn save(&mut self, engine_id: &[u8], boots: u32) -> Result<(), std::io::Error> {
-                self.0.lock().unwrap().save(engine_id, boots)
+                self.0
+                    .lock()
+                    .map_err(|_| std::io::Error::other("store lock poisoned"))?
+                    .save(engine_id, boots)
             }
         }
 
@@ -693,6 +701,10 @@ mod tests {
                     boots: MAX_ENGINE_BOOTS,
                 }))
             }
+            #[expect(
+                clippy::unreachable,
+                reason = "test assertion: save must never be called when boots is at the ceiling"
+            )]
             fn save(&mut self, _engine_id: &[u8], _boots: u32) -> Result<(), std::io::Error> {
                 unreachable!("save must not be called at ceiling")
             }
