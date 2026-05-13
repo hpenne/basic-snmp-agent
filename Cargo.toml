@@ -22,7 +22,6 @@ panic_in_result_fn = "warn"
 let_underscore_future = "warn"
 let_underscore_must_use = "warn"
 unused_result_ok = "warn"
-# map_err_ignore = "warn" ToDo?
 
 # Don't Do Bad Async Stuff
 await_holding_lock = "warn"
@@ -30,10 +29,10 @@ await_holding_refcell_ref = "warn"
 
 # Don't Do Unsafe Things with Memory
 mem_forget = "warn"
-# undocumented_unsafe_blocks = "warn" ToDo
-# multiple_unsafe_ops_per_block = "warn" ToDO
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
 unnecessary_safety_doc = "warn"
-# unnecessary_safety_comment = "warn" ToDO
+unnecessary_safety_comment = "warn"
 
 # Don't Do Potentially Incorrect Things with Numbers
 float_cmp_const = "warn"
