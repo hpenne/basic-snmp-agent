@@ -20,7 +20,7 @@ panic_in_result_fn = "warn"
 
 # Don't Fail Silently
 let_underscore_future = "warn"
-# let_underscore_must_use = "warn" ToDo?
+let_underscore_must_use = "warn"
 unused_result_ok = "warn"
 # map_err_ignore = "warn" ToDo?
 

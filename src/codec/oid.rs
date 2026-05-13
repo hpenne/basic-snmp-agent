@@ -389,25 +389,25 @@ mod tests {
     #[test]
     #[should_panic(expected = "at least two components")]
     fn oid_from_slice_panics_on_empty() {
-        let _ = Oid::from_slice(&[]);
+        let _oid = Oid::from_slice(&[]);
     }
 
     #[test]
     #[should_panic(expected = "at least two components")]
     fn oid_from_slice_panics_on_single_component() {
-        let _ = Oid::from_slice(&[1]);
+        let _oid = Oid::from_slice(&[1]);
     }
 
     #[test]
     #[should_panic(expected = "first OID component must be 0, 1, or 2")]
     fn oid_from_slice_panics_on_invalid_first_component() {
-        let _ = Oid::from_slice(&[3, 0]);
+        let _oid = Oid::from_slice(&[3, 0]);
     }
 
     #[test]
     #[should_panic(expected = "second OID component must be")]
     fn oid_from_slice_panics_on_second_component_too_large() {
-        let _ = Oid::from_slice(&[0, 40]);
+        let _oid = Oid::from_slice(&[0, 40]);
     }
 
     #[test]
@@ -768,7 +768,7 @@ mod tests {
     fn given_oid_with_129_components_when_from_slice_then_panics() {
         let mut components = vec![1u32, 3];
         components.extend(std::iter::repeat_n(1u32, 127));
-        let _ = Oid::from_slice(&components);
+        let _oid = Oid::from_slice(&components);
     }
 
     #[test]

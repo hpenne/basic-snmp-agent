@@ -71,7 +71,7 @@ struct AgentInner {
 impl Drop for AgentInner {
     fn drop(&mut self) {
         // Errors are ignored: the event loop may have already exited.
-        let _ = self.command_sender.send(Command::Shutdown);
+        let _send_result = self.command_sender.send(Command::Shutdown);
         // `unwrap_or_else` recovers a poisoned mutex so the thread handle is
         // always joined, even if a panic occurred while the lock was held.
         let mut guard = self
@@ -79,7 +79,9 @@ impl Drop for AgentInner {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(handle) = guard.take() {
-            let _ = handle.join();
+            // Panics and I/O errors from the event loop thread cannot be
+            // propagated from Drop and are non-actionable during shutdown.
+            let _join_result = handle.join();
         }
     }
 }

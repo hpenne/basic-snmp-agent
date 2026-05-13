@@ -614,7 +614,7 @@ impl EventLoop {
                 Ok(Command::QueryValue { oid, reply }) => {
                     // Ignore send errors: the test may have timed out or dropped
                     // the receiver, and that should not kill the event loop.
-                    let _ = reply.send(self.store.get(&oid).cloned());
+                    let _send_result = reply.send(self.store.get(&oid).cloned());
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -794,7 +794,8 @@ impl EventLoop {
 
         for token in stale_tokens {
             if let Some(mut conn) = self.connections.remove(&token) {
-                let _ = self.poll.registry().deregister(&mut conn.stream);
+                // Deregistration failure is harmless since the connection is being closed regardless.
+                let _deregister_result = self.poll.registry().deregister(&mut conn.stream);
                 info!("closed idle connection (token {token:?})");
             }
         }
