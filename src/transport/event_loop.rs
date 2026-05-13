@@ -197,7 +197,7 @@ pub struct CommandSender {
     pipe_write_fd: OwnedFd,
 }
 
-// Safety: `OwnedFd` is just an integer fd, and `Sender<Command>` is `Send`.
+// `OwnedFd` is just an integer fd, and `Sender<Command>` is `Send`.
 // The documented contract requires `CommandSender` to be `Send + Sync` so that
 // `Agent` (which wraps it) can be shared across threads. This assertion catches
 // any future field addition that would break the contract at compile time.
@@ -219,6 +219,7 @@ impl CommandSender {
             .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "event loop has exited"))?;
         // Write one byte to wake the poll call; the value is irrelevant.
         let byte: [u8; 1] = [1];
+        // SAFETY: `pipe_write_fd` holds a valid fd from pipe(2); `byte.as_ptr()` points to a 1-byte stack buffer, and the length argument matches.
         let write_result =
             unsafe { libc::write(self.pipe_write_fd.as_raw_fd(), byte.as_ptr().cast(), 1) };
         if write_result < 0 {
@@ -614,7 +615,7 @@ impl EventLoop {
                 Ok(Command::QueryValue { oid, reply }) => {
                     // Ignore send errors: the test may have timed out or dropped
                     // the receiver, and that should not kill the event loop.
-                    let _ = reply.send(self.store.get(&oid).cloned());
+                    let _send_result = reply.send(self.store.get(&oid).cloned());
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -661,7 +662,9 @@ impl EventLoop {
                     break;
                 }
                 Ok(bytes_read) => {
-                    conn.read_buf.extend_from_slice(&chunk[..bytes_read]);
+                    // bytes_read <= chunk.len() is guaranteed by Read::read contract
+                    let (received, _) = chunk.split_at(bytes_read);
+                    conn.read_buf.extend_from_slice(received);
                     // Record activity so the idle-connection sweep does not
                     // evict a connection that is actively receiving data.
                     conn.last_activity = Instant::now();
@@ -678,26 +681,17 @@ impl EventLoop {
         }
 
         // Process all complete RFC 3430 BER frames from the buffer.
-        // Each frame is a raw BER SEQUENCE: tag 0x30, BER-encoded length, content.
-        loop {
-            // Need at least 2 bytes to read the tag and the first length byte.
-            if conn.read_buf.len() < 2 {
-                break;
-            }
-
-            // RFC 3430: frames must begin with the SEQUENCE tag (0x30).
-            // A different tag indicates a corrupt or non-SNMP stream.
-            if conn.read_buf[0] != 0x30 {
-                debug!(
-                    "non-SEQUENCE tag {:#04x} on token {token:?}, closing",
-                    conn.read_buf[0]
-                );
+        // Each frame starts with tag 0x30 (SEQUENCE); a different tag indicates
+        // a corrupt or non-SNMP stream.
+        while let Some((&tag_byte, after_tag)) = conn.read_buf.split_first() {
+            if tag_byte != 0x30 {
+                debug!("non-SEQUENCE tag {tag_byte:#04x} on token {token:?}, closing");
                 closed = true;
                 break;
             }
 
             // Distinguish incomplete data (wait for more) from invalid encoding (close).
-            let (content_length, length_field_bytes) = match parse_ber_length(&conn.read_buf[1..]) {
+            let (content_length, length_field_bytes) = match parse_ber_length(after_tag) {
                 Ok(Some(parsed)) => parsed,
                 Ok(None) => break,
                 Err(_) => {
@@ -717,13 +711,13 @@ impl EventLoop {
                 closed = true;
                 break;
             }
-            if conn.read_buf.len() < total_frame_bytes {
-                // Frame is incomplete; wait for more data on the next read event.
-                break;
-            }
 
             // The full BER frame (tag + length field + content) is the payload.
-            let ber_frame: Vec<u8> = conn.read_buf[..total_frame_bytes].to_vec();
+            let Some(frame_bytes) = conn.read_buf.get(..total_frame_bytes) else {
+                // Frame is incomplete; wait for more data on the next read event.
+                break;
+            };
+            let ber_frame: Vec<u8> = frame_bytes.to_vec();
             conn.read_buf.drain(..total_frame_bytes);
 
             let Some(encoded_response) = Self::dispatch_snmpv3_frame(
@@ -801,7 +795,8 @@ impl EventLoop {
 
         for token in stale_tokens {
             if let Some(mut conn) = self.connections.remove(&token) {
-                let _ = self.poll.registry().deregister(&mut conn.stream);
+                // Deregistration failure is harmless since the connection is being closed regardless.
+                let _deregister_result = self.poll.registry().deregister(&mut conn.stream);
                 info!("closed idle connection (token {token:?})");
             }
         }
@@ -837,15 +832,15 @@ impl EventLoop {
 /// failure automatically closes already-created fds on drop.
 fn create_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     let mut fds: [libc::c_int; 2] = [0; 2];
+    // SAFETY: fds is a valid, aligned two-element array.
     let pipe_result = unsafe { libc::pipe(fds.as_mut_ptr()) };
     if pipe_result < 0 {
         return Err(io::Error::last_os_error());
     }
 
-    // Safety: pipe(2) succeeded, so both fds are valid and we own them.
-    // Wrapping them in OwnedFd immediately means partial failures below
-    // automatically close the fds on drop.
+    // SAFETY: pipe(2) succeeded so fds[0] is a valid, owned fd.
     let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+    // SAFETY: pipe(2) succeeded so fds[1] is a valid, owned fd.
     let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
 
     set_nonblocking(read_fd.as_raw_fd())?;
@@ -856,10 +851,12 @@ fn create_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
 
 /// Set a file descriptor to non-blocking mode via `fcntl`.
 fn set_nonblocking(fd: RawFd) -> io::Result<()> {
+    // SAFETY: fd was obtained from a successful pipe(2) or accept(2) call.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: fd is valid (see above) and flags was obtained from a successful F_GETFL call.
     let set_nonblock_result = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
     if set_nonblock_result < 0 {
         return Err(io::Error::last_os_error());
@@ -873,6 +870,7 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
 fn drain_pipe(fd: RawFd) {
     let mut drain_buf = [0u8; 64];
     loop {
+        // SAFETY: fd is the read end of a pipe from a successful pipe(2) call; drain_buf is a valid stack buffer.
         let bytes_read = unsafe { libc::read(fd, drain_buf.as_mut_ptr().cast(), drain_buf.len()) };
         // TODO: `bytes_read <= 0` treats EAGAIN/WouldBlock and genuine errors (e.g.
         // EBADF) identically — both silently stop the drain. A real error here
@@ -901,25 +899,25 @@ fn drain_pipe(fd: RawFd) {
 /// close the connection on error, as the stream is unrecoverable.
 // Implements: REQ-0071
 pub fn parse_ber_length(buf: &[u8]) -> Result<Option<(usize, usize)>, BerLengthError> {
-    if buf.is_empty() {
+    let Some((&first_byte, rest)) = buf.split_first() else {
         return Ok(None);
-    }
-    if buf[0] & 0x80 == 0 {
+    };
+    if first_byte & 0x80 == 0 {
         // Short form: the byte itself is the length.
-        return Ok(Some((usize::from(buf[0]), 1)));
+        return Ok(Some((usize::from(first_byte), 1)));
     }
-    let num_octets = usize::from(buf[0] & 0x7f);
+    let num_octets = usize::from(first_byte & 0x7f);
     if num_octets == 0 || num_octets > 4 {
         // Indefinite-length (0x80) or absurdly large (>4 bytes) is a protocol
         // error; the connection cannot recover.
         return Err(BerLengthError);
     }
-    if buf.len() < 1 + num_octets {
+    let Some(length_bytes) = rest.get(..num_octets) else {
         // Incomplete length field; caller should wait for more data.
         return Ok(None);
-    }
+    };
     let mut content_length: usize = 0;
-    for &byte in &buf[1..=num_octets] {
+    for &byte in length_bytes {
         content_length = (content_length << 8) | usize::from(byte);
     }
     Ok(Some((content_length, 1 + num_octets)))
@@ -1163,12 +1161,7 @@ mod tests {
         let mut event_loop = EventLoop {
             poll: Poll::new().unwrap(),
             listener: mio::net::TcpListener::bind("127.0.0.1:0".parse().unwrap()).unwrap(),
-            pipe_read_fd: {
-                // Create a real pipe so OwnedFd is valid.
-                let mut fds: [libc::c_int; 2] = [0; 2];
-                unsafe { libc::pipe(fds.as_mut_ptr()) };
-                unsafe { OwnedFd::from_raw_fd(fds[0]) }
-            },
+            pipe_read_fd: create_pipe().unwrap().0,
             rx: mpsc::channel::<Command>().1,
             next_token: FIRST_CONN_TOKEN,
             connections: HashMap::new(),
@@ -1414,8 +1407,11 @@ mod tests {
         };
         match scoped_pdu.data {
             rasn_snmp::v2::Pdus::Response(inner) => {
-                let error_status = crate::codec::ErrorStatus::from_u32(inner.0.error_status)
-                    .expect("valid error status");
+                let error_status = crate::codec::ErrorStatus::try_from(
+                    i32::try_from(inner.0.error_status)
+                        .expect("wire error_status exceeds i32::MAX"),
+                )
+                .expect("valid error status");
                 let varbinds = inner
                     .0
                     .variable_bindings

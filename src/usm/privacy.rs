@@ -89,12 +89,12 @@ impl PrivProtocol {
                 // wrong; we have already validated key length above, and the
                 // IV is a fixed-size [u8; 16] matching AES's block size.
                 cfb_mode::Encryptor::<aes::Aes128>::new_from_slices(key.as_bytes(), iv)
-                    .unwrap_or_else(|_| unreachable!("key and IV lengths are validated"))
+                    .map_err(|_| PrivError::CipherInitialisation)?
                     .encrypt(&mut ciphertext);
             }
             Self::Aes256 => {
                 cfb_mode::Encryptor::<aes::Aes256>::new_from_slices(key.as_bytes(), iv)
-                    .unwrap_or_else(|_| unreachable!("key and IV lengths are validated"))
+                    .map_err(|_| PrivError::CipherInitialisation)?
                     .encrypt(&mut ciphertext);
             }
         }
@@ -145,12 +145,12 @@ impl PrivProtocol {
                 // wrong; we have already validated key length above, and the
                 // IV is a fixed-size [u8; 16] matching AES's block size.
                 cfb_mode::Decryptor::<aes::Aes128>::new_from_slices(key.as_bytes(), iv)
-                    .unwrap_or_else(|_| unreachable!("key and IV lengths are validated"))
+                    .map_err(|_| PrivError::CipherInitialisation)?
                     .decrypt(&mut plaintext);
             }
             Self::Aes256 => {
                 cfb_mode::Decryptor::<aes::Aes256>::new_from_slices(key.as_bytes(), iv)
-                    .unwrap_or_else(|_| unreachable!("key and IV lengths are validated"))
+                    .map_err(|_| PrivError::CipherInitialisation)?
                     .decrypt(&mut plaintext);
             }
         }
@@ -165,6 +165,8 @@ impl PrivProtocol {
 pub enum PrivError {
     /// The supplied key has the wrong length for the privacy protocol.
     InvalidKeyLength { expected: usize, actual: usize },
+    /// Internal error: cipher initialisation failed despite validated parameters.
+    CipherInitialisation,
 }
 
 impl std::fmt::Display for PrivError {
@@ -174,6 +176,7 @@ impl std::fmt::Display for PrivError {
                 f,
                 "invalid privacy key length: expected {expected} bytes, got {actual}"
             ),
+            Self::CipherInitialisation => write!(f, "cipher initialisation failed"),
         }
     }
 }
@@ -390,6 +393,12 @@ mod tests {
             e.to_string(),
             "invalid privacy key length: expected 16 bytes, got 32"
         );
+    }
+
+    #[test]
+    fn priv_error_cipher_initialisation_display() {
+        let e = PrivError::CipherInitialisation;
+        assert_eq!(e.to_string(), "cipher initialisation failed");
     }
 
     #[test]

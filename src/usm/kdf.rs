@@ -84,7 +84,9 @@ pub fn password_to_localised_key(
     // RFC 7860 §2 to provide adequate work against dictionary attacks.
     // Streaming into the hasher avoids materialising the 1 MiB buffer.
     let full_copies = KDF_STREAM_LEN / password.len();
-    let remainder = KDF_STREAM_LEN % password.len();
+    let remainder_len = KDF_STREAM_LEN % password.len();
+    // remainder_len < password.len() by definition of modulo (password is non-empty per check above)
+    let (final_chunk, _) = password.split_at(remainder_len);
     // master_key holds Ku inside a SecretKey so it is zeroised on drop.
     let master_key: SecretKey = match protocol {
         AuthProtocol::HmacSha256 => {
@@ -92,7 +94,7 @@ pub fn password_to_localised_key(
             for _ in 0..full_copies {
                 hasher.update(password);
             }
-            hasher.update(&password[..remainder]);
+            hasher.update(final_chunk);
             finalise_into_secret_key(hasher)
         }
         AuthProtocol::HmacSha512 => {
@@ -100,7 +102,7 @@ pub fn password_to_localised_key(
             for _ in 0..full_copies {
                 hasher.update(password);
             }
-            hasher.update(&password[..remainder]);
+            hasher.update(final_chunk);
             finalise_into_secret_key(hasher)
         }
     };

@@ -535,7 +535,7 @@ mod tests {
         let tmp_dir = std::env::temp_dir();
         let tmp_path = tmp_dir.join(format!("boots_test_none_{}.bin", std::process::id()));
         // Ensure file does not exist.
-        let _ = std::fs::remove_file(&tmp_path);
+        let _cleanup = std::fs::remove_file(&tmp_path);
         let mut store = FileEngineBootsStore::new(&tmp_path);
         let result = store.load().expect("load from absent file must return Ok");
         assert_eq!(result, None, "absent file must return None");
@@ -546,7 +546,8 @@ mod tests {
         // Verifies: REQ-0096
         let tmp_dir = std::env::temp_dir();
         let tmp_path = tmp_dir.join(format!("boots_test_rt_{}.bin", std::process::id()));
-        let _ = std::fs::remove_file(&tmp_path);
+        // Ensure file does not exist from a previous run.
+        let _cleanup = std::fs::remove_file(&tmp_path);
         let engine_id = b"\x80\x00\x1f\x88\x04myengine";
         let boots_value = 99_u32;
 
@@ -562,7 +563,7 @@ mod tests {
         assert_eq!(loaded.engine_id, engine_id);
         assert_eq!(loaded.boots, boots_value);
 
-        let _ = std::fs::remove_file(&tmp_path);
+        std::fs::remove_file(&tmp_path).expect("test cleanup");
     }
 
     #[test]
@@ -583,7 +584,7 @@ mod tests {
         let err = result.expect_err("oversized engine_id_len must produce an error");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 
-        let _ = std::fs::remove_file(&tmp_path);
+        std::fs::remove_file(&tmp_path).expect("test cleanup");
     }
 
     #[test]
@@ -603,7 +604,7 @@ mod tests {
         let err = result.expect_err("wrong total length must produce an error");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 
-        let _ = std::fs::remove_file(&tmp_path);
+        std::fs::remove_file(&tmp_path).expect("test cleanup");
     }
 
     #[test]
@@ -627,7 +628,7 @@ mod tests {
         assert_eq!(loaded.engine_id, engine_id);
         assert_eq!(loaded.boots, boots_value);
 
-        let _ = std::fs::remove_file(&tmp_path);
+        std::fs::remove_file(&tmp_path).expect("test cleanup");
     }
 
     #[test]
@@ -644,7 +645,7 @@ mod tests {
         let err = result.expect_err("reading a directory must produce an I/O error, not Ok(None)");
         // The error should NOT be NotFound.
         assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
-        let _ = std::fs::remove_dir(&tmp_dir);
+        std::fs::remove_dir(&tmp_dir).expect("test cleanup");
     }
 
     #[test]

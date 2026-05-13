@@ -9,13 +9,14 @@ from __future__ import annotations
 import sys
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 # Allow importing the script from the parent directory without installing it.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from req_coverage_check import (  # noqa: E402
+from req_coverage_check import (  # noqa: E402  # pylint: disable=wrong-import-position
     COVERAGE_KINDS,
     ImplementedRfc,
     build_coverage_map,
@@ -36,7 +37,6 @@ from req_coverage_check import (  # noqa: E402
     scan_rust_file_for_annotations,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -46,7 +46,7 @@ def make_rfc_dir(
     tmp_path: Path,
     rfc_id: str,
     phase: str,
-    clauses: list[dict],
+    clauses: list[dict[str, str]],
 ) -> Path:
     """Create a minimal RFC directory structure under *tmp_path* and return it."""
     rfc_dir = tmp_path / "gov" / "rfc" / rfc_id
@@ -83,7 +83,7 @@ def make_rfc_dir(
     return rfc_dir
 
 
-def make_gap_toml(tmp_path: Path, entries: list[dict]) -> Path:
+def make_gap_toml(tmp_path: Path, entries: list[dict[str, Any]]) -> Path:
     """Write a ``gov/req-coverage-gaps.toml`` file and return its path."""
     gov_dir = tmp_path / "gov"
     gov_dir.mkdir(parents=True, exist_ok=True)
@@ -99,7 +99,7 @@ def make_gap_toml(tmp_path: Path, entries: list[dict]) -> Path:
     return gov_dir / "req-coverage-gaps.toml"
 
 
-def _load_toml(path: Path) -> dict:
+def _load_toml(path: Path) -> dict[str, Any]:
     """Open *path* in binary mode and return the parsed TOML document."""
     with path.open("rb") as toml_file:
         return tomllib.load(toml_file)
@@ -120,7 +120,9 @@ class TestFindProjectRoot:
 
         assert found_root == tmp_path
 
-    def test_returns_root_itself_when_gov_rfc_is_in_start_dir(self, tmp_path: Path) -> None:
+    def test_returns_root_itself_when_gov_rfc_is_in_start_dir(
+        self, tmp_path: Path
+    ) -> None:
         (tmp_path / "gov" / "rfc").mkdir(parents=True)
 
         found_root = find_project_root(tmp_path)
@@ -289,7 +291,13 @@ class TestLoadExemptions:
     def test_loads_single_exemption(self, tmp_path: Path) -> None:
         make_gap_toml(
             tmp_path,
-            [{"req": "REQ-0039", "missing": ["behave_test"], "rationale": "compile-time"}],
+            [
+                {
+                    "req": "REQ-0039",
+                    "missing": ["behave_test"],
+                    "rationale": "compile-time",
+                }
+            ],
         )
         gov_dir = tmp_path / "gov"
 
@@ -304,7 +312,11 @@ class TestLoadExemptions:
             [
                 {"req": "REQ-0039", "missing": ["behave_test"], "rationale": "x"},
                 {"req": "REQ-0043", "missing": ["behave_test"], "rationale": "y"},
-                {"req": "REQ-0046", "missing": ["rust_test", "behave_test"], "rationale": "z"},
+                {
+                    "req": "REQ-0046",
+                    "missing": ["rust_test", "behave_test"],
+                    "rationale": "z",
+                },
             ],
         )
         gov_dir = tmp_path / "gov"
@@ -370,7 +382,9 @@ class TestCheckCoverage:
 
     def test_req_with_exempted_missing_kind_passes(self) -> None:
         required = {"REQ-0039"}
-        coverage_map = {"REQ-0039": {"code", "rust_test"}}  # behave_test absent but exempted
+        coverage_map = {
+            "REQ-0039": {"code", "rust_test"}
+        }  # behave_test absent but exempted
         exemptions = {"REQ-0039": {"behave_test"}}
 
         failures = check_coverage(required, coverage_map, exemptions)
@@ -379,7 +393,9 @@ class TestCheckCoverage:
 
     def test_req_with_all_uncovered_kinds_exempted_passes(self) -> None:
         required = {"REQ-0046"}
-        coverage_map = {"REQ-0046": {"code"}}  # rust_test and behave_test absent but exempted
+        coverage_map = {
+            "REQ-0046": {"code"}
+        }  # rust_test and behave_test absent but exempted
         exemptions = {"REQ-0046": {"rust_test", "behave_test"}}
 
         failures = check_coverage(required, coverage_map, exemptions)
@@ -451,7 +467,9 @@ class TestLoadImplementedRfcs:
         assert "RFC-0003" not in rfc_ids
         assert "RFC-0004" not in rfc_ids
 
-    def test_loads_multiple_rfcs_in_test_and_stable_phases(self, tmp_path: Path) -> None:
+    def test_loads_multiple_rfcs_in_test_and_stable_phases(
+        self, tmp_path: Path
+    ) -> None:
         make_rfc_dir(tmp_path, "RFC-0001", "test", [])
         make_rfc_dir(tmp_path, "RFC-0002", "stable", [])
         make_rfc_dir(tmp_path, "RFC-0003", "impl", [])
@@ -657,7 +675,9 @@ class TestFindOrphanedAnnotations:
         assert orphaned == {"REQ-9999"}
 
     def test_returns_empty_set_when_annotated_set_is_empty(self) -> None:
-        orphaned = find_orphaned_annotations(annotated_ids=set(), required_ids={"REQ-0001"})
+        orphaned = find_orphaned_annotations(
+            annotated_ids=set(), required_ids={"REQ-0001"}
+        )
 
         assert orphaned == set()
 
@@ -670,11 +690,15 @@ class TestFindOrphanedAnnotations:
 class TestFindDuplicateReqIds:
     def test_returns_empty_dict_when_no_duplicates(self, tmp_path: Path) -> None:
         make_rfc_dir(
-            tmp_path, "RFC-0001", "test",
+            tmp_path,
+            "RFC-0001",
+            "test",
             [{"clause_id": "C-A", "text": "[REQ-0001] MUST do A."}],
         )
         make_rfc_dir(
-            tmp_path, "RFC-0002", "test",
+            tmp_path,
+            "RFC-0002",
+            "test",
             [{"clause_id": "C-B", "text": "[REQ-0002] MUST do B."}],
         )
         implemented_rfcs = load_implemented_rfcs(tmp_path / "gov")
@@ -687,11 +711,15 @@ class TestFindDuplicateReqIds:
         self, tmp_path: Path
     ) -> None:
         make_rfc_dir(
-            tmp_path, "RFC-0001", "test",
+            tmp_path,
+            "RFC-0001",
+            "test",
             [{"clause_id": "C-A", "text": "[REQ-0001] MUST do A."}],
         )
         make_rfc_dir(
-            tmp_path, "RFC-0002", "test",
+            tmp_path,
+            "RFC-0002",
+            "test",
             # REQ-0001 repeated in a second RFC — a governance error.
             [{"clause_id": "C-B", "text": "[REQ-0001] MUST also do B."}],
         )
@@ -708,7 +736,9 @@ class TestFindDuplicateReqIds:
         # The same REQ-0001 appears in two clauses of the same RFC; this is
         # not a duplicate — only cross-RFC repetition is reported.
         make_rfc_dir(
-            tmp_path, "RFC-0001", "test",
+            tmp_path,
+            "RFC-0001",
+            "test",
             [
                 {"clause_id": "C-A", "text": "[REQ-0001] MUST do A."},
                 {"clause_id": "C-B", "text": "[REQ-0001] Also MUST do A."},
@@ -758,7 +788,7 @@ class TestRunCheck:
         )
 
     def test_passes_when_all_requirements_are_fully_covered(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         self._build_full_project(tmp_path)
 
@@ -769,7 +799,7 @@ class TestRunCheck:
         assert "PASSED" in output
 
     def test_fails_when_a_requirement_is_missing_coverage(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         clauses = [
             {"clause_id": "C-TRAPS", "text": "[REQ-0099] The agent MUST send traps."}
@@ -785,10 +815,13 @@ class TestRunCheck:
         assert "FAILED" in output
 
     def test_passes_when_missing_coverage_is_fully_exempted(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         clauses = [
-            {"clause_id": "C-TRAPS", "text": "[REQ-0099] The agent MUST NOT send informs."}
+            {
+                "clause_id": "C-TRAPS",
+                "text": "[REQ-0099] The agent MUST NOT send informs.",
+            }
         ]
         make_rfc_dir(tmp_path, "RFC-0001", "test", clauses)
         make_gap_toml(
@@ -809,7 +842,7 @@ class TestRunCheck:
         assert "PASSED" in output
 
     def test_reports_correct_rfc_and_requirement_counts(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         self._build_full_project(tmp_path)
 
@@ -820,7 +853,7 @@ class TestRunCheck:
         assert "2 requirements" in output
 
     def test_pre_completion_rfc_requirements_are_not_checked(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         # RFCs in spec, impl, or draft phases are not yet complete — their
         # requirements must not be checked.
@@ -836,7 +869,7 @@ class TestRunCheck:
         assert "0 implemented RFC(s)" in output
 
     def test_strict_mode_fails_on_orphaned_annotation(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         # RFC defines only REQ-0001, but the Rust file also annotates REQ-9999.
         clauses = [{"clause_id": "C-A", "text": "[REQ-0001] MUST do something."}]
@@ -863,7 +896,7 @@ class TestRunCheck:
         assert "ORPHAN REQ-9999" in output
 
     def test_strict_mode_passes_when_no_orphaned_annotations(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         self._build_full_project(tmp_path)
 
@@ -874,7 +907,7 @@ class TestRunCheck:
         assert "ORPHAN" not in output
 
     def test_non_strict_mode_ignores_orphaned_annotations(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         # REQ-9999 is annotated but undefined; without --strict this must not fail.
         clauses = [{"clause_id": "C-A", "text": "[REQ-0001] MUST do something."}]
@@ -901,16 +934,20 @@ class TestRunCheck:
         assert "ORPHAN" not in output
 
     def test_warns_on_duplicate_req_ids_across_rfcs(
-        self, tmp_path: Path, capsys
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         # REQ-0001 is claimed by both RFCs — a governance error that must be
         # printed as a WARNING regardless of --strict.
         make_rfc_dir(
-            tmp_path, "RFC-0001", "test",
+            tmp_path,
+            "RFC-0001",
+            "test",
             [{"clause_id": "C-A", "text": "[REQ-0001] MUST do A."}],
         )
         make_rfc_dir(
-            tmp_path, "RFC-0002", "test",
+            tmp_path,
+            "RFC-0002",
+            "test",
             [{"clause_id": "C-B", "text": "[REQ-0001] MUST also do A."}],
         )
 

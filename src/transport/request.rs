@@ -156,7 +156,8 @@ pub fn handle_get_bulk(
     let mut response_varbinds: Vec<Varbind> = Vec::new();
 
     // Non-repeating section: resolved exactly once each, like GETNEXT.
-    for vb in &req.varbinds[..non_repeaters] {
+    let (non_repeating_varbinds, repeating_varbinds) = req.varbinds.split_at(non_repeaters);
+    for vb in non_repeating_varbinds {
         let resolved = match store.next(&vb.oid) {
             Some((next_oid, next_val)) => Varbind {
                 oid: next_oid.clone(),
@@ -173,7 +174,6 @@ pub fn handle_get_bulk(
     // Repeating section: each column advances max_repetitions steps forward.
     // The RFC specifies the response is ordered by repetition (all columns for
     // repetition 1, then all for repetition 2, ...).
-    let repeating_varbinds = &req.varbinds[non_repeaters..];
     if !repeating_varbinds.is_empty() && max_repetitions > 0 {
         // Track the current OID for each repeating column.
         let mut current_oids: Vec<Oid> =

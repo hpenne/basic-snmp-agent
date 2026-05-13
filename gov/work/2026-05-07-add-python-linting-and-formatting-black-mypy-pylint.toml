@@ -3,8 +3,10 @@
 [govctl]
 id = "WI-2026-05-07-004"
 title = "Add Python linting and formatting: black, mypy, pylint"
-status = "queue"
+status = "done"
 created = "2026-05-07"
+started = "2026-05-07"
+completed = "2026-05-07"
 
 [content]
 description = """
@@ -17,45 +19,45 @@ Python files in scope:
 - tests/system/docker/snmptrapd/record-trap.py
 
 Implementation plan:
-- [ ] Create pyproject.toml with [tool.black], [tool.mypy], and [tool.pylint] configuration
-- [ ] Run black and commit the one-shot reformatting
-- [ ] Define a typed context Protocol for Behave steps (declares attributes set on context with their known types)
-- [ ] Add type annotations to all functions and get mypy passing
-- [ ] Get pylint passing (fix findings or add targeted disables with justification)
-- [ ] Add Makefile targets: black --check, mypy, pylint (integrate into pre-commit)
-- [ ] Add black/mypy/pylint to CI workflow"""
+- [x] Create pyproject.toml with [tool.black], [tool.mypy], and [tool.pylint] configuration
+- [x] Run black and commit the one-shot reformatting
+- [x] Define a typed context Protocol for Behave steps (declares attributes set on context with their known types)
+- [x] Add type annotations to all functions and get mypy passing
+- [x] Get pylint passing (fix findings or add targeted disables with justification)
+- [x] Add Makefile targets: black --check, mypy, pylint (integrate into pre-commit)
+- [x] Add black/mypy/pylint to CI workflow"""
 
 [[content.acceptance_criteria]]
 text = "pyproject.toml with black, mypy, and pylint configuration"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "All Python files formatted with black"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "Typed context Protocol for Behave step files"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "All Python files pass mypy with no type: ignore pragmas on context access"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "All Python files pass pylint"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "Makefile pre-commit target includes black --check, mypy, and pylint"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "CI workflow runs black --check, mypy, and pylint"
-status = "pending"
+status = "done"
 category = "chore"

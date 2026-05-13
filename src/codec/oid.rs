@@ -70,6 +70,10 @@ impl Oid {
     /// assert_eq!(oid2.to_string(), "2.999");
     /// ```
     #[must_use]
+    #[expect(
+        clippy::panic,
+        reason = "from_slice is a documented panicking constructor; TryFrom is the fallible alternative"
+    )]
     pub fn from_slice(components: &[u32]) -> Self {
         if let Err(kind) = validate_oid_components(components) {
             panic!("{}", ParseOidError { kind });
@@ -81,6 +85,22 @@ impl Oid {
     #[must_use]
     pub fn as_slice(&self) -> &[u32] {
         &self.0
+    }
+
+    /// Decomposes the OID into its first arc, second arc, and remaining arcs.
+    ///
+    /// This is a zero-cost convenience for BER encoding, which must combine
+    /// the first two arcs as `40 * first + second` (X.690 §8.19.4).
+    ///
+    /// # Invariant
+    ///
+    /// Relies on the `Oid` construction invariant of at least two arcs.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "Oid construction validates at least two arcs, so indices 0 and 1 always exist"
+    )]
+    pub(crate) fn decompose(&self) -> (u32, u32, &[u32]) {
+        (self.0[0], self.0[1], &self.0[2..])
     }
 }
 
@@ -329,11 +349,9 @@ impl std::error::Error for OidErrorKind {
 
 /// Validates OID structural rules, returning an `OidErrorKind` on violation.
 fn validate_oid_components(components: &[u32]) -> Result<(), OidErrorKind> {
-    if components.len() < 2 {
+    let &[first, second, ..] = components else {
         return Err(OidErrorKind::TooFewComponents(components.len()));
-    }
-    let first = components[0];
-    let second = components[1];
+    };
     if first > 2 {
         return Err(OidErrorKind::InvalidFirstArc(first));
     }
@@ -371,25 +389,25 @@ mod tests {
     #[test]
     #[should_panic(expected = "at least two components")]
     fn oid_from_slice_panics_on_empty() {
-        let _ = Oid::from_slice(&[]);
+        let _oid = Oid::from_slice(&[]);
     }
 
     #[test]
     #[should_panic(expected = "at least two components")]
     fn oid_from_slice_panics_on_single_component() {
-        let _ = Oid::from_slice(&[1]);
+        let _oid = Oid::from_slice(&[1]);
     }
 
     #[test]
     #[should_panic(expected = "first OID component must be 0, 1, or 2")]
     fn oid_from_slice_panics_on_invalid_first_component() {
-        let _ = Oid::from_slice(&[3, 0]);
+        let _oid = Oid::from_slice(&[3, 0]);
     }
 
     #[test]
     #[should_panic(expected = "second OID component must be")]
     fn oid_from_slice_panics_on_second_component_too_large() {
-        let _ = Oid::from_slice(&[0, 40]);
+        let _oid = Oid::from_slice(&[0, 40]);
     }
 
     #[test]
@@ -750,7 +768,7 @@ mod tests {
     fn given_oid_with_129_components_when_from_slice_then_panics() {
         let mut components = vec![1u32, 3];
         components.extend(std::iter::repeat_n(1u32, 127));
-        let _ = Oid::from_slice(&components);
+        let _oid = Oid::from_slice(&components);
     }
 
     #[test]
@@ -768,5 +786,19 @@ mod tests {
             parse_error.to_string().contains("129"),
             "error must report the actual count, got: {parse_error}"
         );
+    }
+
+    // --- Oid::decompose ---
+
+    #[test]
+    fn oid_decompose_with_remaining_arcs() {
+        let oid = Oid::from_slice(&[1, 3, 6, 1]);
+        assert_eq!(oid.decompose(), (1, 3, [6u32, 1].as_slice()));
+    }
+
+    #[test]
+    fn oid_decompose_minimum_two_arc_oid() {
+        let oid = Oid::from_slice(&[2, 999]);
+        assert_eq!(oid.decompose(), (2, 999, [].as_slice()));
     }
 }

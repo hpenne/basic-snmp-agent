@@ -27,8 +27,10 @@ pub fn zeroize_slice(slice: &mut [u8]) {
     // Implements: REQ-0085, REQ-0108
     let ptr = slice.as_mut_ptr();
     for i in 0..slice.len() {
-        // SAFETY: `ptr` is valid for `slice.len()` bytes and we are within bounds.
-        unsafe { ptr.add(i).write_volatile(0u8) };
+        // SAFETY: `i` is within bounds of the original slice, so `ptr.add(i)` is valid.
+        let target = unsafe { ptr.add(i) };
+        // SAFETY: `target` points to a valid, aligned byte within the slice.
+        unsafe { target.write_volatile(0u8) };
     }
     compiler_fence(Ordering::SeqCst);
 }
@@ -166,7 +168,8 @@ impl SecretKey {
         // allocation. Zeroize the tail first — Vec::truncate only adjusts
         // the length and does not clear the freed bytes.
         let mut vec = std::mem::take(&mut self.0).into_vec();
-        zeroize_slice(&mut vec[new_len..]);
+        let (_, tail) = vec.split_at_mut(new_len);
+        zeroize_slice(tail);
         vec.truncate(new_len);
         self.0 = vec.into_boxed_slice();
     }

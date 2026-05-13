@@ -116,20 +116,23 @@ fn decode_varbind_value(
             DecodedVarbindValue::Unspecified
         }
         TAG_NO_SUCH_OBJECT | TAG_NO_SUCH_INSTANCE | TAG_END_OF_MIB_VIEW => {
-            let (exception_tag, exception_bytes) = varbind_reader.read_tlv()?;
+            let (_exception_tag, exception_bytes) = varbind_reader.read_tlv()?;
             if !exception_bytes.is_empty() {
                 return Err(BerError::new(format!(
-                    "BER: exception tag 0x{exception_tag:02X} must have length 0, got {}",
+                    "BER: exception tag 0x{tag:02X} must have length 0, got {}",
                     exception_bytes.len()
                 )));
             }
-            match exception_tag {
+            // `tag` is already matched to exactly these three values by the outer match arm.
+            match tag {
                 TAG_NO_SUCH_OBJECT => DecodedVarbindValue::NoSuchObject,
                 TAG_NO_SUCH_INSTANCE => DecodedVarbindValue::NoSuchInstance,
                 TAG_END_OF_MIB_VIEW => DecodedVarbindValue::EndOfMibView,
-                // The outer match already restricts `tag` to these three values,
-                // and `read_tlv` returns the same byte, so this arm is unreachable.
-                _ => unreachable!(),
+                _ => {
+                    return Err(BerError::new(format!(
+                        "BER: unexpected exception tag 0x{tag:02X}"
+                    )));
+                }
             }
         }
         TAG_INTEGER => {
@@ -192,17 +195,12 @@ pub(crate) fn decode_varbind_value_to_value(
             tag: TAG_IP_ADDRESS,
             value_bytes,
         } => {
-            if value_bytes.len() != 4 {
-                return Err(BerError::new(format!(
+            let octets: [u8; 4] = value_bytes.as_slice().try_into().map_err(|_| {
+                BerError::new(format!(
                     "BER: IpAddress must be exactly 4 bytes, got {}",
                     value_bytes.len()
-                )));
-            }
-            let octets: [u8; 4] = value_bytes
-                .as_slice()
-                .try_into()
-                // Safe: length is validated to be exactly 4 immediately above.
-                .expect("length validated as 4 above");
+                ))
+            })?;
             Ok(VarbindValue::Value(Value::IpAddress(octets)))
         }
         DecodedVarbindValue::Raw {

@@ -1,15 +1,17 @@
-.PHONY: test trace clippy rust-test python-test behave-test fuzz-gen-seeds fuzz-1s fuzz-1m fuzz-10m fuzz-30m
+PYTHON_FILES := $(shell find tools/ tests/ -name '*.py' -not -path '*/__pycache__/*')
+
+.PHONY: test trace clippy rust-test python-test python-lint behave-test fuzz-gen-seeds fuzz-1s fuzz-1m fuzz-10m fuzz-30m
 
 SNMPV3_DICT := $(CURDIR)/fuzz/snmpv3.dict
 
 # Run the full test suite: lint, Rust unit/doc tests, Python unit tests, and Behave system tests.
 test: clippy rust-test python-test behave-test
 
-pre-commit: clippy rust-test python-test fuzz-gen-seeds fuzz-1s trace check-format
+pre-commit: clippy rust-test python-test python-lint fuzz-gen-seeds fuzz-1s trace check-format
 
-# Lint with pedantic Clippy warnings.
+# Lint — workspace lints are configured in Cargo.toml.
 clippy:
-	cargo clippy --workspace --all-targets -- -W clippy::pedantic -D warnings
+	cargo clippy --workspace --all-targets -- -D warnings
 
 # Rust unit tests and doc tests.
 rust-test:
@@ -19,6 +21,12 @@ rust-test:
 # Python unit tests for the tooling scripts.
 python-test:
 	python3 -m pytest tools/tests/ -v
+
+# Python linting: formatting check, type checking, and static analysis.
+python-lint:
+	python3 -m black --check $(PYTHON_FILES)
+	python3 -m mypy $(PYTHON_FILES)
+	python3 -m pylint $(PYTHON_FILES)
 
 # Behave system tests (requires Docker).
 behave-test:

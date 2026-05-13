@@ -3,11 +3,59 @@ members = [".", "tests/test-agent", "tests/test-agent-mib", "tests/test-agent-mi
 exclude = ["fuzz"]
 resolver = "2"
 
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
+# Don't Panic
+string_slice = "warn"
+indexing_slicing = "warn"
+unwrap_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+unreachable = "warn"
+get_unwrap = "warn"
+unwrap_in_result = "warn"
+panic_in_result_fn = "warn"
+
+# Don't Fail Silently
+let_underscore_future = "warn"
+let_underscore_must_use = "warn"
+unused_result_ok = "warn"
+
+# Don't Do Bad Async Stuff
+await_holding_lock = "warn"
+await_holding_refcell_ref = "warn"
+
+# Don't Do Unsafe Things with Memory
+mem_forget = "warn"
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+unnecessary_safety_doc = "warn"
+unnecessary_safety_comment = "warn"
+
+# Don't Do Potentially Incorrect Things with Numbers
+float_cmp_const = "warn"
+lossy_float_literal = "warn"
+
+# Don't Do Bad Things That are Easy to Avoid
+rc_mutex = "warn"
+debug_assert_with_mut_call = "warn"
+infallible_try_from = "warn"
+dbg_macro = "warn"
+
+# Don't `allow` Your Way Around These Lints
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+
 [package]
 name = "basic-snmp-agent"
 version = "0.1.0"
 edition = "2024"
 publish = false
+
+[lints]
+workspace = true
 
 [dependencies]
 mio = { version = "1", features = ["net", "os-poll", "os-ext"] }

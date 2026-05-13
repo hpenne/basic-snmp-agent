@@ -36,7 +36,12 @@ cargo check
 
 ## Integrity
 
-Act with thoroughness and impeccable integrity. No shortcuts, cheating, or looking for loopholes — unless explicitly allowed on a case-by-case basis. When something is slow or seems unlikely to matter, do it anyway. If something genuinely cannot be done, say so explicitly and upfront rather than quietly omitting it. Never substitute a cheaper version of work and report it as the full thing.
+Take **NO** shortcuts.
+Do **NOT** use judgement calls to avoid extra work.
+Do **NOT** try to interpret rules liberally.
+When something is slow or seems unlikely to matter, do it anyway.
+If something genuinely cannot be done, say so explicitly and upfront rather than quietly omitting it.
+Never substitute a cheaper version of work and report it as the full thing.
 
 ## Workflow Rules
 
@@ -70,7 +75,7 @@ The project currently has a single binary entry point at `src/main.rs`. As SNMP 
 
 ### General
 
-- Use the "/implement-and-review" command for all coding
+- Use the "/implement-and-review" command for **ALL** coding. **STRICTLY NO EXCEPTIONS OR JUDGEMENT CALLS**.
 - Language: Oxford English
 - Write clean and neat code to be proud of. Always prefer simple and elegant solutions.
 - Names should be descriptive and allow for local reasoning (code should be self-documenting through naming). Avoid generic names such as `bytes`, `buf`, `data`, `result`, `n`, or single letters — name variables after what they represent in the domain (e.g., `encoded_pdu`, `recv_buf`, `bytes_received`).

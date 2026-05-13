@@ -7,9 +7,8 @@ Follow this loop (max 3 iterations):
 2. Run `make test` to verify the build is clean before proceeding (clippy, Rust unit/doc tests, Python tests, Behave tests). If any fail, **resume** the implementer (using its agent ID) and pass only the failures — do not repeat the original task description.
 3. Use the **reviewer** subagent (opus) to review the result. For new or untracked files, tell the reviewer which files to read. For changes to tracked files, pass the `git diff` output.
 4. If the reviewer returns comments, **resume** the implementer (using its agent ID) and pass only the exact reviewer feedback, addressing all MUST FIX, SHOULD FIX, and SUGGESTION items per CLAUDE.md.
-5. On re-review, use the **reviewer-followup** subagent (sonnet) and pass the **diff of changed files only**, not the full codebase.
-6. Stop when there is nothing left that needs fixing, or after 3 iterations.
-7. **Before committing:** Run `make pre-commit` and fix any failures before recording the commit.
+5. Stop when there is nothing left that needs fixing, or after 3 iterations.
+6. **Before committing:** Run `make pre-commit` and fix any failures before recording the commit.
 
 If you encounter a situation where a design decision is unclear or the right approach requires trade-offs between alternatives, ask the user before proceeding.
 

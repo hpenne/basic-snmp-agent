@@ -233,7 +233,10 @@ pub fn encode_get_request_with_user_and_flags(
 /// );
 /// assert!(!frame.is_empty());
 /// ```
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test helper mirrors SNMPv3 message fields from RFC 3412/3414"
+)]
 #[must_use]
 pub fn encode_get_request_with_auth_params(
     engine_id: &[u8],
@@ -287,7 +290,10 @@ pub fn encode_get_request_with_auth_params(
 /// );
 /// assert!(!frame.is_empty());
 /// ```
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test helper mirrors SNMPv3 message fields from RFC 3412/3414"
+)]
 #[must_use]
 pub fn encode_get_request_with_auth_params_and_time(
     engine_id: &[u8],
@@ -321,7 +327,10 @@ pub fn encode_get_request_with_auth_params_and_time(
 /// # Errors
 ///
 /// Returns an error if BER encoding fails (e.g. invalid OID arcs).
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test helper mirrors SNMPv3 message fields from RFC 3412/3414"
+)]
 pub fn try_encode_get_request_with_auth_params_and_time(
     engine_id: &[u8],
     user_name: &[u8],
@@ -448,7 +457,6 @@ pub fn encode_get_bulk_request(
 /// # Errors
 ///
 /// Returns an error if BER encoding fails (e.g. invalid OID arcs).
-#[allow(clippy::too_many_arguments)]
 pub fn try_encode_get_bulk_request(
     engine_id: &[u8],
     context_name: &[u8],
@@ -724,7 +732,10 @@ fn encode_v3_message_with_auth_params(
 // Like encode_v3_message_with_auth_params but also accepts explicit boots and time values
 // for the USM authoritative engine parameters. Callers that need to test time-window
 // validation supply non-zero boots/time; all other callers pass 0 for both.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test helper mirrors SNMPv3 message fields from RFC 3412/3414"
+)]
 fn encode_v3_message_with_usm_params(
     engine_id: &[u8],
     user_name: &[u8],

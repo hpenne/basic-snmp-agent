@@ -18,13 +18,13 @@ import argparse
 import re
 import sys
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 try:
     import tomllib
 except ImportError:
     try:
-        import tomli as tomllib  # type: ignore[no-reuse-def]
+        import tomli as tomllib  # type: ignore[no-redef]
     except ImportError as exc:
         raise ImportError(
             "Python 3.11+ is required, or install the 'tomli' package "
@@ -51,7 +51,7 @@ class ImplementedRfc(NamedTuple):
     """Pairs an RFC's filesystem directory with its parsed TOML record."""
 
     rfc_dir: Path
-    record: dict
+    record: dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +132,9 @@ def collect_requirements_from_rfc(rfc: ImplementedRfc) -> set[str]:
             clause_path = rfc.rfc_dir / clause_relative_path
             with clause_path.open("rb") as toml_file:
                 clause_toml = tomllib.load(toml_file)
-            req_ids |= extract_req_ids_from_clause_text(clause_toml.get("content", {}).get("text", ""))
+            req_ids |= extract_req_ids_from_clause_text(
+                clause_toml.get("content", {}).get("text", "")
+            )
     return req_ids
 
 
@@ -340,7 +342,8 @@ def find_orphaned_annotations(
 # ---------------------------------------------------------------------------
 
 
-def run_check(
+# Each local has a distinct role in the linear orchestration; splitting would obscure the flow.
+def run_check(  # pylint: disable=too-many-locals
     project_root: Path,
     strict: bool = False,
     force_rfc_ids: set[str] | None = None,
