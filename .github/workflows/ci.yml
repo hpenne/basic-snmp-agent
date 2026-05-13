@@ -60,6 +60,23 @@ jobs:
       - name: cargo test
         run: cargo test --workspace
 
+  python-lint:
+    name: Python lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tools
+        run: pip install black mypy pylint pytest
+
+      - name: make python-lint
+        run: make python-lint
+
   trace:
     name: Requirement tracing
     runs-on: ubuntu-latest
