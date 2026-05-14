@@ -1,5 +1,5 @@
 # Pinned to prevent surprise CI breakage from new clippy lints.
 # Bump deliberately after verifying clippy pedantic passes on the new version.
 [toolchain]
-channel = "1.95.0"
+channel = "1.91.0"
 components = ["clippy", "rustfmt"]
