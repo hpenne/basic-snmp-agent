@@ -40,6 +40,14 @@ pub fn mib() -> &'static Store {
             "1.3.6.1.2.1.2.5.0".parse::<Oid>().unwrap(),
             Value::IpAddress([127, 0, 0, 1]),
         );
+        store.set(
+            "1.3.6.1.2.1.2.6.0".parse::<Oid>().unwrap(),
+            Value::ObjectIdentifier("1.3.6.1.4.1.99999".parse::<Oid>().unwrap()),
+        );
+        store.set(
+            "1.3.6.1.2.1.2.7.0".parse::<Oid>().unwrap(),
+            Value::Opaque(vec![0xDE, 0xAD, 0xBE, 0xEF]),
+        );
         store
     })
 }
