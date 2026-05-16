@@ -1,0 +1,29 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-05-16-001"
+title = "Seed snmpv3_request fuzzer from snmpv3_request_structured corpus"
+status = "queue"
+created = "2026-05-16"
+
+[content]
+description = """
+The `snmpv3_request_structured` fuzzer explores the SNMPv3 parameter space systematically via the `Arbitrary` trait, producing corpus entries that cover combinations of PDU types, engine ID choices, and OID configurations.
+These corpus entries can be converted to valid BER-encoded SNMPv3 messages via `FuzzSnmpv3::encode()` and used as additional seeds for the unstructured `snmpv3_request` fuzzer, giving it a richer starting set than the four hand-written seeds it currently has.
+
+Add a conversion step to the seed generation tooling that reads `snmpv3_request_structured` corpus entries, encodes them to BER, and writes them as seeds for `snmpv3_request`."""
+
+[[content.acceptance_criteria]]
+text = "Seed generation converts snmpv3_request_structured corpus entries to BER and writes them as seeds for snmpv3_request"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "make fuzz-gen-seeds includes the cross-pollination step"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Existing snmpv3_request seeds are preserved alongside the converted ones"
+status = "pending"
+category = "chore"
