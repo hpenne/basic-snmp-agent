@@ -18,13 +18,13 @@ const SNMPV2C_VERSION: i32 = 1;
 /// RFC 3412 §6.4 defines `msgMaxSize` as the maximum message size the sender
 /// can accept. 65535 is the conventional maximum for UDP-transported SNMP and
 /// the value this agent advertises as its receive capability.
-pub(crate) const MSG_MAX_SIZE_UDP: i32 = 65535;
+pub const MSG_MAX_SIZE_UDP: i32 = 65535;
 
 // ── Intermediate types ────────────────────────────────────────────────────────
 
 /// Decoded `SNMPv3` message envelope. The inner PDU is left as raw bytes.
 #[derive(Debug)]
-pub(crate) struct V3MessageEnvelope<'a> {
+pub struct V3MessageEnvelope<'a> {
     /// Message ID from `HeaderData`; echoed in the `SNMPv3` response.
     pub msg_id: i32,
     /// Maximum message size from `HeaderData`.
@@ -67,7 +67,7 @@ pub(crate) struct V3MessageEnvelope<'a> {
 /// and the underlying reader returns `i32`. The dispatch layer validates that
 /// the values fall within the non-negative protocol range.
 #[derive(Debug)]
-pub(crate) struct UsmFields {
+pub struct UsmFields {
     /// `msgAuthoritativeEngineID`.
     pub engine_id: Vec<u8>,
     /// `msgAuthoritativeEngineBoots`.
@@ -84,7 +84,7 @@ pub(crate) struct UsmFields {
 
 /// Decoded `ScopedPduData` — either plaintext or encrypted.
 #[derive(Debug)]
-pub(crate) enum ScopedData {
+pub enum ScopedData {
     /// Plaintext `ScopedPDU` containing the context fields and raw PDU bytes.
     Plaintext {
         /// `contextEngineID` from the `ScopedPdu`.
@@ -100,7 +100,7 @@ pub(crate) enum ScopedData {
 
 /// Decoded `ScopedPdu` fields after AES decryption (used by the dispatch layer).
 #[derive(Debug)]
-pub(crate) struct DecodedScopedPduFields {
+pub struct DecodedScopedPduFields {
     /// `contextEngineID` from the `ScopedPdu`.
     pub context_engine_id: Vec<u8>,
     /// `contextName` from the `ScopedPdu`.
@@ -132,7 +132,7 @@ pub(crate) struct DecodedScopedPduFields {
 ///
 /// # Requirements
 /// Implements: REQ-0118, REQ-0119
-pub(crate) fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, BerError> {
+pub fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, BerError> {
     let mut outer_reader = BerReader::new(bytes);
     let mut msg_reader = outer_reader.read_sequence()?;
 
@@ -243,7 +243,7 @@ pub(crate) fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, 
 /// # Errors
 ///
 /// Returns a [`BerError`] if `bytes` is not a valid BER-encoded `ScopedPdu`.
-pub(crate) fn decode_scoped_pdu(bytes: &[u8]) -> Result<DecodedScopedPduFields, BerError> {
+pub fn decode_scoped_pdu(bytes: &[u8]) -> Result<DecodedScopedPduFields, BerError> {
     let mut outer_reader = BerReader::new(bytes);
     let mut scoped_reader = outer_reader.read_sequence()?;
     let context_engine_id = scoped_reader.read_octet_string()?.to_vec();
@@ -261,7 +261,7 @@ pub(crate) fn decode_scoped_pdu(bytes: &[u8]) -> Result<DecodedScopedPduFields, 
 /// Encodes a `ScopedPdu`: `SEQUENCE { contextEngineID, contextName, raw_pdu_bytes }`.
 ///
 /// `raw_pdu_bytes` is a pre-encoded PDU TLV (context-tagged constructed).
-pub(crate) fn encode_scoped_pdu(
+pub fn encode_scoped_pdu(
     context_engine_id: &[u8],
     context_name: &[u8],
     raw_pdu_bytes: &[u8],
@@ -277,7 +277,7 @@ pub(crate) fn encode_scoped_pdu(
 }
 
 /// Encodes USM security parameters as a BER SEQUENCE (RFC 3414 §2.4).
-pub(crate) fn encode_usm_params(
+pub fn encode_usm_params(
     engine_id: &[u8],
     engine_boots: i32,
     engine_time: i32,
@@ -299,7 +299,7 @@ pub(crate) fn encode_usm_params(
 }
 
 /// Encodes a `HeaderData` SEQUENCE (RFC 3412 §6).
-pub(crate) fn encode_header_data(
+pub fn encode_header_data(
     msg_id: i32,
     max_size: i32,
     flags_byte: u8,
@@ -338,7 +338,7 @@ pub(crate) fn encode_header_data(
     clippy::too_many_arguments,
     reason = "mirrors the SNMPv3 message structure fields from RFC 3412/3414"
 )]
-pub(crate) fn encode_v3_message(
+pub fn encode_v3_message(
     msg_id: i32,
     max_size: i32,
     flags_byte: u8,
@@ -388,7 +388,7 @@ pub(crate) fn encode_v3_message(
 /// `raw_pdu_tlv` must be a fully-encoded PDU TLV (e.g. the output of
 /// [`super::pdu::encode_pdu`]) and is written verbatim without additional
 /// wrapping. Used for plain trap delivery when no USM user is configured.
-pub(crate) fn encode_v2c_message(community: &[u8], raw_pdu_tlv: &[u8]) -> Vec<u8> {
+pub fn encode_v2c_message(community: &[u8], raw_pdu_tlv: &[u8]) -> Vec<u8> {
     let mut inner = BerWriter::new();
     inner.write_integer(SNMPV2C_VERSION);
     inner.write_octet_string(community);

@@ -13,7 +13,7 @@ use super::{
 
 /// Decoded PDU content. `VarBindList` is left as raw bytes for later parsing.
 #[derive(Debug)]
-pub(crate) enum DecodedPdu {
+pub enum DecodedPdu {
     /// Standard PDU (`GetRequest`, `GetNextRequest`, `Response`, `SetRequest`,
     /// `InformRequest`, Trap, Report).
     Standard {
@@ -55,7 +55,7 @@ pub(crate) enum DecodedPdu {
 ///   excluding 0xA4 / `SNMPv1` Trap).
 /// - There are trailing bytes after the PDU TLV.
 /// - The `VarBindList` field is absent.
-pub(crate) fn decode_pdu(raw_pdu_bytes: &[u8]) -> Result<DecodedPdu, BerError> {
+pub fn decode_pdu(raw_pdu_bytes: &[u8]) -> Result<DecodedPdu, BerError> {
     let mut outer_reader = BerReader::new(raw_pdu_bytes);
     let pdu_tag = outer_reader.peek_tag()?;
     // read_constructed validates the tag and returns a sub-reader over the contents.
@@ -144,7 +144,7 @@ const VALID_STANDARD_PDU_TAGS: &[u8] = &[
 ///
 /// Returns a [`BerError`] if `tag` is not one of the valid standard PDU tags.
 /// Use [`encode_bulk_pdu`] for `GetBulkRequest` (tag 0xA5).
-pub(crate) fn encode_pdu(
+pub fn encode_pdu(
     tag: u8,
     request_id: i32,
     error_status: i32,
@@ -178,7 +178,7 @@ pub(crate) fn encode_pdu(
         reason = "BER PDU primitives are built out ahead of production callers"
     )
 )]
-pub(crate) fn encode_bulk_pdu(
+pub fn encode_bulk_pdu(
     request_id: i32,
     non_repeaters: i32,
     max_repetitions: i32,

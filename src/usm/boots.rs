@@ -18,7 +18,7 @@ const MAX_ENGINE_ID_LEN: usize = 32;
 ///
 /// # Requirements
 /// Implements: REQ-0095
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct StoredBootsState {
     pub engine_id: Vec<u8>,
     pub boots: u32,

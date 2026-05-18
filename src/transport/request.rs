@@ -69,10 +69,9 @@ pub fn handle_get(req: &GetRequest, store: &Store) -> GetResponse {
         .varbinds
         .iter()
         .map(|vb| {
-            let value = match store.get(&vb.oid) {
-                Some(v) => VarbindValue::Value(v.clone()),
-                None => VarbindValue::NoSuchObject,
-            };
+            let value = store.get(&vb.oid).map_or(VarbindValue::NoSuchObject, |v| {
+                VarbindValue::Value(v.clone())
+            });
             Varbind {
                 oid: vb.oid.clone(),
                 value,

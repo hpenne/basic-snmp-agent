@@ -4,7 +4,7 @@ use std::fmt;
 use std::str::FromStr;
 
 /// Maximum number of sub-identifiers in an OID per RFC 2578 §3.5.
-pub(crate) const MAX_OID_SUB_IDENTIFIERS: usize = 128;
+pub const MAX_OID_SUB_IDENTIFIERS: usize = 128;
 
 /// An SNMP Object Identifier represented as a sequence of unsigned 32-bit components.
 ///

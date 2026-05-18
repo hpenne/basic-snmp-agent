@@ -613,11 +613,11 @@ mod tests {
             request_id: 77,
             varbinds: vec![
                 Varbind {
-                    oid: trap_oid.clone(),
+                    oid: trap_oid,
                     value: VarbindValue::Value(Value::OctetString(b"coldStart".to_vec())),
                 },
                 Varbind {
-                    oid: sysname.clone(),
+                    oid: sysname,
                     value: VarbindValue::Value(Value::OctetString(b"router1".to_vec())),
                 },
             ],
@@ -709,7 +709,7 @@ mod tests {
             error_status: ErrorStatus::NoError,
             error_index: 0,
             varbinds: vec![Varbind {
-                oid: oid.clone(),
+                oid,
                 value: VarbindValue::Value(Value::Integer32(42)),
             }],
         };

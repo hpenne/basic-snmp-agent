@@ -167,9 +167,9 @@ impl TryFrom<u8> for SecurityLevel {
     /// ```
     fn try_from(flags: u8) -> Result<Self, Self::Error> {
         match flags & 0x03 {
-            0x00 => Ok(SecurityLevel::NoAuthNoPriv),
-            0x01 => Ok(SecurityLevel::AuthNoPriv),
-            0x03 => Ok(SecurityLevel::AuthPriv),
+            0x00 => Ok(Self::NoAuthNoPriv),
+            0x01 => Ok(Self::AuthNoPriv),
+            0x03 => Ok(Self::AuthPriv),
             _ => Err(InvalidMsgFlags(flags)), // 0x02: privFlag without authFlag — invalid per RFC 3412 §7.1.2a
         }
     }

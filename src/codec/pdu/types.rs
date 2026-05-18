@@ -109,7 +109,7 @@ impl fmt::Display for ErrorStatus {
 
 impl From<ErrorStatus> for i32 {
     fn from(status: ErrorStatus) -> Self {
-        status as i32
+        status as Self
     }
 }
 

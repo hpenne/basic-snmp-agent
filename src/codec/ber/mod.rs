@@ -12,93 +12,93 @@
 use crate::codec::Oid;
 use std::fmt;
 
-pub(crate) mod pdu;
-pub(crate) mod snmp;
-pub(crate) mod varbind;
+pub mod pdu;
+pub mod snmp;
+pub mod varbind;
 
 // ----- Tag constants --------------------------------------------------------
 
 // Universal primitive tags (X.690 §8).
 
 /// BER tag for ASN.1 INTEGER (universal primitive, tag 2).
-pub(crate) const TAG_INTEGER: u8 = 0x02;
+pub const TAG_INTEGER: u8 = 0x02;
 
 /// BER tag for ASN.1 OCTET STRING (universal primitive, tag 4).
-pub(crate) const TAG_OCTET_STRING: u8 = 0x04;
+pub const TAG_OCTET_STRING: u8 = 0x04;
 
 /// BER tag for ASN.1 NULL (universal primitive, tag 5).
-pub(crate) const TAG_NULL: u8 = 0x05;
+pub const TAG_NULL: u8 = 0x05;
 
 /// BER tag for ASN.1 OBJECT IDENTIFIER (universal primitive, tag 6).
-pub(crate) const TAG_OID: u8 = 0x06;
+pub const TAG_OID: u8 = 0x06;
 
 /// BER tag for ASN.1 SEQUENCE (universal constructed, tag 16, high bit set for constructed).
-pub(crate) const TAG_SEQUENCE: u8 = 0x30;
+pub const TAG_SEQUENCE: u8 = 0x30;
 
 // Context-tagged constructed IMPLICIT tags for SNMP PDU types (RFC 3416 §3).
 // The 0xA0–0xA8 range is context class (bit 7–6 = 10), constructed (bit 5 = 1).
 
 /// BER tag for `SNMPv2` `GetRequest-PDU` (context 0, constructed).
-pub(crate) const TAG_GET_REQUEST: u8 = 0xA0;
+pub const TAG_GET_REQUEST: u8 = 0xA0;
 
 /// BER tag for `SNMPv2` `GetNextRequest-PDU` (context 1, constructed).
-pub(crate) const TAG_GET_NEXT_REQUEST: u8 = 0xA1;
+pub const TAG_GET_NEXT_REQUEST: u8 = 0xA1;
 
 /// BER tag for `SNMPv2` `Response-PDU` (context 2, constructed).
-pub(crate) const TAG_RESPONSE: u8 = 0xA2;
+pub const TAG_RESPONSE: u8 = 0xA2;
 
 /// BER tag for `SNMPv2` `SetRequest-PDU` (context 3, constructed).
-pub(crate) const TAG_SET_REQUEST: u8 = 0xA3;
+pub const TAG_SET_REQUEST: u8 = 0xA3;
 
 /// BER tag for `SNMPv2` `GetBulkRequest-PDU` (context 5, constructed).
-pub(crate) const TAG_GET_BULK_REQUEST: u8 = 0xA5;
+pub const TAG_GET_BULK_REQUEST: u8 = 0xA5;
 
 /// BER tag for `SNMPv2` `InformRequest-PDU` (context 6, constructed).
-pub(crate) const TAG_INFORM_REQUEST: u8 = 0xA6;
+pub const TAG_INFORM_REQUEST: u8 = 0xA6;
 
 /// BER tag for `SNMPv2` `Trap-PDU` (context 7, constructed).
-pub(crate) const TAG_TRAP: u8 = 0xA7;
+pub const TAG_TRAP: u8 = 0xA7;
 
 /// BER tag for `SNMPv3` `Report-PDU` (context 8, constructed).
-pub(crate) const TAG_REPORT: u8 = 0xA8;
+pub const TAG_REPORT: u8 = 0xA8;
 
 // Context-tagged primitive IMPLICIT tags for VarBind exception values (RFC 3416 §3).
 // The 0x80–0x82 range is context class (bit 7–6 = 10), primitive (bit 5 = 0).
 
 /// BER tag for `VarBind` `noSuchObject` exception (context 0, primitive).
-pub(crate) const TAG_NO_SUCH_OBJECT: u8 = 0x80;
+pub const TAG_NO_SUCH_OBJECT: u8 = 0x80;
 
 /// BER tag for `VarBind` `noSuchInstance` exception (context 1, primitive).
-pub(crate) const TAG_NO_SUCH_INSTANCE: u8 = 0x81;
+pub const TAG_NO_SUCH_INSTANCE: u8 = 0x81;
 
 /// BER tag for `VarBind` `endOfMibView` exception (context 2, primitive).
-pub(crate) const TAG_END_OF_MIB_VIEW: u8 = 0x82;
+pub const TAG_END_OF_MIB_VIEW: u8 = 0x82;
 
 // APPLICATION primitive tags for SMIv2 types (RFC 2578 §7.1).
 // The 0x40–0x46 range is application class (bit 7–6 = 01), primitive (bit 5 = 0).
 
 /// BER tag for `SMIv2` `IpAddress` (application 0, primitive).
-pub(crate) const TAG_IP_ADDRESS: u8 = 0x40;
+pub const TAG_IP_ADDRESS: u8 = 0x40;
 
 /// BER tag for `SMIv2` `Counter32` (application 1, primitive).
-pub(crate) const TAG_COUNTER32: u8 = 0x41;
+pub const TAG_COUNTER32: u8 = 0x41;
 
 /// BER tag for `SMIv2` `Gauge32` / `Unsigned32` (application 2, primitive).
-pub(crate) const TAG_GAUGE32: u8 = 0x42;
+pub const TAG_GAUGE32: u8 = 0x42;
 
 /// BER tag for `SMIv2` `TimeTicks` (application 3, primitive).
-pub(crate) const TAG_TIMETICKS: u8 = 0x43;
+pub const TAG_TIMETICKS: u8 = 0x43;
 
 /// BER tag for `SMIv2` `Opaque` (application 4, primitive).
-pub(crate) const TAG_OPAQUE: u8 = 0x44;
+pub const TAG_OPAQUE: u8 = 0x44;
 
 /// BER tag for `SMIv2` `Counter64` (application 6, primitive).
-pub(crate) const TAG_COUNTER64: u8 = 0x46;
+pub const TAG_COUNTER64: u8 = 0x46;
 
 // ----- BerError -------------------------------------------------------------
 
 /// Error returned by [`BerReader`] parsing operations.
-pub(crate) struct BerError {
+pub struct BerError {
     message: String,
     is_wrong_version: bool,
 }
@@ -147,7 +147,7 @@ impl std::error::Error for BerError {}
 /// The writer appends each TLV in DER canonical form (definite-length, shortest
 /// length encoding). Use [`BerWriter::into_vec`] or [`BerWriter::as_bytes`] to
 /// retrieve the completed encoding.
-pub(crate) struct BerWriter {
+pub struct BerWriter {
     buffer: Vec<u8>,
 }
 
@@ -315,7 +315,7 @@ impl Default for BerWriter {
 /// tracks the absolute byte position from the start of the original message,
 /// which is useful for computing byte ranges for authentication.
 #[derive(Debug)]
-pub(crate) struct BerReader<'a> {
+pub struct BerReader<'a> {
     input: &'a [u8],
     position: usize,
     /// Offset of `input[0]` from the beginning of the outermost message.
@@ -472,13 +472,13 @@ impl<'a> BerReader<'a> {
     }
 
     /// Reads a SEQUENCE TLV and returns a sub-reader bounded to its contents.
-    pub(crate) fn read_sequence(&mut self) -> Result<BerReader<'a>, BerError> {
+    pub(crate) fn read_sequence(&mut self) -> Result<Self, BerError> {
         self.read_constructed(TAG_SEQUENCE)
     }
 
     /// Reads a constructed TLV with the given expected tag and returns a
     /// sub-reader bounded to its contents.
-    pub(crate) fn read_constructed(&mut self, expected_tag: u8) -> Result<BerReader<'a>, BerError> {
+    pub(crate) fn read_constructed(&mut self, expected_tag: u8) -> Result<Self, BerError> {
         let tag_start_offset = self.offset();
         let (tag, contents) = self.read_tlv()?;
         if tag != expected_tag {
@@ -489,7 +489,7 @@ impl<'a> BerReader<'a> {
         // The sub-reader's base_offset is the absolute position of the first
         // byte of the contents (i.e. after the T and L fields we just consumed).
         let contents_offset = self.base_offset + self.position - contents.len();
-        Ok(BerReader::new_with_offset(contents, contents_offset))
+        Ok(Self::new_with_offset(contents, contents_offset))
     }
 
     /// Reads an INTEGER TLV and returns its value as a signed `i32`.

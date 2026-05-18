@@ -2038,7 +2038,7 @@ mod tests {
             authoritative_engine_boots: boots.into(),
             authoritative_engine_time: time.into(),
             user_name: b"alice".to_vec().into(),
-            authentication_parameters: zeroed_auth_params.clone().into(),
+            authentication_parameters: zeroed_auth_params.into(),
             privacy_parameters: salt.to_vec().into(),
         };
         let security_params = rasn::ber::encode(&usm_params).unwrap();
@@ -2180,7 +2180,7 @@ mod tests {
             .expect("response must be a valid SNMPv3 envelope")
             .auth_params_offset
             .expect("authenticated response must carry a non-empty auth_params field");
-        let mut zeroed_response = response_bytes.clone();
+        let mut zeroed_response = response_bytes;
         zeroed_response[auth_params_offset..auth_params_offset + embedded_mac.len()].fill(0);
         AuthProtocol::HmacSha256
             .verify_mac(&auth_key_for_verify, &zeroed_response, &embedded_mac)
@@ -2283,7 +2283,7 @@ mod tests {
             authoritative_engine_boots: boots.into(),
             authoritative_engine_time: time.into(),
             user_name: b"alice".to_vec().into(),
-            authentication_parameters: zeroed_auth_params.clone().into(),
+            authentication_parameters: zeroed_auth_params.into(),
             // 4-byte salt (invalid — RFC 3826 §2.2 requires exactly 8 bytes)
             privacy_parameters: vec![0x01u8; 4].into(),
         };
@@ -2386,7 +2386,7 @@ mod tests {
             authoritative_engine_boots: boots.into(),
             authoritative_engine_time: time.into(),
             user_name: b"alice".to_vec().into(),
-            authentication_parameters: zeroed_auth_params.clone().into(),
+            authentication_parameters: zeroed_auth_params.into(),
             privacy_parameters: salt.to_vec().into(),
         };
         let security_params = rasn::ber::encode(&usm_params).unwrap();

@@ -603,6 +603,7 @@ pub fn encode_get_request_with_context_engine_id(
 /// Encode an engine-ID discovery probe: a `GetRequest` with empty
 /// `msgAuthoritativeEngineID` in the USM security parameters and the
 /// `reportableFlag` (bit 2, `0x04`) set in `msgFlags`.
+///
 /// The `contextEngineID` in the `ScopedPDU` is left empty.
 ///
 /// # Panics

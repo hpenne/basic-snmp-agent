@@ -46,16 +46,16 @@ pub enum Value {
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Value::Integer32(n) => write!(f, "{n}"),
-            Value::ObjectIdentifier(oid) => write!(f, "{oid}"),
+            Self::Integer32(n) => write!(f, "{n}"),
+            Self::ObjectIdentifier(oid) => write!(f, "{oid}"),
             // Display as dotted-decimal, consistent with conventional IPv4 notation.
-            Value::IpAddress(octets) => {
+            Self::IpAddress(octets) => {
                 write!(f, "{}", std::net::Ipv4Addr::from(*octets))
             }
             // Both display as raw hex; use Debug to distinguish the variant.
-            Value::OctetString(bytes) | Value::Opaque(bytes) => fmt_hex(bytes, f),
-            Value::Counter32(n) | Value::Gauge32(n) | Value::TimeTicks(n) => write!(f, "{n}"),
-            Value::Counter64(n) => write!(f, "{n}"),
+            Self::OctetString(bytes) | Self::Opaque(bytes) => fmt_hex(bytes, f),
+            Self::Counter32(n) | Self::Gauge32(n) | Self::TimeTicks(n) => write!(f, "{n}"),
+            Self::Counter64(n) => write!(f, "{n}"),
         }
     }
 }
@@ -72,7 +72,7 @@ impl fmt::Display for Value {
 /// ```
 impl From<&[u8]> for Value {
     fn from(bytes: &[u8]) -> Self {
-        Value::OctetString(bytes.to_vec())
+        Self::OctetString(bytes.to_vec())
     }
 }
 
@@ -88,7 +88,7 @@ impl From<&[u8]> for Value {
 /// ```
 impl From<Vec<u8>> for Value {
     fn from(bytes: Vec<u8>) -> Self {
-        Value::OctetString(bytes)
+        Self::OctetString(bytes)
     }
 }
 
@@ -104,7 +104,7 @@ impl From<Vec<u8>> for Value {
 /// ```
 impl From<&str> for Value {
     fn from(s: &str) -> Self {
-        Value::OctetString(s.as_bytes().to_vec())
+        Self::OctetString(s.as_bytes().to_vec())
     }
 }
 

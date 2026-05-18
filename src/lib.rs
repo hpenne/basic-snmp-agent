@@ -561,6 +561,9 @@ mod tests {
             .unwrap();
 
         assert!(thread_result.is_ok());
+        // Use the original handle to confirm both clones remain functional.
+        let another_oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        assert!(agent.set(another_oid, Value::Integer32(2)).is_ok());
     }
 
     #[test]
@@ -595,7 +598,7 @@ mod tests {
             .0
             .command_sender
             .send(Command::QueryValue {
-                oid: oid.clone(),
+                oid,
                 reply: reply_tx,
             })
             .unwrap();
@@ -684,6 +687,7 @@ mod tests {
             state.saved_boots, 1,
             "first-time initialisation must save boots = 1"
         );
+        drop(state);
     }
 
     #[test]
