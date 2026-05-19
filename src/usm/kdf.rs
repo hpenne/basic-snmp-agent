@@ -12,7 +12,7 @@ use crate::usm::keys::{SecretKey, zeroize_slice};
 use crate::usm::privacy::PrivProtocol;
 
 // The RFC 3414 §2.6 mandated stream length for the password-to-key algorithm.
-const KDF_STREAM_LEN: usize = 1_048_576;
+const KDF_STREAM_LEN: usize = 0x0010_0000;
 
 // ── Error type ────────────────────────────────────────────────────────────────
 
@@ -223,8 +223,8 @@ mod tests {
     #[test]
     fn given_different_engine_ids_when_derive_then_different_keys() {
         // Verifies: REQ-0082 — engine ID localises the key
-        let engine_id_a = &[0u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
-        let engine_id_b = &[0u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+        let engine_id_a = &[0_u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let engine_id_b = &[0_u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
         let key_a = password_to_localised_key(b"passphrase", engine_id_a, AuthProtocol::HmacSha256)
             .unwrap();
         let key_b = password_to_localised_key(b"passphrase", engine_id_b, AuthProtocol::HmacSha256)
@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn given_auth_key_when_derive_priv_key_aes128_then_returns_16_bytes() {
         // Verifies: REQ-0082
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xABu8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xAB_u8; 32]);
         let priv_key = derive_priv_key_from_auth_key(
             &auth_key,
             MAPLE_ENGINE_ID,
@@ -320,7 +320,7 @@ mod tests {
     #[test]
     fn given_auth_key_when_derive_priv_key_aes256_then_returns_32_bytes() {
         // Verifies: REQ-0082
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xABu8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xAB_u8; 32]);
         let priv_key = derive_priv_key_from_auth_key(
             &auth_key,
             MAPLE_ENGINE_ID,
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn given_sha512_auth_key_when_derive_priv_key_aes128_then_returns_16_bytes() {
         // Verifies: REQ-0082 — SHA-512 auth with AES-128 priv
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xCDu8; 64]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xCD_u8; 64]);
         let priv_key = derive_priv_key_from_auth_key(
             &auth_key,
             MAPLE_ENGINE_ID,
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn given_sha512_auth_key_when_derive_priv_key_aes256_then_returns_32_bytes() {
         // Verifies: REQ-0082 — SHA-512 auth with AES-256 priv
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xCDu8; 64]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xCD_u8; 64]);
         let priv_key = derive_priv_key_from_auth_key(
             &auth_key,
             MAPLE_ENGINE_ID,
@@ -359,8 +359,8 @@ mod tests {
     #[test]
     fn given_same_auth_key_and_engine_id_when_derive_priv_twice_then_same() {
         // Verifies: REQ-0082 — deterministic
-        let auth_key_a = SecretKey::new_from_exposed_slice(&[0x77u8; 32]);
-        let auth_key_b = SecretKey::new_from_exposed_slice(&[0x77u8; 32]);
+        let auth_key_a = SecretKey::new_from_exposed_slice(&[0x77_u8; 32]);
+        let auth_key_b = SecretKey::new_from_exposed_slice(&[0x77_u8; 32]);
         let priv_key_a = derive_priv_key_from_auth_key(
             &auth_key_a,
             MAPLE_ENGINE_ID,
@@ -379,10 +379,10 @@ mod tests {
     #[test]
     fn given_different_engine_ids_when_derive_priv_then_different_keys() {
         // Verifies: REQ-0082 — engine ID localises the privacy key
-        let auth_key_a = SecretKey::new_from_exposed_slice(&[0x55u8; 32]);
-        let auth_key_b = SecretKey::new_from_exposed_slice(&[0x55u8; 32]);
-        let engine_id_a = &[0u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
-        let engine_id_b = &[0u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+        let auth_key_a = SecretKey::new_from_exposed_slice(&[0x55_u8; 32]);
+        let auth_key_b = SecretKey::new_from_exposed_slice(&[0x55_u8; 32]);
+        let engine_id_a = &[0_u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let engine_id_b = &[0_u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
         let priv_key_a = derive_priv_key_from_auth_key(
             &auth_key_a,
             engine_id_a,
@@ -410,7 +410,7 @@ mod tests {
         //   full_hash = hashlib.sha256(auth_key + engine_id + auth_key).digest()
         //   priv_key_aes128 = full_hash[:16]
         //   # => f2a0859a33e22a9b5a42af5847f1699e
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xABu8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xAB_u8; 32]);
         let priv_key = derive_priv_key_from_auth_key(
             &auth_key,
             MAPLE_ENGINE_ID,
@@ -436,7 +436,7 @@ mod tests {
         //   full_hash = hashlib.sha512(auth_key + engine_id + auth_key).digest()
         //   priv_key_aes256 = full_hash[:32]
         //   # => 05e43de2b7fc67e8b1fe1e28454d1e8bef33368e9c1021055ceb6d5a1dcef63d
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xCDu8; 64]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xCD_u8; 64]);
         let priv_key = derive_priv_key_from_auth_key(
             &auth_key,
             MAPLE_ENGINE_ID,
@@ -466,7 +466,7 @@ mod tests {
     #[test]
     fn given_password_longer_than_stream_when_derive_then_same_length_key() {
         // Verifies: REQ-0081
-        let long_password = vec![0x42u8; 2_000_000]; // longer than 1 MiB
+        let long_password = vec![0x42_u8; 2_000_000]; // longer than 1 MiB
         let key =
             password_to_localised_key(&long_password, MAPLE_ENGINE_ID, AuthProtocol::HmacSha256)
                 .unwrap();

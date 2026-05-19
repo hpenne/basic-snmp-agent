@@ -18,7 +18,7 @@ const SNMPV2C_VERSION: i32 = 1;
 /// RFC 3412 §6.4 defines `msgMaxSize` as the maximum message size the sender
 /// can accept. 65535 is the conventional maximum for UDP-transported SNMP and
 /// the value this agent advertises as its receive capability.
-pub const MSG_MAX_SIZE_UDP: i32 = 65535;
+pub const MSG_MAX_SIZE_UDP: i32 = 0xFFFF;
 
 // ── Intermediate types ────────────────────────────────────────────────────────
 
@@ -683,7 +683,7 @@ mod tests {
 
     #[test]
     fn given_v3_message_with_auth_params_when_encoded_then_offset_points_into_message() {
-        let auth_params = [0x00u8; 12]; // 12-byte HMAC-SHA-1 placeholder
+        let auth_params = [0x00_u8; 12]; // 12-byte HMAC-SHA-1 placeholder
         let scoped_pdu = encode_scoped_pdu(&[0x01], b"", &[0xA0, 0x00]);
         let (encoded, auth_offset) = encode_v3_message(
             2,
@@ -713,7 +713,7 @@ mod tests {
     fn given_v3_message_with_auth_params_when_decoded_then_offset_points_into_message() {
         // Encode a message with non-empty auth_params, then decode and verify
         // that auth_params_offset from decode also points at the correct bytes.
-        let auth_params = vec![0xABu8; 12];
+        let auth_params = vec![0xAB_u8; 12];
         let scoped_pdu = encode_scoped_pdu(&[0x01], b"", &[0xA0, 0x00]);
         let (encoded, _) = encode_v3_message(
             3,
@@ -779,8 +779,8 @@ mod tests {
     fn given_v3_authpriv_message_when_encoded_and_decoded_then_offsets_and_params_preserved() {
         // An authPriv message has both non-empty auth_params (HMAC placeholder)
         // and non-empty priv_params (AES salt).
-        let auth_params = [0x00u8; 12]; // 12-byte HMAC-SHA-1 placeholder
-        let priv_params = [0xBBu8; 8]; // 8-byte AES salt
+        let auth_params = [0x00_u8; 12]; // 12-byte HMAC-SHA-1 placeholder
+        let priv_params = [0xBB_u8; 8]; // 8-byte AES salt
         let scoped_pdu = encode_scoped_pdu(&[0x80, 0x00, 0x01], b"", &[0xA0, 0x00]);
         let (encoded, auth_offset) = encode_v3_message(
             5,

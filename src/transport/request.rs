@@ -457,7 +457,7 @@ mod tests {
     fn given_bulk_request_when_max_repetitions_exceeds_cap_then_capped() {
         // Verifies: REQ-0029, REQ-0030, REQ-0031
         let mut store = Store::new();
-        for i in 0u32..200 {
+        for i in 0_u32..200 {
             store.set(
                 oid(&format!("1.3.6.1.2.1.1.{i}.0")),
                 Value::Integer32(i.cast_signed()),

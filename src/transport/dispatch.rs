@@ -246,13 +246,13 @@ fn emit_unknown_security_model_response(
 ///
 /// let mib = Store::new();
 /// let engine_id = b"\x80\x00\x1f\x88\x80test";
-/// let mut counter = 0u32;
-/// let mut unknown_user_names = 0u32;
-/// let mut unsupported_sec_levels = 0u32;
-/// let mut wrong_digests = 0u32;
-/// let mut not_in_time_windows = 0u32;
-/// let mut decryption_errors = 0u32;
-/// let mut unknown_security_models = 0u32;
+/// let mut counter = 0_u32;
+/// let mut unknown_user_names = 0_u32;
+/// let mut unsupported_sec_levels = 0_u32;
+/// let mut wrong_digests = 0_u32;
+/// let mut not_in_time_windows = 0_u32;
+/// let mut decryption_errors = 0_u32;
+/// let mut unknown_security_models = 0_u32;
 /// let mut ctx = DispatchContext {
 ///     engine_id,
 ///     engine_boots: 1,
@@ -488,7 +488,7 @@ pub fn process_snmpv3_request(
 
             // Implements: REQ-0109
             // IV = engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes) per RFC 3826 §2.2.
-            let mut aes_iv = [0u8; 16];
+            let mut aes_iv = [0_u8; 16];
             aes_iv[0..4].copy_from_slice(&v3_msg.usm.auth_engine_boots.to_be_bytes());
             aes_iv[4..8].copy_from_slice(&v3_msg.usm.auth_engine_time.to_be_bytes());
             aes_iv[8..16].copy_from_slice(priv_params);
@@ -698,12 +698,12 @@ mod tests {
         );
         assert_eq!(
             u32::try_from(usm_params.authoritative_engine_boots).unwrap(),
-            3u32,
+            3_u32,
             "response must carry the agent's engine boots"
         );
         assert_eq!(
             u32::try_from(usm_params.authoritative_engine_time).unwrap(),
-            100u32,
+            100_u32,
             "response must carry the agent's engine time"
         );
     }
@@ -816,12 +816,12 @@ mod tests {
         );
         assert_eq!(
             u32::try_from(usm_params.authoritative_engine_boots).unwrap(),
-            3u32,
+            3_u32,
             "Report response must carry the agent's engine boots"
         );
         assert_eq!(
             u32::try_from(usm_params.authoritative_engine_time).unwrap(),
-            100u32,
+            100_u32,
             "Report response must carry the agent's engine time"
         );
 
@@ -852,7 +852,10 @@ mod tests {
         else {
             panic!("Report varbind value must be a Counter32");
         };
-        assert_eq!(counter.0, 1u32, "Report varbind must carry counter value 1");
+        assert_eq!(
+            counter.0, 1_u32,
+            "Report varbind must carry counter value 1"
+        );
     }
 
     #[test]
@@ -1036,12 +1039,12 @@ mod tests {
         );
         assert_eq!(
             u32::try_from(usm_params.authoritative_engine_boots).unwrap(),
-            1u32,
+            1_u32,
             "Report response must carry the agent's engine boots"
         );
         assert_eq!(
             u32::try_from(usm_params.authoritative_engine_time).unwrap(),
-            0u32,
+            0_u32,
             "Report response must carry the agent's engine time"
         );
     }
@@ -1187,11 +1190,11 @@ mod tests {
         );
         assert_eq!(
             u32::try_from(usm_params.authoritative_engine_boots).unwrap(),
-            1u32
+            1_u32
         );
         assert_eq!(
             u32::try_from(usm_params.authoritative_engine_time).unwrap(),
-            0u32
+            0_u32
         );
 
         // Verify the Report PDU contains the correct varbind (usmStatsUnsupportedSecLevels).
@@ -1223,7 +1226,10 @@ mod tests {
         else {
             panic!("Report varbind value must be a Counter32");
         };
-        assert_eq!(counter.0, 1u32, "Report varbind must carry counter value 1");
+        assert_eq!(
+            counter.0, 1_u32,
+            "Report varbind must carry counter value 1"
+        );
     }
 
     #[test]
@@ -1367,7 +1373,7 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let mib = crate::mib::Store::new();
-        let auth_key_bytes = [0x42u8; 32];
+        let auth_key_bytes = [0x42_u8; 32];
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
@@ -1409,7 +1415,7 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
-            SecretKey::new_from_exposed_slice(&[0x42u8; 32]),
+            SecretKey::new_from_exposed_slice(&[0x42_u8; 32]),
         );
         // Build frame with an incorrect MAC (all-0xBB bytes)
         let frame_with_wrong_mac = snmpv3_frames::encode_get_request_with_auth_params(
@@ -1420,7 +1426,7 @@ mod tests {
             2,
             test_oid_arcs(),
             0x05,
-            &[0xBBu8; 24],
+            &[0xBB_u8; 24],
         );
         let mut tc = TestCtx::new();
         let result = {
@@ -1464,7 +1470,10 @@ mod tests {
         else {
             panic!("Report varbind value must be a Counter32");
         };
-        assert_eq!(counter.0, 1u32, "Report varbind must carry counter value 1");
+        assert_eq!(
+            counter.0, 1_u32,
+            "Report varbind must carry counter value 1"
+        );
     }
 
     #[test]
@@ -1477,7 +1486,7 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
-            SecretKey::new_from_exposed_slice(&[0x42u8; 32]),
+            SecretKey::new_from_exposed_slice(&[0x42_u8; 32]),
         );
         // Build frame with authFlag but empty auth_params (malformed)
         let frame = snmpv3_frames::encode_get_request_with_auth_params(
@@ -1516,7 +1525,7 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
-            SecretKey::new_from_exposed_slice(&[0x42u8; 32]),
+            SecretKey::new_from_exposed_slice(&[0x42_u8; 32]),
         );
         // flags 0x01 = authFlag only (no reportableFlag)
         let frame = snmpv3_frames::encode_get_request_with_auth_params(
@@ -1527,7 +1536,7 @@ mod tests {
             2,
             test_oid_arcs(),
             0x01,
-            &[0xBBu8; 24],
+            &[0xBB_u8; 24],
         );
         let mut tc = TestCtx::new();
         let result = {
@@ -1554,7 +1563,7 @@ mod tests {
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
-            SecretKey::new_from_exposed_slice(&[0x42u8; 32]),
+            SecretKey::new_from_exposed_slice(&[0x42_u8; 32]),
         );
         let frame = snmpv3_frames::encode_get_request_with_auth_params(
             test_engine_id(),
@@ -1564,7 +1573,7 @@ mod tests {
             2,
             test_oid_arcs(),
             0x05,
-            &[0xBBu8; 24],
+            &[0xBB_u8; 24],
         );
         let mut tc = TestCtx::new().with_wrong_digests(u32::MAX);
         {
@@ -1582,7 +1591,7 @@ mod tests {
         let message = b"hello MAC-goes-here world";
         let zeroed = zero_auth_params_in_message(message, 6, 12);
         assert_eq!(&zeroed[..6], b"hello ");
-        assert_eq!(&zeroed[6..18], &[0u8; 12]);
+        assert_eq!(&zeroed[6..18], &[0_u8; 12]);
         assert_eq!(&zeroed[18..], b"e world");
     }
 
@@ -1591,7 +1600,7 @@ mod tests {
         // Verifies: REQ-0100, REQ-0111 — boundary at start
         let message = b"MACxxxxrest";
         let zeroed = zero_auth_params_in_message(message, 0, 3);
-        assert_eq!(&zeroed[..3], &[0u8; 3]);
+        assert_eq!(&zeroed[..3], &[0_u8; 3]);
         assert_eq!(&zeroed[3..], b"xxxxrest");
     }
 
@@ -1601,7 +1610,7 @@ mod tests {
         let message = b"prefixMAC";
         let zeroed = zero_auth_params_in_message(message, 6, 3);
         assert_eq!(&zeroed[..6], b"prefix");
-        assert_eq!(&zeroed[6..], &[0u8; 3]);
+        assert_eq!(&zeroed[6..], &[0_u8; 3]);
     }
 
     #[test]
@@ -1610,7 +1619,7 @@ mod tests {
         let message = b"prefix MAC suffix";
         let zeroed = zero_auth_params_in_message(message, 7, 3);
         assert_eq!(message, b"prefix MAC suffix", "original must be unchanged");
-        assert_eq!(&zeroed[7..10], &[0u8; 3]);
+        assert_eq!(&zeroed[7..10], &[0_u8; 3]);
     }
 
     // ── Time-window validation (REQ-0098) ──────────────────────────────────────
@@ -1630,7 +1639,7 @@ mod tests {
         let engine_id = test_engine_id();
         let oid = test_oid_arcs();
 
-        let zeroed_auth_params = vec![0u8; mac_len];
+        let zeroed_auth_params = vec![0_u8; mac_len];
         let frame_with_zeros = snmpv3_frames::encode_get_request_with_auth_params_and_time(
             engine_id,
             b"alice",
@@ -1676,7 +1685,7 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let mib = crate::mib::Store::new();
-        let auth_key_bytes = [0x42u8; 32];
+        let auth_key_bytes = [0x42_u8; 32];
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
@@ -1715,7 +1724,7 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let mib = crate::mib::Store::new();
-        let auth_key_bytes = [0x42u8; 32];
+        let auth_key_bytes = [0x42_u8; 32];
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
@@ -1740,7 +1749,7 @@ mod tests {
             .expect("response must be a valid SNMPv3 message");
         assert_eq!(
             i32::try_from(v3_response.global_data.message_id).unwrap(),
-            1i32,
+            1_i32,
             "Report response must echo the request msg_id"
         );
         let usm_params: rasn_snmp::v3::USMSecurityParameters =
@@ -1772,15 +1781,18 @@ mod tests {
         else {
             panic!("Report varbind value must be a Counter32");
         };
-        assert_eq!(counter.0, 1u32, "Report varbind must carry counter value 1");
+        assert_eq!(
+            counter.0, 1_u32,
+            "Report varbind must carry counter value 1"
+        );
         assert_eq!(
             u32::try_from(usm_params.authoritative_engine_boots).unwrap(),
-            1u32,
+            1_u32,
             "Report response must carry the agent's engine boots"
         );
         assert_eq!(
             u32::try_from(usm_params.authoritative_engine_time).unwrap(),
-            0u32,
+            0_u32,
             "Report response must carry the agent's engine time"
         );
     }
@@ -1793,7 +1805,7 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let mib = crate::mib::Store::new();
-        let auth_key_bytes = [0x42u8; 32];
+        let auth_key_bytes = [0x42_u8; 32];
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
@@ -1826,7 +1838,7 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let mib = crate::mib::Store::new();
-        let auth_key_bytes = [0x42u8; 32];
+        let auth_key_bytes = [0x42_u8; 32];
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
@@ -1887,7 +1899,7 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let mib = crate::mib::Store::new();
-        let auth_key_bytes = [0x42u8; 32];
+        let auth_key_bytes = [0x42_u8; 32];
         let alice = crate::usm::user::UsmUser::auth_no_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
@@ -1942,16 +1954,16 @@ mod tests {
             authoritative_engine_time: 0.into(),
             user_name: rasn::types::OctetString::from(vec![]),
             authentication_parameters: rasn::types::OctetString::from(vec![]),
-            privacy_parameters: rasn::types::OctetString::from(vec![0xAAu8; 8]),
+            privacy_parameters: rasn::types::OctetString::from(vec![0xAA_u8; 8]),
         };
         let security_params = rasn::ber::encode(&usm_params).unwrap();
         let v3_msg = V3Message {
             version: 3.into(),
             global_data: HeaderData {
                 message_id: 5.into(),
-                max_size: 65535.into(),
+                max_size: 0xFFFF.into(),
                 // authPriv + reportable: 0x03 | 0x04 = 0x07
-                flags: rasn::types::OctetString::from(vec![0x07u8]),
+                flags: rasn::types::OctetString::from(vec![0x07_u8]),
                 security_model: 3.into(),
             },
             security_parameters: security_params.into(),
@@ -2022,7 +2034,7 @@ mod tests {
         let scoped_pdu_ber = rasn::ber::encode(&scoped_pdu).unwrap();
 
         // Construct IV and encrypt the ScopedPdu.
-        let mut aes_iv = [0u8; 16];
+        let mut aes_iv = [0_u8; 16];
         aes_iv[0..4].copy_from_slice(&boots.to_be_bytes());
         aes_iv[4..8].copy_from_slice(&time.to_be_bytes());
         aes_iv[8..16].copy_from_slice(&salt);
@@ -2032,7 +2044,7 @@ mod tests {
             .unwrap();
 
         // Build the V3Message with zeroed auth_params.
-        let zeroed_auth_params = vec![0u8; mac_len];
+        let zeroed_auth_params = vec![0_u8; mac_len];
         let usm_params = USMSecurityParameters {
             authoritative_engine_id: engine_id.to_vec().into(),
             authoritative_engine_boots: boots.into(),
@@ -2046,8 +2058,8 @@ mod tests {
             version: 3.into(),
             global_data: HeaderData {
                 message_id: 1.into(),
-                max_size: 65535.into(),
-                flags: rasn::types::OctetString::from(vec![0x07u8]), // authPriv + reportable
+                max_size: 0xFFFF.into(),
+                flags: rasn::types::OctetString::from(vec![0x07_u8]), // authPriv + reportable
                 security_model: 3.into(),
             },
             security_parameters: security_params.into(),
@@ -2077,8 +2089,8 @@ mod tests {
         use crate::usm::privacy::PrivProtocol;
 
         let mib = crate::mib::Store::new();
-        let auth_key_bytes = [0x42u8; 32];
-        let priv_key_bytes = [0xAAu8; 16];
+        let auth_key_bytes = [0x42_u8; 32];
+        let priv_key_bytes = [0xAA_u8; 16];
         let alice = crate::usm::user::UsmUser::auth_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
@@ -2093,7 +2105,7 @@ mod tests {
             1,
             0,
             test_oid_arcs(),
-            [0x01u8; 8],
+            [0x01_u8; 8],
         );
         let mut tc = TestCtx::new().with_boots_time(1, 0);
         let result = {
@@ -2132,9 +2144,9 @@ mod tests {
         );
 
         // Decrypt the response ScopedPdu using the same priv key and verify the inner PDU.
-        let mut aes_iv = [0u8; 16];
-        aes_iv[0..4].copy_from_slice(&1u32.to_be_bytes()); // engine_boots = 1
-        aes_iv[4..8].copy_from_slice(&0u32.to_be_bytes()); // engine_time = 0
+        let mut aes_iv = [0_u8; 16];
+        aes_iv[0..4].copy_from_slice(&1_u32.to_be_bytes()); // engine_boots = 1
+        aes_iv[4..8].copy_from_slice(&0_u32.to_be_bytes()); // engine_time = 0
         aes_iv[8..16].copy_from_slice(usm_params.privacy_parameters.as_ref());
         let priv_key = SecretKey::new_from_exposed_slice(&priv_key_bytes);
         let plaintext = PrivProtocol::Aes128
@@ -2198,9 +2210,9 @@ mod tests {
         use crate::usm::privacy::PrivProtocol;
 
         let mib = crate::mib::Store::new();
-        let auth_key_bytes = [0x42u8; 32];
-        let priv_key_bytes = [0xAAu8; 16];
-        let wrong_priv_key_bytes = [0xBBu8; 16];
+        let auth_key_bytes = [0x42_u8; 32];
+        let priv_key_bytes = [0xAA_u8; 16];
+        let wrong_priv_key_bytes = [0xBB_u8; 16];
         let alice = crate::usm::user::UsmUser::auth_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
@@ -2215,7 +2227,7 @@ mod tests {
             1,
             0,
             test_oid_arcs(),
-            [0x01u8; 8],
+            [0x01_u8; 8],
         );
         let mut tc = TestCtx::new().with_boots_time(1, 0);
         let result = {
@@ -2261,12 +2273,12 @@ mod tests {
         };
 
         let mib = crate::mib::Store::new();
-        let auth_key_bytes = [0x42u8; 32];
-        let priv_key_bytes = [0xAAu8; 16];
+        let auth_key_bytes = [0x42_u8; 32];
+        let priv_key_bytes = [0xAA_u8; 16];
         let mac_len = AuthProtocol::HmacSha256.mac_len();
         let engine_id = test_engine_id();
-        let boots = 1u32;
-        let time = 0u32;
+        let boots = 1_u32;
+        let time = 0_u32;
 
         let alice = crate::usm::user::UsmUser::auth_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
@@ -2277,7 +2289,7 @@ mod tests {
         );
 
         // Build a frame with privacy_parameters of length 4 (not 8) and fake ciphertext.
-        let zeroed_auth_params = vec![0u8; mac_len];
+        let zeroed_auth_params = vec![0_u8; mac_len];
         let usm_params = USMSecurityParameters {
             authoritative_engine_id: engine_id.to_vec().into(),
             authoritative_engine_boots: boots.into(),
@@ -2285,15 +2297,15 @@ mod tests {
             user_name: b"alice".to_vec().into(),
             authentication_parameters: zeroed_auth_params.into(),
             // 4-byte salt (invalid — RFC 3826 §2.2 requires exactly 8 bytes)
-            privacy_parameters: vec![0x01u8; 4].into(),
+            privacy_parameters: vec![0x01_u8; 4].into(),
         };
         let security_params = rasn::ber::encode(&usm_params).unwrap();
         let v3_msg = V3Message {
             version: 3.into(),
             global_data: HeaderData {
                 message_id: 1.into(),
-                max_size: 65535.into(),
-                flags: rasn::types::OctetString::from(vec![0x07u8]), // authPriv + reportable
+                max_size: 0xFFFF.into(),
+                flags: rasn::types::OctetString::from(vec![0x07_u8]), // authPriv + reportable
                 security_model: 3.into(),
             },
             security_parameters: security_params.into(),
@@ -2362,13 +2374,13 @@ mod tests {
         };
 
         let mib = crate::mib::Store::new();
-        let auth_key_bytes = [0x42u8; 32];
-        let wrong_priv_key_bytes = [0xBBu8; 16];
+        let auth_key_bytes = [0x42_u8; 32];
+        let wrong_priv_key_bytes = [0xBB_u8; 16];
         let mac_len = AuthProtocol::HmacSha256.mac_len();
-        let salt = [0x01u8; 8];
+        let salt = [0x01_u8; 8];
         let engine_id = test_engine_id();
-        let boots = 1u32;
-        let time = 0u32;
+        let boots = 1_u32;
+        let time = 0_u32;
 
         let alice = crate::usm::user::UsmUser::auth_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
@@ -2380,7 +2392,7 @@ mod tests {
 
         // Build frame with flags = 0x03 (authPriv, no reportableFlag) and corrupted ciphertext.
         let fake_ciphertext = b"corrupted-ciphertext-that-wont-decode-as-scoped-pdu".to_vec();
-        let zeroed_auth_params = vec![0u8; mac_len];
+        let zeroed_auth_params = vec![0_u8; mac_len];
         let usm_params = USMSecurityParameters {
             authoritative_engine_id: engine_id.to_vec().into(),
             authoritative_engine_boots: boots.into(),
@@ -2394,8 +2406,8 @@ mod tests {
             version: 3.into(),
             global_data: HeaderData {
                 message_id: 1.into(),
-                max_size: 65535.into(),
-                flags: rasn::types::OctetString::from(vec![0x03u8]), // authPriv, no reportableFlag
+                max_size: 0xFFFF.into(),
+                flags: rasn::types::OctetString::from(vec![0x03_u8]), // authPriv, no reportableFlag
                 security_model: 3.into(),
             },
             security_parameters: security_params.into(),
@@ -2438,9 +2450,9 @@ mod tests {
         use crate::usm::privacy::PrivProtocol;
 
         let mib = crate::mib::Store::new();
-        let auth_key_bytes = [0x42u8; 32];
-        let priv_key_bytes = [0xAAu8; 16];
-        let wrong_priv_key_bytes = [0xBBu8; 16];
+        let auth_key_bytes = [0x42_u8; 32];
+        let priv_key_bytes = [0xAA_u8; 16];
+        let wrong_priv_key_bytes = [0xBB_u8; 16];
         let alice = crate::usm::user::UsmUser::auth_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
@@ -2455,7 +2467,7 @@ mod tests {
             1,
             0,
             test_oid_arcs(),
-            [0x01u8; 8],
+            [0x01_u8; 8],
         );
         let mut tc = TestCtx::new()
             .with_boots_time(1, 0)
@@ -2544,7 +2556,7 @@ mod tests {
             .find(|(_, w)| *w == flags_tlv)
             .map(|(i, _)| i + 2)
             .expect("msgFlags must be present in frame");
-        frame[flags_pos] &= !0x04u8;
+        frame[flags_pos] &= !0x04_u8;
 
         let mut tc = TestCtx::new();
         let response = {

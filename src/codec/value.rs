@@ -83,7 +83,7 @@ impl From<&[u8]> for Value {
 /// ```
 /// use basic_snmp_agent::codec::Value;
 ///
-/// let v = Value::from(vec![0x01u8, 0x02, 0x03]);
+/// let v = Value::from(vec![0x01_u8, 0x02, 0x03]);
 /// assert_eq!(v, Value::OctetString(vec![0x01, 0x02, 0x03]));
 /// ```
 impl From<Vec<u8>> for Value {
@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn value_integer32_display() {
         assert_eq!(Value::Integer32(0).to_string(), "0");
-        assert_eq!(Value::Integer32(-32768).to_string(), "-32768");
+        assert_eq!(Value::Integer32(-0x8000).to_string(), "-32768");
     }
 
     // --- Value::IpAddress ---
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn value_from_vec_u8() {
-        let byte_vec = vec![0x01u8, 0x02, 0x03];
+        let byte_vec = vec![0x01_u8, 0x02, 0x03];
         let octet_string = Value::from(byte_vec);
         assert_eq!(octet_string, Value::OctetString(vec![0x01, 0x02, 0x03]));
     }

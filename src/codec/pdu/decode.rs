@@ -518,7 +518,7 @@ mod tests {
         // Verifies: REQ-0101
         let engine_id = b"\x80\x00\x1f\x88\x04test";
         let context_name = b"";
-        let oid_arcs = [1u32, 3, 6, 1, 2, 1, 1, 1, 0];
+        let oid_arcs = [1_u32, 3, 6, 1, 2, 1, 1, 1, 0];
         let encoded = encode_scoped_pdu_get_request(engine_id, context_name, 42, &oid_arcs);
 
         let decoded = decode_scoped_pdu(&encoded).expect("must decode valid ScopedPdu");
@@ -634,7 +634,7 @@ mod tests {
             version: 1.into(),
             global_data: rasn_snmp::v3::HeaderData {
                 message_id: 1.into(),
-                max_size: 65535.into(),
+                max_size: 0xFFFF.into(),
                 flags: rasn::types::OctetString::from(vec![0x04]),
                 security_model: 3.into(),
             },
@@ -669,7 +669,7 @@ mod tests {
             version: 3.into(),
             global_data: rasn_snmp::v3::HeaderData {
                 message_id: 1.into(),
-                max_size: 65535.into(),
+                max_size: 0xFFFF.into(),
                 flags: rasn::types::OctetString::from(vec![0x03]),
                 security_model: 3.into(),
             },
@@ -707,7 +707,7 @@ mod tests {
     #[test]
     fn given_authpriv_message_when_decode_v3_then_priv_params_preserved() {
         // Verifies: REQ-0101
-        let expected_priv_params: Vec<u8> = vec![0xABu8; 8];
+        let expected_priv_params: Vec<u8> = vec![0xAB_u8; 8];
         let usm_params = rasn_snmp::v3::USMSecurityParameters {
             authoritative_engine_id: rasn::types::OctetString::from(vec![]),
             authoritative_engine_boots: 0.into(),
@@ -721,7 +721,7 @@ mod tests {
             version: 3.into(),
             global_data: rasn_snmp::v3::HeaderData {
                 message_id: 2.into(),
-                max_size: 65535.into(),
+                max_size: 0xFFFF.into(),
                 flags: rasn::types::OctetString::from(vec![0x03]),
                 security_model: 3.into(),
             },
@@ -804,7 +804,7 @@ mod tests {
         let scoped_pdu = ber::snmp::encode_scoped_pdu(b"\x80\x00\x1f\x88\x04test", b"", &bulk_pdu);
         let (frame, _) = ber::snmp::encode_v3_message(
             5,
-            65535,
+            0xFFFF,
             0x04,
             3,
             b"\x80\x00\x1f\x88\x04test",
@@ -890,7 +890,7 @@ mod tests {
         let scoped_pdu = ber::snmp::encode_scoped_pdu(b"\x80\x00\x1f\x88\x04test", b"", &bulk_pdu);
         let (frame, _) = ber::snmp::encode_v3_message(
             5,
-            65535,
+            0xFFFF,
             0x04,
             3,
             b"\x80\x00\x1f\x88\x04test",
@@ -999,7 +999,7 @@ mod tests {
         use std::borrow::Cow;
 
         let engine_id = b"\x80\x00\x1f\x88\x04test";
-        let expected_auth_params: Vec<u8> = vec![0xABu8; 24]; // 24 bytes as for SHA-256
+        let expected_auth_params: Vec<u8> = vec![0xAB_u8; 24]; // 24 bytes as for SHA-256
 
         let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(vec![
             1, 3, 6, 1, 2, 1, 1, 1, 0,
@@ -1031,8 +1031,8 @@ mod tests {
             version: 3.into(),
             global_data: HeaderData {
                 message_id: 42.into(),
-                max_size: 65535.into(),
-                flags: rasn::types::OctetString::from(vec![0x05u8]), // authNoPriv + reportable
+                max_size: 0xFFFF.into(),
+                flags: rasn::types::OctetString::from(vec![0x05_u8]), // authNoPriv + reportable
                 security_model: 3.into(),
             },
             security_parameters: security_params.into(),
@@ -1080,7 +1080,7 @@ mod tests {
         use std::borrow::Cow;
 
         let engine_id = b"\x80\x00\x1f\x88\x04test";
-        let expected_auth_params: Vec<u8> = vec![0xABu8; 24];
+        let expected_auth_params: Vec<u8> = vec![0xAB_u8; 24];
 
         let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(vec![
             1, 3, 6, 1, 2, 1, 1, 1, 0,
@@ -1112,8 +1112,8 @@ mod tests {
             version: 3.into(),
             global_data: HeaderData {
                 message_id: 42.into(),
-                max_size: 65535.into(),
-                flags: rasn::types::OctetString::from(vec![0x05u8]),
+                max_size: 0xFFFF.into(),
+                flags: rasn::types::OctetString::from(vec![0x05_u8]),
                 security_model: 3.into(),
             },
             security_parameters: security_params.into(),
@@ -1194,8 +1194,8 @@ mod tests {
             version: 3.into(),
             global_data: HeaderData {
                 message_id: 1.into(),
-                max_size: 65535.into(),
-                flags: rasn::types::OctetString::from(vec![0x05u8]),
+                max_size: 0xFFFF.into(),
+                flags: rasn::types::OctetString::from(vec![0x05_u8]),
                 security_model: 3.into(),
             },
             security_parameters: usm_bytes.clone().into(),
@@ -1272,8 +1272,8 @@ mod tests {
             version: 3.into(),
             global_data: HeaderData {
                 message_id: 1.into(),
-                max_size: 65535.into(),
-                flags: rasn::types::OctetString::from(vec![0x05u8]),
+                max_size: 0xFFFF.into(),
+                flags: rasn::types::OctetString::from(vec![0x05_u8]),
                 security_model: 3.into(),
             },
             security_parameters: usm_with_constructed_auth_params.into(),

@@ -47,7 +47,7 @@ pub(crate) const MAX_BULK_REPETITIONS: u32 = 100;
 /// size exceeds this are rejected and the connection is closed to prevent
 /// memory exhaustion.
 // Implements: REQ-0117
-const MAX_FRAME_SIZE: usize = 65_535;
+const MAX_FRAME_SIZE: usize = 0xFFFF;
 
 /// Default maximum number of concurrent TCP connections the agent will accept.
 /// When this limit is reached, new connections are rejected until existing
@@ -651,7 +651,7 @@ impl EventLoop {
             return;
         };
 
-        let mut chunk = [0u8; 4096];
+        let mut chunk = [0_u8; 4096];
         let mut closed = false;
 
         // Drain all immediately available bytes into the per-connection buffer.
@@ -868,7 +868,7 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
 ///
 /// Stops on `WouldBlock`, which is the expected steady-state after draining.
 fn drain_pipe(fd: RawFd) {
-    let mut drain_buf = [0u8; 64];
+    let mut drain_buf = [0_u8; 64];
     loop {
         // SAFETY: fd is the read end of a pipe from a successful pipe(2) call; drain_buf is a valid stack buffer.
         let bytes_read = unsafe { libc::read(fd, drain_buf.as_mut_ptr().cast(), drain_buf.len()) };
@@ -985,7 +985,7 @@ mod tests {
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
-        let mut received = vec![0u8; expected_len];
+        let mut received = vec![0_u8; expected_len];
         stream
             .read_exact(&mut received)
             .expect("timed out waiting for response bytes");
@@ -1292,7 +1292,7 @@ mod tests {
         // Verifies: REQ-0071
         // Long form: 0x82 means two subsequent octets carry the length.
         assert_eq!(parse_ber_length(&[0x82, 0x01, 0x00]), Ok(Some((256, 3))));
-        assert_eq!(parse_ber_length(&[0x82, 0xFF, 0xFF]), Ok(Some((65535, 3))));
+        assert_eq!(parse_ber_length(&[0x82, 0xFF, 0xFF]), Ok(Some((0xFFFF, 3))));
     }
 
     #[test]
@@ -1328,7 +1328,7 @@ mod tests {
         // content_length = 0x00_01_00_00 = 65536; field_size = 1 (long-form marker byte) + 4 = 5.
         assert_eq!(
             parse_ber_length(&[0x84, 0x00, 0x01, 0x00, 0x00]),
-            Ok(Some((65536, 5)))
+            Ok(Some((0x0001_0000, 5)))
         );
     }
 
@@ -1440,7 +1440,11 @@ mod tests {
                             rasn_snmp::v2::VarBindValue::EndOfMibView => {
                                 crate::codec::VarbindValue::EndOfMibView
                             }
-                            _ => panic!("unexpected VarBindValue variant"),
+                            rasn_snmp::v2::VarBindValue::Value(_)
+                            | rasn_snmp::v2::VarBindValue::Unspecified
+                            | rasn_snmp::v2::VarBindValue::NoSuchInstance => {
+                                panic!("unexpected VarBindValue variant")
+                            }
                         };
                         crate::codec::Varbind { oid, value }
                     })
@@ -1550,7 +1554,7 @@ mod tests {
         // BER frame parses correctly but the SNMP decode fails. The event loop
         // must discard the malformed PDU silently and keep the connection open.
         let garbage_content: &[u8] = &[0xFF, 0xFE, 0xFD];
-        let mut garbage_frame = vec![0x30u8, u8::try_from(garbage_content.len()).unwrap()];
+        let mut garbage_frame = vec![0x30_u8, u8::try_from(garbage_content.len()).unwrap()];
         garbage_frame.extend_from_slice(garbage_content);
         client
             .write_all(&garbage_frame)
@@ -1591,7 +1595,7 @@ mod tests {
         // An empty payload is not a valid SNMP PDU; the decode error must be
         // handled without closing the connection.
         client
-            .write_all(&[0x30u8, 0x00])
+            .write_all(&[0x30_u8, 0x00])
             .expect("empty sequence frame write must succeed");
 
         // Then: a valid SNMPv3 GetRequest sent on the same connection still receives a response,
@@ -1727,11 +1731,11 @@ mod tests {
         // When: a frame with indefinite-length encoding is sent.
         // 0x30 = SEQUENCE tag, 0x80 = indefinite-length (unsupported).
         client
-            .write_all(&[0x30u8, 0x80])
+            .write_all(&[0x30_u8, 0x80])
             .expect("write must succeed");
 
         // Then: the server closes the connection; reading must return 0 bytes (EOF).
-        let mut read_buf = [0u8; 1];
+        let mut read_buf = [0_u8; 1];
         let bytes_read = client.read(&mut read_buf).expect("read must not error");
         assert_eq!(
             bytes_read, 0,
@@ -1771,17 +1775,17 @@ mod tests {
         // When: a frame of exactly 65535 bytes is sent. The content is garbage
         // (not valid SNMP), so the event loop discards it and keeps the connection.
         // 1 tag + 5 length bytes + 65529 content = 65535 == MAX_FRAME_SIZE.
-        let mut boundary_frame = Vec::with_capacity(65535);
-        boundary_frame.push(0x30u8); // SEQUENCE tag
-        boundary_frame.push(0x84u8); // long form: 4 subsequent octets
-        boundary_frame.push(0x00u8); // content_length high byte
-        boundary_frame.push(0x00u8);
-        boundary_frame.push(0xFFu8);
-        boundary_frame.push(0xF9u8); // content_length: 0x0000FFF9 = 65529
-        boundary_frame.extend(vec![0xAAu8; 65529]);
+        let mut boundary_frame = Vec::with_capacity(0xFFFF);
+        boundary_frame.push(0x30_u8); // SEQUENCE tag
+        boundary_frame.push(0x84_u8); // long form: 4 subsequent octets
+        boundary_frame.push(0x00_u8); // content_length high byte
+        boundary_frame.push(0x00_u8);
+        boundary_frame.push(0xFF_u8);
+        boundary_frame.push(0xF9_u8); // content_length: 0x0000FFF9 = 65529
+        boundary_frame.extend(vec![0xAA_u8; 0xFFF9]);
         assert_eq!(
             boundary_frame.len(),
-            65535,
+            0xFFFF,
             "boundary frame must be exactly 65535 bytes"
         );
 
@@ -1840,7 +1844,7 @@ mod tests {
         // The third client receives no data — the event loop neither processes
         // its frames nor sends any response. Attempting to read must time out
         // (WouldBlock / TimedOut) rather than returning data.
-        let mut buf = [0u8; 1];
+        let mut buf = [0_u8; 1];
         let read_result = client_c.read(&mut buf);
         // An Ok(0) (EOF/RST) or a timeout error are both acceptable outcomes,
         // because the connection was not registered by the event loop and the
@@ -1907,7 +1911,7 @@ mod tests {
         sender.send(Command::Shutdown).unwrap();
 
         // Then: the client sees EOF because the event loop swept the idle connection.
-        let mut read_buf = [0u8; 1];
+        let mut read_buf = [0_u8; 1];
         let bytes_read = client.read(&mut read_buf).expect("read must not error");
         assert_eq!(bytes_read, 0, "idle connection must be closed by the sweep");
 
@@ -1927,7 +1931,7 @@ mod tests {
         // pressure timeout of 1 ms. With 2 connections open the count (2) satisfies
         // 2 + 2 >= 3, so pressure mode must activate and the 1 ms timeout fires.
 
-        let max_conns = 3usize;
+        let max_conns = 3_usize;
         let pressure_config = ConnectionTimeoutConfig {
             normal_timeout: Duration::from_hours(1), // long enough never to fire
             pressure_timeout: Duration::from_millis(1),
@@ -1959,7 +1963,7 @@ mod tests {
         sender.send(Command::Shutdown).unwrap();
 
         // Then: both clients are closed by the pressure-mode sweep.
-        let mut buf = [0u8; 1];
+        let mut buf = [0_u8; 1];
         let a_read = client_a
             .read(&mut buf)
             .expect("client_a read must not error");

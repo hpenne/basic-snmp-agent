@@ -636,7 +636,7 @@ fn encode_length(dest: &mut Vec<u8>, length: usize) {
 ///   high bit is clear (to preserve the negative sign).
 fn encode_signed_i32(value: i32) -> Vec<u8> {
     let raw_bytes = value.to_be_bytes();
-    let strip_byte = if value >= 0 { 0x00u8 } else { 0xFFu8 };
+    let strip_byte = if value >= 0 { 0x00_u8 } else { 0xFF_u8 };
 
     // Count leading redundant bytes, but keep at least one byte.
     let skip_count = raw_bytes
@@ -800,7 +800,7 @@ fn decode_unsigned(
             significant.len()
         )));
     }
-    let mut word = [0u8; 8];
+    let mut word = [0_u8; 8];
     let start = 8 - significant.len();
     word.get_mut(start..)
         .expect("significant.len() <= max_width <= 8 so start is within word bounds")
@@ -911,11 +911,11 @@ fn decode_oid(oid_bytes: &[u8], error_offset: usize) -> Result<Oid, BerError> {
         )));
     };
     let (first_arc, second_arc) = if first_combined < 40 {
-        (0u64, first_combined)
+        (0_u64, first_combined)
     } else if first_combined < 80 {
-        (1u64, first_combined - 40)
+        (1_u64, first_combined - 40)
     } else {
-        (2u64, first_combined - 80)
+        (2_u64, first_combined - 80)
     };
 
     // Convert decoded u64 arcs to u32 for the Oid type.
@@ -1042,7 +1042,7 @@ mod tests {
     #[test]
     fn given_length_65535_when_encoded_then_long_form_three_bytes() {
         let mut dest = Vec::new();
-        encode_length(&mut dest, 65535);
+        encode_length(&mut dest, 0xFFFF);
         assert_eq!(dest, [0x82, 0xFF, 0xFF]);
     }
 
@@ -1087,7 +1087,7 @@ mod tests {
 
     #[test]
     fn given_length_65535_when_round_tripped_then_recovers_value() {
-        assert_eq!(round_trip_length(65535), 65535);
+        assert_eq!(round_trip_length(0xFFFF), 0xFFFF);
     }
 
     #[test]
@@ -1339,7 +1339,7 @@ mod tests {
     #[test]
     fn given_octet_string_medium_when_round_tripped_then_recovers_bytes() {
         // 200-byte payload forces the long-form length encoding path.
-        let payload: Vec<u8> = (0u8..=199).collect();
+        let payload: Vec<u8> = (0_u8..=199).collect();
         let encoded = encode_with_writer(|w| w.write_octet_string(&payload));
         let recovered = BerReader::new(&encoded)
             .read_octet_string()
@@ -1497,7 +1497,7 @@ mod tests {
 
     #[test]
     fn given_boundary_unsigned32s_when_round_tripped_then_recover_original_values() {
-        for value in [0u32, 127, 128, 255, 256, u32::MAX] {
+        for value in [0_u32, 127, 128, 255, 256, u32::MAX] {
             assert_eq!(
                 unsigned32_round_trip(value),
                 value,
@@ -1517,7 +1517,7 @@ mod tests {
 
     #[test]
     fn given_boundary_unsigned64s_when_round_tripped_then_recover_original_values() {
-        for value in [0u64, u64::from(u32::MAX), u64::MAX] {
+        for value in [0_u64, u64::from(u32::MAX), u64::MAX] {
             assert_eq!(
                 unsigned64_round_trip(value),
                 value,
@@ -1768,13 +1768,13 @@ mod tests {
         // Wire: 46 05 01 00 00 00 00
         const EXPECTED_WIRE: &[u8] = &[0x46, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00];
         let mut writer = BerWriter::new();
-        writer.write_tagged_unsigned64(TAG_COUNTER64, 4_294_967_296);
+        writer.write_tagged_unsigned64(TAG_COUNTER64, 0x0001_0000_0000);
         assert_eq!(writer.as_bytes(), EXPECTED_WIRE);
         let mut reader = BerReader::new(writer.as_bytes());
         let value = reader
             .read_tagged_unsigned64(TAG_COUNTER64)
             .expect("should decode");
-        assert_eq!(value, 4_294_967_296);
+        assert_eq!(value, 0x0001_0000_0000);
     }
 
     // --- New error-case tests ---
@@ -1885,7 +1885,7 @@ mod tests {
 
     #[test]
     fn given_ber_error_when_debug_formatted_then_contains_fields() {
-        let error = BerError::new("test message".to_string());
+        let error = BerError::new("test message".to_owned());
         let debug_output = format!("{error:?}");
         assert!(
             debug_output.contains("BerError"),
@@ -1932,7 +1932,7 @@ mod tests {
 
     #[test]
     fn given_wrong_version_error_when_debug_formatted_then_shows_true() {
-        let error = BerError::wrong_version("version mismatch".to_string());
+        let error = BerError::wrong_version("version mismatch".to_owned());
         let debug_output = format!("{error:?}");
         assert!(
             debug_output.contains("true"),
@@ -2061,8 +2061,8 @@ mod tests {
     fn given_oid_with_129_sub_identifiers_when_decoded_then_returns_error() {
         // First BER byte 0x00 encodes arcs (0, 0), then 127 more single-byte
         // sub-identifiers (0x01 each), giving 2 + 127 = 129 total arcs.
-        let mut oid_value = vec![0x00u8]; // arcs 0.0
-        oid_value.extend(std::iter::repeat_n(0x01u8, 127));
+        let mut oid_value = vec![0x00_u8]; // arcs 0.0
+        oid_value.extend(std::iter::repeat_n(0x01_u8, 127));
         // Total OID value length = 128 bytes
         // Wrap in OID TLV: tag 0x06, length 128 (long form: 0x81 0x80)
         let mut tlv = vec![0x06, 0x81, 0x80];
@@ -2084,8 +2084,8 @@ mod tests {
     fn given_oid_with_128_sub_identifiers_when_decoded_then_succeeds() {
         // First BER byte 0x00 encodes arcs (0, 0), then 126 more single-byte
         // sub-identifiers (0x01 each), giving 2 + 126 = 128 total arcs.
-        let mut oid_value = vec![0x00u8]; // arcs 0.0
-        oid_value.extend(std::iter::repeat_n(0x01u8, 126));
+        let mut oid_value = vec![0x00_u8]; // arcs 0.0
+        oid_value.extend(std::iter::repeat_n(0x01_u8, 126));
         // Total OID value length = 127 bytes
         // Wrap in OID TLV: tag 0x06, length 127 (short form: 0x7F)
         let mut tlv = vec![0x06, 0x7F];

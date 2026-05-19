@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn given_engine_id_too_long_when_build_then_invalid_engine_id_error() {
         // Verifies: REQ-0055
-        let too_long = vec![0u8; 33]; // 33 bytes, above the 32-byte maximum
+        let too_long = vec![0_u8; 33]; // 33 bytes, above the 32-byte maximum
         let result = AgentBuilder::new()
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .engine_id(too_long)
@@ -511,7 +511,7 @@ mod tests {
         // Verifies: REQ-0055
         // 5 bytes is the minimum valid length per RFC 3411 §5. The mutant
         // `< with <=` would incorrectly reject this boundary value.
-        let min_valid = vec![0x80u8, 0x00, 0x1f, 0x88, 0x01]; // exactly 5 bytes
+        let min_valid = vec![0x80_u8, 0x00, 0x1f, 0x88, 0x01]; // exactly 5 bytes
         let result = AgentBuilder::new()
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .engine_id(min_valid)
@@ -527,7 +527,7 @@ mod tests {
         // Verifies: REQ-0055
         // 32 bytes is the maximum valid length per RFC 3411 §5. The mutant
         // `> with >=` would incorrectly reject this boundary value.
-        let max_valid = vec![0xAAu8; 32]; // exactly 32 bytes
+        let max_valid = vec![0xAA_u8; 32]; // exactly 32 bytes
         let result = AgentBuilder::new()
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .engine_id(max_valid)
@@ -758,7 +758,7 @@ mod tests {
         use crate::usm::keys::SecretKey;
         use crate::usm::user::{UserName, UsmUser};
 
-        let auth_key = SecretKey::new_from_exposed_slice(&[0x11u8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0x11_u8; 32]);
         let user = UsmUser::auth_no_priv(
             UserName::new("testuser").unwrap(),
             AuthProtocol::HmacSha256,
@@ -789,7 +789,7 @@ mod tests {
         // Verify the datagram decodes as a V3 message (not V2c). If usm_user
         // was not stored by the builder, the agent would fall back to V2c and
         // rasn would fail to decode the datagram as a V3 message.
-        let mut recv_buf = vec![0u8; 2048];
+        let mut recv_buf = vec![0_u8; 2048];
         let (bytes_received, _src) = receiver
             .recv_from(&mut recv_buf)
             .expect("must receive a datagram");

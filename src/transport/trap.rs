@@ -328,7 +328,7 @@ mod tests {
         // matches the encoded bytes for the same PDU.
         let wire_pdu = crate::transport::request::build_wire_trap(&pdu, sender.start_time);
         let expected_encoded_pdu = crate::codec::encode_trap(&wire_pdu).unwrap();
-        let mut recv_buf = vec![0u8; TRAP_MTU_BYTES];
+        let mut recv_buf = vec![0_u8; TRAP_MTU_BYTES];
         let (bytes_received, _src) = receiver.recv_from(&mut recv_buf).unwrap();
         assert!(bytes_received > 0, "expected non-empty datagram");
         assert_eq!(&recv_buf[..bytes_received], expected_encoded_pdu.as_slice());
@@ -342,7 +342,7 @@ mod tests {
         let sender = no_usm_sender();
         let (_receiver, dest) = loopback_receiver();
 
-        let large_varbinds: Vec<Varbind> = (0u32..10)
+        let large_varbinds: Vec<Varbind> = (0_u32..10)
             .map(|i| Varbind {
                 oid: format!("1.3.6.1.2.1.1.{i}.0").parse().unwrap(),
                 value: VarbindValue::Value(Value::OctetString(vec![0xAA; 200])),
@@ -450,7 +450,7 @@ mod tests {
 
         // And: the receiver socket actually received a non-empty datagram, proving
         // the earlier per-destination failure did not abort subsequent sends.
-        let mut recv_buf = vec![0u8; TRAP_MTU_BYTES];
+        let mut recv_buf = vec![0_u8; TRAP_MTU_BYTES];
         let (bytes_received, _src) = recv_ok.recv_from(&mut recv_buf).unwrap();
         assert!(
             bytes_received > 0,
@@ -476,7 +476,7 @@ mod tests {
         let sender = no_usm_sender();
         let (receiver, dest) = loopback_receiver();
 
-        let candidate_payload_size = 1200usize;
+        let candidate_payload_size = 1200_usize;
         let varbind_oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
 
         let candidate_pdu = TrapPdu {
@@ -485,7 +485,7 @@ mod tests {
             varbinds: vec![Varbind {
                 oid: varbind_oid.clone(),
                 value: VarbindValue::Value(Value::OctetString(vec![
-                    0xBBu8;
+                    0xBB_u8;
                     candidate_payload_size
                 ])),
             }],
@@ -507,7 +507,7 @@ mod tests {
             trap_oid: trap_oid(),
             varbinds: vec![Varbind {
                 oid: varbind_oid,
-                value: VarbindValue::Value(Value::OctetString(vec![0xBBu8; final_payload_size])),
+                value: VarbindValue::Value(Value::OctetString(vec![0xBB_u8; final_payload_size])),
             }],
         };
         let exact_mtu_wire = build_wire_trap(&exact_mtu_pdu, sender.start_time);
@@ -532,7 +532,7 @@ mod tests {
             results[0].outcome
         );
         // Drain the socket so it does not interfere with other tests.
-        let mut recv_buf = vec![0u8; TRAP_MTU_BYTES + 1];
+        let mut recv_buf = vec![0_u8; TRAP_MTU_BYTES + 1];
         receiver.recv_from(&mut recv_buf).unwrap();
     }
 
@@ -544,8 +544,8 @@ mod tests {
         use crate::usm::user::{UserName, UsmUser};
         use rasn_snmp::v3::{Message as V3Message, USMSecurityParameters};
 
-        let auth_key = SecretKey::new_from_exposed_slice(&[0x42u8; 32]);
-        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42u8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0x42_u8; 32]);
+        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42_u8; 32]);
         let auth_protocol = AuthProtocol::HmacSha256;
         let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
         let user = Arc::new(UsmUser::auth_no_priv(
@@ -565,7 +565,7 @@ mod tests {
         assert!(results[0].outcome.is_ok(), "send must succeed");
 
         // Receive and decode the datagram.
-        let mut recv_buf = vec![0u8; TRAP_MTU_BYTES];
+        let mut recv_buf = vec![0_u8; TRAP_MTU_BYTES];
         let (bytes_received, _src) = receiver.recv_from(&mut recv_buf).unwrap();
         let received_bytes = &recv_buf[..bytes_received];
 
@@ -605,8 +605,8 @@ mod tests {
         use crate::usm::user::{UserName, UsmUser};
         use rasn_snmp::v3::{Message as V3Message, ScopedPduData, USMSecurityParameters};
 
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
-        let priv_key = SecretKey::new_from_exposed_slice(&[0xBBu8; 16]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
+        let priv_key = SecretKey::new_from_exposed_slice(&[0xBB_u8; 16]);
         let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
         let user = Arc::new(UsmUser::auth_priv(
             UserName::new("trappriv").unwrap(),
@@ -626,7 +626,7 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert!(results[0].outcome.is_ok(), "send must succeed");
 
-        let mut recv_buf = vec![0u8; TRAP_MTU_BYTES];
+        let mut recv_buf = vec![0_u8; TRAP_MTU_BYTES];
         let (bytes_received, _src) = receiver.recv_from(&mut recv_buf).unwrap();
         let received_bytes = &recv_buf[..bytes_received];
 
@@ -671,7 +671,7 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert!(results[0].outcome.is_ok(), "send must succeed");
 
-        let mut recv_buf = vec![0u8; TRAP_MTU_BYTES];
+        let mut recv_buf = vec![0_u8; TRAP_MTU_BYTES];
         let (bytes_received, _src) = receiver.recv_from(&mut recv_buf).unwrap();
         let received_bytes = &recv_buf[..bytes_received];
 
@@ -727,11 +727,11 @@ mod tests {
             .expect("second trap send must succeed");
 
         // Receive both datagrams.
-        let mut recv_buf_1 = vec![0u8; TRAP_MTU_BYTES];
+        let mut recv_buf_1 = vec![0_u8; TRAP_MTU_BYTES];
         let (bytes_1, _) = receiver
             .recv_from(&mut recv_buf_1)
             .expect("must receive first trap datagram");
-        let mut recv_buf_2 = vec![0u8; TRAP_MTU_BYTES];
+        let mut recv_buf_2 = vec![0_u8; TRAP_MTU_BYTES];
         let (bytes_2, _) = receiver
             .recv_from(&mut recv_buf_2)
             .expect("must receive second trap datagram");
