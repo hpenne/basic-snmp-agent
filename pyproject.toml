@@ -1,3 +1,18 @@
+[project]
+name = "basic-snmp-agent-tools"
+version = "0.0.0"
+description = "Python dev tools and tests for basic-snmp-agent"
+requires-python = ">=3.12"
+
+[dependency-groups]
+dev = [
+    "black>=25.1",
+    "mypy>=1.15",
+    "pylint>=3.3",
+    "pytest>=8.3",
+    "behave>=1.2.6",
+]
+
 [tool.black]
 target-version = ["py312"]
 
@@ -9,10 +24,6 @@ warn_unused_configs = true
 
 [[tool.mypy.overrides]]
 module = ["behave"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = ["tomli"]
 ignore_missing_imports = true
 
 # The @given/@when/@then decorators from behave are untyped; suppress the
@@ -27,6 +38,9 @@ load-plugins = []
 [tool.pylint."messages control"]
 disable = [
     "missing-module-docstring",
+    # Behave's lazy module re-exports given/when/then; pylint 4.x cannot
+    # resolve their callability. mypy (strict mode) catches real issues.
+    "not-callable",
     "missing-function-docstring",
     "too-many-arguments",
     "too-many-positional-arguments",
@@ -36,4 +50,3 @@ disable = [
     "duplicate-code",
     "use-implicit-booleaness-not-comparison",
 ]
-

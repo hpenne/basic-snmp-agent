@@ -8,8 +8,7 @@ Verifies that every requirement from all "impl"-phase RFCs is covered by:
 
 unless the requirement is explicitly exempted in ``gov/req-coverage-gaps.toml``.
 
-Requires Python 3.11+ (stdlib tomllib) or Python 3.10 with the ``tomli``
-package installed.
+Requires Python 3.12+.
 """
 
 from __future__ import annotations
@@ -17,20 +16,9 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any, NamedTuple
-
-try:
-    import tomllib
-except ImportError:
-    try:
-        import tomli as tomllib  # type: ignore[no-redef]
-    except ImportError as exc:
-        raise ImportError(
-            "Python 3.11+ is required, or install the 'tomli' package "
-            "(pip install tomli) when running Python 3.10."
-        ) from exc
-
 
 # ---------------------------------------------------------------------------
 # Types

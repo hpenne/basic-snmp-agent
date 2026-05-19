@@ -20,21 +20,21 @@ rust-test:
 
 # Python unit tests for the tooling scripts.
 python-test:
-	python3 -m pytest tools/tests/ -v
+	uv run pytest tools/tests/ -v
 
 # Python linting: formatting check, type checking, and static analysis.
 python-lint:
-	python3 -m black --check $(PYTHON_FILES)
-	python3 -m mypy $(PYTHON_FILES)
-	python3 -m pylint $(PYTHON_FILES)
+	uv run black --check $(PYTHON_FILES)
+	uv run mypy $(PYTHON_FILES)
+	uv run pylint $(PYTHON_FILES)
 
 # Behave system tests (requires Docker).
 behave-test:
-	cd tests/system && python3 -m behave
+	cd tests/system && uv run --project ../.. behave
 
 # Check requirement tracing coverage for all implemented RFCs.
 trace:
-	python3 tools/req_coverage_check.py
+	uv run python tools/req_coverage_check.py
 
 # Generate seed corpus files for all fuzz targets.
 fuzz-gen-seeds:

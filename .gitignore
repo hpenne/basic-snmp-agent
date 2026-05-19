@@ -6,3 +6,5 @@
 /docs/
 /fuzz/corpus
 /fuzz/target
+/.venv
+__pycache__/

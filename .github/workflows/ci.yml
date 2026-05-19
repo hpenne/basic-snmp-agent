@@ -68,13 +68,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
-          python-version: "3.12"
+          enable-cache: true
 
-      - name: Install tools
-        run: pip install black mypy pylint pytest
+      - name: Sync Python environment
+        run: uv sync
 
       - name: make python-lint
         run: make python-lint
@@ -85,10 +85,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
-          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync Python environment
+        run: uv sync
 
       - name: make trace
         run: make trace
@@ -144,13 +147,13 @@ jobs:
           key: ${{ runner.os }}-cargo-system-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-system-
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
-          python-version: "3.12"
+          enable-cache: true
 
-      - name: Install behave
-        run: pip install -r tests/system/requirements.txt
+      - name: Sync Python environment
+        run: uv sync
 
       - name: Build Docker images
         working-directory: tests/system
@@ -158,7 +161,7 @@ jobs:
 
       - name: Run system tests
         working-directory: tests/system
-        run: behave --no-capture
+        run: uv run --project ../.. behave --no-capture
 
       - name: Dump snmptrapd logs on failure
         if: failure()

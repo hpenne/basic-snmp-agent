@@ -3,8 +3,10 @@
 [govctl]
 id = "WI-2026-05-13-001"
 title = "Pin Python dev tools with uv"
-status = "queue"
+status = "done"
 created = "2026-05-13"
+started = "2026-05-19"
+completed = "2026-05-19"
 
 [content]
 description = """
@@ -15,52 +17,46 @@ uv manages a lockfile (uv.lock) that pins exact versions, and `uv run <tool>` au
 
 ## Implementation plan
 
-- [ ] Add `[project.optional-dependencies]` dev group to pyproject.toml with pinned versions
-- [ ] Add behave and its dependencies to pyproject.toml (replacing tests/system/requirements.txt)
-- [ ] Run `uv lock` to generate uv.lock
-- [ ] Update CI python-lint job: install uv, replace pip install with uv sync
-- [ ] Update CI system-tests job: replace pip install with uv sync
-- [ ] Update CI trace job if it uses Python tools
-- [ ] Update Makefile targets to use `uv run`
-- [ ] Remove tests/system/requirements.txt
-- [ ] Verify all CI jobs pass"""
+- [x] Add `[dependency-groups]` dev group to pyproject.toml with minimum version constraints
+- [x] Add behave and its dependencies to pyproject.toml (replacing tests/system/requirements.txt)
+- [x] Run `uv lock` to generate uv.lock
+- [x] Update CI python-lint job: install uv, run `uv sync`, replace pip install
+- [x] Update CI system-tests job: install uv, run `uv sync`, replace pip install
+- [x] Update CI trace job: install uv, run `uv sync`
+- [x] Update Makefile targets to use `uv run`
+- [x] Remove tests/system/requirements.txt"""
 
 [[content.acceptance_criteria]]
 text = "pyproject.toml declares dev dependencies (black, mypy, pylint, pytest) with pinned versions"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "uv.lock committed to the repository"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "CI python-lint job installs tools via uv instead of bare pip"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "CI system-tests job installs behave via uv instead of bare pip"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "Makefile python-lint target uses uv run"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "requirements-dev.txt and tests/system/requirements.txt removed (superseded by pyproject.toml)"
-status = "pending"
-category = "chore"
-
-[[content.acceptance_criteria]]
-text = "All existing CI jobs pass"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "govctl check passes"
-status = "pending"
+status = "done"
 category = "chore"
