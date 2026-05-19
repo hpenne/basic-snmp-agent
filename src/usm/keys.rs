@@ -30,7 +30,7 @@ pub fn zeroize_slice(slice: &mut [u8]) {
         // SAFETY: `i` is within bounds of the original slice, so `ptr.add(i)` is valid.
         let target = unsafe { ptr.add(i) };
         // SAFETY: `target` points to a valid, aligned byte within the slice.
-        unsafe { target.write_volatile(0u8) };
+        unsafe { target.write_volatile(0_u8) };
     }
     compiler_fence(Ordering::SeqCst);
 }
@@ -72,7 +72,7 @@ impl SecretKey {
     /// ```
     /// use basic_snmp_agent::usm::keys::SecretKey;
     ///
-    /// let key = SecretKey::new_from_exposed_slice(&[0xABu8; 32]);
+    /// let key = SecretKey::new_from_exposed_slice(&[0xAB_u8; 32]);
     /// assert_eq!(key.len(), 32);
     /// ```
     #[must_use]
@@ -101,7 +101,7 @@ impl SecretKey {
     /// ```
     #[must_use]
     pub fn zeroed(len: usize) -> Self {
-        Self(vec![0u8; len].into_boxed_slice())
+        Self(vec![0_u8; len].into_boxed_slice())
     }
 
     /// Return the key bytes as an immutable slice.
@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn given_slice_when_zeroize_slice_then_all_bytes_are_zero() {
         // Verifies: REQ-0085, REQ-0108
-        let mut buf = [0xFFu8; 8];
+        let mut buf = [0xFF_u8; 8];
         zeroize_slice(&mut buf);
         assert!(buf.iter().all(|&b| b == 0));
     }
@@ -290,7 +290,7 @@ mod tests {
     #[test]
     fn given_key_when_len_then_returns_byte_count() {
         // Verifies: REQ-0085
-        let key = SecretKey::new_from_exposed_slice(&[0u8; 32]);
+        let key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
         assert_eq!(key.len(), 32);
     }
 
@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn given_non_empty_key_when_is_empty_then_false() {
         // Verifies: REQ-0085
-        let key = SecretKey::new_from_exposed_slice(&[0u8; 32]);
+        let key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
         assert!(!key.is_empty());
     }
 
@@ -313,14 +313,14 @@ mod tests {
         // Verifies: REQ-0085 — exercises the Drop impl (including the unsafe
         // write_volatile path) without triggering UB. A sanitiser run would
         // catch use-after-free; at minimum this confirms no panic on drop.
-        let key = SecretKey::new_from_exposed_slice(&[0xABu8; 64]);
+        let key = SecretKey::new_from_exposed_slice(&[0xAB_u8; 64]);
         drop(key);
     }
 
     #[test]
     fn given_key_when_debug_then_redacted() {
         // Verifies: REQ-0085
-        let key = SecretKey::new_from_exposed_slice(&[0xFFu8; 8]);
+        let key = SecretKey::new_from_exposed_slice(&[0xFF_u8; 8]);
         assert_eq!(format!("{key:?}"), "SecretKey([REDACTED; 8])");
     }
 }

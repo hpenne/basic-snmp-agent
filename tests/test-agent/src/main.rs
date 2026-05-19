@@ -384,7 +384,7 @@ fn to_value(def: &VarbindDef) -> Result<Value, String> {
                     arr.len()
                 ));
             }
-            let mut octets = [0u8; 4];
+            let mut octets = [0_u8; 4];
             for (octet_index, (octet_dest, octet_element)) in octets.iter_mut().zip(arr).enumerate()
             {
                 let raw_octet = octet_element

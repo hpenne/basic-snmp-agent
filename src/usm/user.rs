@@ -167,9 +167,9 @@ impl TryFrom<u8> for SecurityLevel {
     /// ```
     fn try_from(flags: u8) -> Result<Self, Self::Error> {
         match flags & 0x03 {
-            0x00 => Ok(SecurityLevel::NoAuthNoPriv),
-            0x01 => Ok(SecurityLevel::AuthNoPriv),
-            0x03 => Ok(SecurityLevel::AuthPriv),
+            0x00 => Ok(Self::NoAuthNoPriv),
+            0x01 => Ok(Self::AuthNoPriv),
+            0x03 => Ok(Self::AuthPriv),
             _ => Err(InvalidMsgFlags(flags)), // 0x02: privFlag without authFlag — invalid per RFC 3412 §7.1.2a
         }
     }
@@ -229,7 +229,7 @@ impl UsmUser {
     /// use basic_snmp_agent::usm::keys::SecretKey;
     ///
     /// let name = UserName::new("alice").unwrap();
-    /// let auth_key = SecretKey::new_from_exposed_slice(&[0u8; 32]);
+    /// let auth_key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
     /// let user = UsmUser::auth_no_priv(name, AuthProtocol::HmacSha256, auth_key);
     /// assert_eq!(user.security_level(), SecurityLevel::AuthNoPriv);
     /// ```
@@ -258,8 +258,8 @@ impl UsmUser {
     /// use basic_snmp_agent::usm::privacy::PrivProtocol;
     ///
     /// let name = UserName::new("bob").unwrap();
-    /// let auth_key = SecretKey::new_from_exposed_slice(&[0u8; 32]);
-    /// let priv_key = SecretKey::new_from_exposed_slice(&[0u8; 16]);
+    /// let auth_key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+    /// let priv_key = SecretKey::new_from_exposed_slice(&[0_u8; 16]);
     /// let user = UsmUser::auth_priv(
     ///     name,
     ///     AuthProtocol::HmacSha256,
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn auth_no_priv_has_correct_security_level() {
         // Verifies: REQ-0076
-        let auth_key = SecretKey::new_from_exposed_slice(&[0u8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
         let user = UsmUser::auth_no_priv(user_name("alice"), AuthProtocol::HmacSha256, auth_key);
         assert_eq!(user.security_level(), SecurityLevel::AuthNoPriv);
     }
@@ -441,8 +441,8 @@ mod tests {
     #[test]
     fn auth_priv_has_correct_security_level() {
         // Verifies: REQ-0077
-        let auth_key = SecretKey::new_from_exposed_slice(&[0u8; 32]);
-        let priv_key = SecretKey::new_from_exposed_slice(&[0u8; 16]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+        let priv_key = SecretKey::new_from_exposed_slice(&[0_u8; 16]);
         let user = UsmUser::auth_priv(
             user_name("bob"),
             AuthProtocol::HmacSha256,
@@ -463,16 +463,16 @@ mod tests {
     #[test]
     fn given_auth_no_priv_when_auth_key_then_some() {
         // Verifies: REQ-0092
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
         let user = UsmUser::auth_no_priv(user_name("alice"), AuthProtocol::HmacSha256, auth_key);
-        assert_eq!(user.auth_key().unwrap().as_bytes(), &[0xAAu8; 32]);
+        assert_eq!(user.auth_key().unwrap().as_bytes(), &[0xAA_u8; 32]);
     }
 
     #[test]
     fn given_auth_priv_when_priv_key_then_some() {
         // Verifies: REQ-0092
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xBBu8; 32]);
-        let priv_key = SecretKey::new_from_exposed_slice(&[0xCCu8; 16]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xBB_u8; 32]);
+        let priv_key = SecretKey::new_from_exposed_slice(&[0xCC_u8; 16]);
         let user = UsmUser::auth_priv(
             user_name("bob"),
             AuthProtocol::HmacSha256,
@@ -480,7 +480,7 @@ mod tests {
             PrivProtocol::Aes128,
             priv_key,
         );
-        assert_eq!(user.priv_key().unwrap().as_bytes(), &[0xCCu8; 16]);
+        assert_eq!(user.priv_key().unwrap().as_bytes(), &[0xCC_u8; 16]);
     }
 
     #[test]
@@ -508,7 +508,7 @@ mod tests {
     #[test]
     fn given_auth_no_priv_user_when_name_then_returns_name() {
         // Verifies: REQ-0091
-        let auth_key = SecretKey::new_from_exposed_slice(&[0u8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
         let user = UsmUser::auth_no_priv(user_name("alice"), AuthProtocol::HmacSha256, auth_key);
         assert_eq!(user.name().as_str(), "alice");
     }
@@ -516,8 +516,8 @@ mod tests {
     #[test]
     fn given_auth_priv_user_when_name_then_returns_name() {
         // Verifies: REQ-0091
-        let auth_key = SecretKey::new_from_exposed_slice(&[0u8; 32]);
-        let priv_key = SecretKey::new_from_exposed_slice(&[0u8; 16]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+        let priv_key = SecretKey::new_from_exposed_slice(&[0_u8; 16]);
         let user = UsmUser::auth_priv(
             user_name("bob"),
             AuthProtocol::HmacSha256,
@@ -541,10 +541,10 @@ mod tests {
     #[test]
     fn given_auth_no_priv_when_all_accessors_then_correct_values() {
         // Verifies: REQ-0092
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
         let user = UsmUser::auth_no_priv(user_name("alice"), AuthProtocol::HmacSha256, auth_key);
         assert_eq!(user.auth_protocol(), Some(AuthProtocol::HmacSha256));
-        assert_eq!(user.auth_key().unwrap().as_bytes(), &[0xAAu8; 32]);
+        assert_eq!(user.auth_key().unwrap().as_bytes(), &[0xAA_u8; 32]);
         assert!(user.priv_protocol().is_none());
         assert!(user.priv_key().is_none());
     }
@@ -552,8 +552,8 @@ mod tests {
     #[test]
     fn given_auth_priv_when_all_accessors_then_correct_values() {
         // Verifies: REQ-0092
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
-        let priv_key = SecretKey::new_from_exposed_slice(&[0xCCu8; 16]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
+        let priv_key = SecretKey::new_from_exposed_slice(&[0xCC_u8; 16]);
         let user = UsmUser::auth_priv(
             user_name("bob"),
             AuthProtocol::HmacSha256,
@@ -563,9 +563,9 @@ mod tests {
         );
         assert_eq!(user.security_level(), SecurityLevel::AuthPriv);
         assert_eq!(user.auth_protocol(), Some(AuthProtocol::HmacSha256));
-        assert_eq!(user.auth_key().unwrap().as_bytes(), &[0xAAu8; 32]);
+        assert_eq!(user.auth_key().unwrap().as_bytes(), &[0xAA_u8; 32]);
         assert_eq!(user.priv_protocol(), Some(PrivProtocol::Aes128));
-        assert_eq!(user.priv_key().unwrap().as_bytes(), &[0xCCu8; 16]);
+        assert_eq!(user.priv_key().unwrap().as_bytes(), &[0xCC_u8; 16]);
     }
 
     #[test]

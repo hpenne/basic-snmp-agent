@@ -30,7 +30,7 @@ use crate::codec::pdu::VarbindValue;
 /// APPLICATION-tagged types (Counter32, Gauge32, etc.) are stored as
 /// [`Raw`][DecodedVarbindValue::Raw] for interpretation in a higher layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DecodedVarbindValue {
+pub enum DecodedVarbindValue {
     /// `unSpecified NULL` — value placeholder in GetRequest/GetNext/GetBulk.
     Unspecified,
     /// `noSuchObject` exception `[0] IMPLICIT NULL` (tag 0x80).
@@ -57,7 +57,7 @@ pub(crate) enum DecodedVarbindValue {
 
 /// A single decoded `VarBind`: an OID name and its associated value CHOICE.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DecodedVarbind {
+pub struct DecodedVarbind {
     /// The variable name (RFC 3416 §3: `name ObjectName`).
     pub(crate) name: Oid,
     /// The decoded value CHOICE.
@@ -78,9 +78,7 @@ pub(crate) struct DecodedVarbind {
 /// - Any inner `VarBind` SEQUENCE is structurally invalid.
 /// - Trailing bytes remain after the outer SEQUENCE TLV.
 /// - Trailing bytes remain after the last `VarBind` within the outer SEQUENCE.
-pub(crate) fn decode_varbind_list(
-    raw_varbind_list_bytes: &[u8],
-) -> Result<Vec<DecodedVarbind>, BerError> {
+pub fn decode_varbind_list(raw_varbind_list_bytes: &[u8]) -> Result<Vec<DecodedVarbind>, BerError> {
     let mut outer_reader = super::BerReader::new(raw_varbind_list_bytes);
     let mut list_reader = outer_reader.read_sequence()?;
     if !outer_reader.is_empty() {
@@ -174,7 +172,7 @@ fn decode_varbind_value(
 ///
 // Returns Result for forward compatibility: Value is #[non_exhaustive], and future
 // variants might have encoding constraints that can fail.
-pub(crate) fn decode_varbind_value_to_value(
+pub fn decode_varbind_value_to_value(
     decoded: &DecodedVarbindValue,
 ) -> Result<VarbindValue, BerError> {
     match decoded {
@@ -248,7 +246,7 @@ pub(crate) fn decode_varbind_value_to_value(
 /// The caller prepares each `VarBind` with [`encode_varbind`] and passes the
 /// resulting slices here. The function concatenates them and wraps the result
 /// in a SEQUENCE TLV (tag 0x30).
-pub(crate) fn encode_varbind_list(encoded_varbinds: &[&[u8]]) -> Vec<u8> {
+pub fn encode_varbind_list(encoded_varbinds: &[&[u8]]) -> Vec<u8> {
     let mut inner_writer = BerWriter::new();
     for encoded_varbind in encoded_varbinds {
         inner_writer.write_raw(encoded_varbind);
@@ -264,7 +262,7 @@ pub(crate) fn encode_varbind_list(encoded_varbinds: &[&[u8]]) -> Vec<u8> {
 /// The `encoded_value_tlv` must be a complete TLV (tag + length + value bytes)
 /// for the desired value type. Use the `encode_*_value` helpers or
 /// [`encode_exception`] to produce this.
-pub(crate) fn encode_varbind(oid: &Oid, encoded_value_tlv: &[u8]) -> Vec<u8> {
+pub fn encode_varbind(oid: &Oid, encoded_value_tlv: &[u8]) -> Vec<u8> {
     let mut inner_writer = BerWriter::new();
     inner_writer.write_oid(oid);
     inner_writer.write_raw(encoded_value_tlv);
@@ -281,7 +279,7 @@ pub(crate) fn encode_varbind(oid: &Oid, encoded_value_tlv: &[u8]) -> Vec<u8> {
 ///
 // Returns Result for forward compatibility: Value is #[non_exhaustive], and future
 // variants might have encoding constraints that can fail.
-pub(crate) fn encode_varbind_value(value: &VarbindValue) -> Result<Vec<u8>, BerError> {
+pub fn encode_varbind_value(value: &VarbindValue) -> Result<Vec<u8>, BerError> {
     match value {
         VarbindValue::Unspecified => Ok(encode_null_value()),
         VarbindValue::NoSuchObject => encode_exception(TAG_NO_SUCH_OBJECT),
@@ -331,26 +329,26 @@ pub(crate) fn encode_varbind_value(value: &VarbindValue) -> Result<Vec<u8>, BerE
 ///
 /// Used as the value in GetRequest/GetNext/GetBulk `VarBinds` where the value
 /// field is the `unSpecified` CHOICE.
-pub(crate) fn encode_null_value() -> Vec<u8> {
+pub fn encode_null_value() -> Vec<u8> {
     vec![TAG_NULL, 0x00]
 }
 
 /// Encodes a signed INTEGER value TLV.
-pub(crate) fn encode_integer_value(value: i32) -> Vec<u8> {
+pub fn encode_integer_value(value: i32) -> Vec<u8> {
     let mut writer = BerWriter::new();
     writer.write_integer(value);
     writer.into_vec()
 }
 
 /// Encodes an OCTET STRING value TLV.
-pub(crate) fn encode_octet_string_value(bytes: &[u8]) -> Vec<u8> {
+pub fn encode_octet_string_value(bytes: &[u8]) -> Vec<u8> {
     let mut writer = BerWriter::new();
     writer.write_octet_string(bytes);
     writer.into_vec()
 }
 
 /// Encodes an OBJECT IDENTIFIER value TLV.
-pub(crate) fn encode_oid_value(oid: &Oid) -> Vec<u8> {
+pub fn encode_oid_value(oid: &Oid) -> Vec<u8> {
     let mut writer = BerWriter::new();
     writer.write_oid(oid);
     writer.into_vec()
@@ -366,7 +364,7 @@ pub(crate) fn encode_oid_value(oid: &Oid) -> Vec<u8> {
 /// # Errors
 ///
 /// Returns a [`BerError`] when `tag` is not one of the three valid exception tags.
-pub(crate) fn encode_exception(tag: u8) -> Result<Vec<u8>, BerError> {
+pub fn encode_exception(tag: u8) -> Result<Vec<u8>, BerError> {
     if tag != TAG_NO_SUCH_OBJECT && tag != TAG_NO_SUCH_INSTANCE && tag != TAG_END_OF_MIB_VIEW {
         return Err(BerError::new(format!(
             "BER: invalid exception tag 0x{tag:02X}"

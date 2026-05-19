@@ -109,7 +109,7 @@ impl fmt::Display for ErrorStatus {
 
 impl From<ErrorStatus> for i32 {
     fn from(status: ErrorStatus) -> Self {
-        status as i32
+        status as Self
     }
 }
 
@@ -561,7 +561,7 @@ mod tests {
 
     #[test]
     fn given_valid_code_when_try_from_i32_then_round_trips() {
-        for code in 0i32..=18 {
+        for code in 0_i32..=18 {
             let status = ErrorStatus::try_from(code).expect("should parse");
             assert_eq!(status as i32, code);
         }

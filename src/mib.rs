@@ -260,7 +260,7 @@ mod tests {
         let c = oid("1.3.6.1.2.1.1.3.0");
         store.set(a.clone(), Value::Integer32(1));
         store.set(b.clone(), Value::Integer32(2));
-        store.set(c.clone(), Value::Integer32(3));
+        store.set(c, Value::Integer32(3));
 
         let (next_oid, next_val) = store.next(&a).unwrap();
 

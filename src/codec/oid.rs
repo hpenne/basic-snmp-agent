@@ -4,7 +4,7 @@ use std::fmt;
 use std::str::FromStr;
 
 /// Maximum number of sub-identifiers in an OID per RFC 2578 §3.5.
-pub(crate) const MAX_OID_SUB_IDENTIFIERS: usize = 128;
+pub const MAX_OID_SUB_IDENTIFIERS: usize = 128;
 
 /// An SNMP Object Identifier represented as a sequence of unsigned 32-bit components.
 ///
@@ -35,7 +35,7 @@ pub(crate) const MAX_OID_SUB_IDENTIFIERS: usize = 128;
 /// let oid: Oid = "1.3.6.1.2.1".parse().unwrap();
 /// assert_eq!(oid.to_string(), "1.3.6.1.2.1");
 ///
-/// let oid2 = Oid::try_from(vec![2u32, 999]).unwrap();
+/// let oid2 = Oid::try_from(vec![2_u32, 999]).unwrap();
 /// assert_eq!(oid2.to_string(), "2.999");
 /// ```
 // `Vec<u32>` compares lexicographically, component by component, which matches
@@ -127,9 +127,9 @@ impl TryFrom<Vec<u32>> for Oid {
     /// ```
     /// use basic_snmp_agent::codec::Oid;
     ///
-    /// assert!(Oid::try_from(vec![1u32, 3, 6, 1]).is_ok());
-    /// assert!(Oid::try_from(vec![2u32, 999]).is_ok());
-    /// assert!(Oid::try_from(vec![0u32, 40]).is_err());
+    /// assert!(Oid::try_from(vec![1_u32, 3, 6, 1]).is_ok());
+    /// assert!(Oid::try_from(vec![2_u32, 999]).is_ok());
+    /// assert!(Oid::try_from(vec![0_u32, 40]).is_err());
     /// ```
     fn try_from(components: Vec<u32>) -> Result<Self, Self::Error> {
         validate_oid_components(&components).map_err(|kind| ParseOidError { kind })?;
@@ -174,7 +174,7 @@ impl FromStr for Oid {
                 // InvalidComponent before the leading-zero check ever runs.
                 let value = part.parse::<u32>().map_err(|source| ParseOidError {
                     kind: OidErrorKind::InvalidComponent {
-                        part: part.to_string(),
+                        part: part.to_owned(),
                         source,
                     },
                 })?;
@@ -183,7 +183,7 @@ impl FromStr for Oid {
                 if part.len() > 1 && part.starts_with('0') {
                     return Err(ParseOidError {
                         kind: OidErrorKind::LeadingZero {
-                            part: part.to_string(),
+                            part: part.to_owned(),
                         },
                     });
                 }
@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn oid_try_from_vec() {
-        let oid = Oid::try_from(vec![1u32, 3, 6, 1, 2, 1]).unwrap();
+        let oid = Oid::try_from(vec![1_u32, 3, 6, 1, 2, 1]).unwrap();
         assert_eq!(oid.as_slice(), &[1, 3, 6, 1, 2, 1]);
     }
 
@@ -434,13 +434,13 @@ mod tests {
 
     #[test]
     fn oid_try_from_vec_success() {
-        let oid = Oid::try_from(vec![1u32, 3, 6, 1]).unwrap();
+        let oid = Oid::try_from(vec![1_u32, 3, 6, 1]).unwrap();
         assert_eq!(oid.as_slice(), &[1, 3, 6, 1]);
     }
 
     #[test]
     fn oid_try_from_vec_failure_second_too_large() {
-        let oid_error = Oid::try_from(vec![0u32, 40]).unwrap_err();
+        let oid_error = Oid::try_from(vec![0_u32, 40]).unwrap_err();
         assert!(
             oid_error.to_string().contains("second OID component"),
             "unexpected error: {oid_error}"
@@ -740,8 +740,8 @@ mod tests {
 
     #[test]
     fn given_oid_with_129_components_when_try_from_then_returns_error() {
-        let mut components = vec![1u32, 3];
-        components.extend(std::iter::repeat_n(1u32, 127));
+        let mut components = vec![1_u32, 3];
+        components.extend(std::iter::repeat_n(1_u32, 127));
         assert_eq!(components.len(), 129);
         let parse_error = Oid::try_from(components).unwrap_err();
         assert_eq!(
@@ -756,8 +756,8 @@ mod tests {
 
     #[test]
     fn given_oid_with_128_components_when_try_from_then_succeeds() {
-        let mut components = vec![1u32, 3];
-        components.extend(std::iter::repeat_n(1u32, 126));
+        let mut components = vec![1_u32, 3];
+        components.extend(std::iter::repeat_n(1_u32, 126));
         assert_eq!(components.len(), 128);
         let oid = Oid::try_from(components).expect("128 sub-identifiers should succeed");
         assert_eq!(oid.as_slice().len(), 128);
@@ -766,15 +766,15 @@ mod tests {
     #[test]
     #[should_panic(expected = "too many sub-identifiers")]
     fn given_oid_with_129_components_when_from_slice_then_panics() {
-        let mut components = vec![1u32, 3];
-        components.extend(std::iter::repeat_n(1u32, 127));
+        let mut components = vec![1_u32, 3];
+        components.extend(std::iter::repeat_n(1_u32, 127));
         let _oid = Oid::from_slice(&components);
     }
 
     #[test]
     fn given_oid_string_with_129_components_when_parsed_then_returns_error() {
-        let oid_string = std::iter::once("1".to_string())
-            .chain(std::iter::repeat_n("1".to_string(), 128))
+        let oid_string = std::iter::once("1".to_owned())
+            .chain(std::iter::repeat_n("1".to_owned(), 128))
             .collect::<Vec<_>>()
             .join(".");
         let parse_error = oid_string.parse::<Oid>().unwrap_err();
@@ -793,7 +793,7 @@ mod tests {
     #[test]
     fn oid_decompose_with_remaining_arcs() {
         let oid = Oid::from_slice(&[1, 3, 6, 1]);
-        assert_eq!(oid.decompose(), (1, 3, [6u32, 1].as_slice()));
+        assert_eq!(oid.decompose(), (1, 3, [6_u32, 1].as_slice()));
     }
 
     #[test]

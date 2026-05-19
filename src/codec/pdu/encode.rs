@@ -90,7 +90,7 @@ fn random_u64_from_hasher() -> u64 {
 #[cfg(target_os = "linux")]
 fn random_u64() -> u64 {
     fn try_getrandom_syscall() -> Option<u64> {
-        let mut random_bytes = [0u8; 8];
+        let mut random_bytes = [0_u8; 8];
         // SAFETY: random_bytes is a valid mutable buffer of known length.
         let bytes_read = unsafe {
             libc::getrandom(
@@ -99,11 +99,7 @@ fn random_u64() -> u64 {
                 libc::GRND_NONBLOCK,
             )
         };
-        if bytes_read == 8 {
-            Some(u64::from_ne_bytes(random_bytes))
-        } else {
-            None
-        }
+        (bytes_read == 8).then(|| u64::from_ne_bytes(random_bytes))
     }
     try_getrandom_syscall().unwrap_or_else(random_u64_from_hasher)
 }
@@ -165,9 +161,9 @@ fn encode_v3_envelope(
     let scoped_pdu_bytes = ber::snmp::encode_scoped_pdu(engine_id, context_name, raw_pdu_bytes);
 
     let flags_byte = match (auth.is_some(), privacy.is_some()) {
-        (true, true) => 0x03u8,
-        (true, false) => 0x01u8,
-        (false, false) => 0x00u8,
+        (true, true) => 0x03_u8,
+        (true, false) => 0x01_u8,
+        (false, false) => 0x00_u8,
         (false, true) => {
             return Err(EncodeError::new(
                 "privacy without authentication is not permitted (RFC 3412)",
@@ -177,7 +173,7 @@ fn encode_v3_envelope(
 
     let auth_params: Vec<u8> = auth
         .as_ref()
-        .map(|(proto, _)| vec![0u8; proto.mac_len()])
+        .map(|(proto, _)| vec![0_u8; proto.mac_len()])
         .unwrap_or_default();
 
     // Encrypt the ScopedPdu when privacy credentials are present, otherwise
@@ -187,7 +183,7 @@ fn encode_v3_envelope(
         if let Some((priv_protocol, priv_key)) = privacy {
             let salt = next_privacy_salt();
             // IV = engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes) per RFC 3826 §2.2.
-            let mut aes_iv = [0u8; 16];
+            let mut aes_iv = [0_u8; 16];
             aes_iv[0..4].copy_from_slice(&engine_boots.to_be_bytes());
             aes_iv[4..8].copy_from_slice(&engine_time.to_be_bytes());
             aes_iv[8..16].copy_from_slice(&salt);
@@ -613,11 +609,11 @@ mod tests {
             request_id: 77,
             varbinds: vec![
                 Varbind {
-                    oid: trap_oid.clone(),
+                    oid: trap_oid,
                     value: VarbindValue::Value(Value::OctetString(b"coldStart".to_vec())),
                 },
                 Varbind {
-                    oid: sysname.clone(),
+                    oid: sysname,
                     value: VarbindValue::Value(Value::OctetString(b"router1".to_vec())),
                 },
             ],
@@ -709,7 +705,7 @@ mod tests {
             error_status: ErrorStatus::NoError,
             error_index: 0,
             varbinds: vec![Varbind {
-                oid: oid.clone(),
+                oid,
                 value: VarbindValue::Value(Value::Integer32(42)),
             }],
         };
@@ -753,8 +749,8 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let engine_id = b"\x80\x00\x1f\x88\x04test";
-        let auth_key = SecretKey::new_from_exposed_slice(&[0x42u8; 32]);
-        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42u8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0x42_u8; 32]);
+        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42_u8; 32]);
         let auth_protocol = AuthProtocol::HmacSha256;
         let pdu = GetResponse {
             request_id: 7,
@@ -815,8 +811,8 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let engine_id = b"\x80\x00\x1f\x88\x04test";
-        let auth_key = SecretKey::new_from_exposed_slice(&[0x42u8; 64]);
-        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42u8; 64]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0x42_u8; 64]);
+        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42_u8; 64]);
         let auth_protocol = AuthProtocol::HmacSha512;
         let pdu = GetResponse {
             request_id: 8,
@@ -866,8 +862,8 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let engine_id = b"\x80\x00\x1f\x88\x04test";
-        let auth_key = SecretKey::new_from_exposed_slice(&[0x42u8; 32]);
-        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42u8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0x42_u8; 32]);
+        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42_u8; 32]);
         let auth_protocol = AuthProtocol::HmacSha256;
         // Varbind value is all-zeros with length 24, identical to the SHA-256 placeholder.
         let pdu = GetResponse {
@@ -876,7 +872,7 @@ mod tests {
             error_index: 0,
             varbinds: vec![Varbind {
                 oid: "1.3.6.1.2.1.1.1.0".parse().unwrap(),
-                value: VarbindValue::Value(Value::OctetString(vec![0u8; 24])),
+                value: VarbindValue::Value(Value::OctetString(vec![0_u8; 24])),
             }],
         };
 
@@ -923,9 +919,9 @@ mod tests {
         use crate::usm::privacy::PrivProtocol;
 
         let engine_id = b"test-engine";
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
-        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
-        let priv_key = SecretKey::new_from_exposed_slice(&[0xBBu8; 16]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
+        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
+        let priv_key = SecretKey::new_from_exposed_slice(&[0xBB_u8; 16]);
         let auth_protocol = AuthProtocol::HmacSha256;
         let expected_varbind_value = b"test value".to_vec();
         let pdu = GetResponse {
@@ -981,9 +977,9 @@ mod tests {
             ScopedPduData::EncryptedPdu(ct) => ct,
             ScopedPduData::CleartextPdu(_) => unreachable!(),
         };
-        let mut aes_iv = [0u8; 16];
-        aes_iv[0..4].copy_from_slice(&100u32.to_be_bytes());
-        aes_iv[4..8].copy_from_slice(&200u32.to_be_bytes());
+        let mut aes_iv = [0_u8; 16];
+        aes_iv[0..4].copy_from_slice(&100_u32.to_be_bytes());
+        aes_iv[4..8].copy_from_slice(&200_u32.to_be_bytes());
         aes_iv[8..16].copy_from_slice(usm_params.privacy_parameters.as_ref());
         let plaintext = PrivProtocol::Aes128
             .decrypt(&priv_key, &aes_iv, ciphertext.as_ref())
@@ -1043,7 +1039,7 @@ mod tests {
         use crate::usm::keys::SecretKey;
         use crate::usm::privacy::PrivProtocol;
 
-        let priv_key = SecretKey::new_from_exposed_slice(&[0xBBu8; 16]);
+        let priv_key = SecretKey::new_from_exposed_slice(&[0xBB_u8; 16]);
         let pdu = GetResponse {
             request_id: 1,
             error_status: ErrorStatus::NoError,
@@ -1121,7 +1117,10 @@ mod tests {
         else {
             panic!("Report varbind value must be a Counter32");
         };
-        assert_eq!(counter.0, 7u32, "Report varbind must carry counter value 7");
+        assert_eq!(
+            counter.0, 7_u32,
+            "Report varbind must carry counter value 7"
+        );
     }
 
     #[test]
@@ -1193,8 +1192,8 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let engine_id = b"\x80\x00\x1f\x88\x04test";
-        let auth_key = SecretKey::new_from_exposed_slice(&[0x55u8; 32]);
-        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x55u8; 32]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0x55_u8; 32]);
+        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x55_u8; 32]);
         let auth_protocol = AuthProtocol::HmacSha256;
         let trap_oid: Oid = "1.3.6.1.6.3.1.1.5.1".parse().unwrap();
         let pdu = WireTrapPdu {
@@ -1255,9 +1254,9 @@ mod tests {
         use crate::usm::privacy::PrivProtocol;
 
         let engine_id = b"test-engine";
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
-        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
-        let priv_key = SecretKey::new_from_exposed_slice(&[0xBBu8; 16]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
+        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
+        let priv_key = SecretKey::new_from_exposed_slice(&[0xBB_u8; 16]);
         let auth_protocol = AuthProtocol::HmacSha256;
         let trap_oid: Oid = "1.3.6.1.6.3.1.1.5.1".parse().unwrap();
         let pdu = WireTrapPdu {
@@ -1309,9 +1308,9 @@ mod tests {
             ScopedPduData::EncryptedPdu(ct) => ct,
             ScopedPduData::CleartextPdu(_) => unreachable!(),
         };
-        let mut aes_iv = [0u8; 16];
-        aes_iv[0..4].copy_from_slice(&5u32.to_be_bytes());
-        aes_iv[4..8].copy_from_slice(&300u32.to_be_bytes());
+        let mut aes_iv = [0_u8; 16];
+        aes_iv[0..4].copy_from_slice(&5_u32.to_be_bytes());
+        aes_iv[4..8].copy_from_slice(&300_u32.to_be_bytes());
         aes_iv[8..16].copy_from_slice(usm_params.privacy_parameters.as_ref());
         let plaintext = PrivProtocol::Aes128
             .decrypt(&priv_key, &aes_iv, ciphertext.as_ref())
@@ -1343,7 +1342,7 @@ mod tests {
         use crate::usm::keys::SecretKey;
         use crate::usm::privacy::PrivProtocol;
 
-        let priv_key = SecretKey::new_from_exposed_slice(&[0xBBu8; 16]);
+        let priv_key = SecretKey::new_from_exposed_slice(&[0xBB_u8; 16]);
         let trap_oid: Oid = "1.3.6.1.6.3.1.1.5.1".parse().unwrap();
         let pdu = WireTrapPdu {
             request_id: 1,
@@ -1384,10 +1383,10 @@ mod tests {
         use crate::usm::privacy::PrivProtocol;
 
         let engine_id = b"test-engine";
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
-        let auth_key_2 = SecretKey::new_from_exposed_slice(&[0xAAu8; 32]);
-        let priv_key = SecretKey::new_from_exposed_slice(&[0xBBu8; 16]);
-        let priv_key_2 = SecretKey::new_from_exposed_slice(&[0xBBu8; 16]);
+        let auth_key = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
+        let auth_key_2 = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
+        let priv_key = SecretKey::new_from_exposed_slice(&[0xBB_u8; 16]);
+        let priv_key_2 = SecretKey::new_from_exposed_slice(&[0xBB_u8; 16]);
         let trap_oid: Oid = "1.3.6.1.6.3.1.1.5.1".parse().unwrap();
         let pdu = WireTrapPdu {
             request_id: 1,

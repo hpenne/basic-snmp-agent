@@ -67,7 +67,7 @@ mod tests {
         // Verifies: REQ-0078
         // OID arcs: 1.3.6.1.6.3.15.1.1.3.0
         let oid: crate::codec::Oid = USM_STATS_UNKNOWN_USER_NAMES.parse().unwrap();
-        assert_eq!(oid.as_slice(), &[1u32, 3, 6, 1, 6, 3, 15, 1, 1, 3, 0]);
+        assert_eq!(oid.as_slice(), &[1_u32, 3, 6, 1, 6, 3, 15, 1, 1, 3, 0]);
     }
 
     #[test]
@@ -75,7 +75,7 @@ mod tests {
         // Verifies: REQ-0079
         // OID arcs: 1.3.6.1.6.3.15.1.1.1.0
         let oid: crate::codec::Oid = USM_STATS_UNSUPPORTED_SEC_LEVELS.parse().unwrap();
-        assert_eq!(oid.as_slice(), &[1u32, 3, 6, 1, 6, 3, 15, 1, 1, 1, 0]);
+        assert_eq!(oid.as_slice(), &[1_u32, 3, 6, 1, 6, 3, 15, 1, 1, 1, 0]);
     }
 
     #[test]
@@ -83,7 +83,7 @@ mod tests {
         // Verifies: REQ-0100
         // OID arcs: 1.3.6.1.6.3.15.1.1.5.0
         let oid: crate::codec::Oid = USM_STATS_WRONG_DIGESTS.parse().unwrap();
-        assert_eq!(oid.as_slice(), &[1u32, 3, 6, 1, 6, 3, 15, 1, 1, 5, 0]);
+        assert_eq!(oid.as_slice(), &[1_u32, 3, 6, 1, 6, 3, 15, 1, 1, 5, 0]);
     }
 
     #[test]
@@ -91,6 +91,6 @@ mod tests {
         // Verifies: REQ-0101
         // OID arcs: 1.3.6.1.6.3.15.1.1.6.0
         let oid: crate::codec::Oid = USM_STATS_DECRYPTION_ERRORS.parse().unwrap();
-        assert_eq!(oid.as_slice(), &[1u32, 3, 6, 1, 6, 3, 15, 1, 1, 6, 0]);
+        assert_eq!(oid.as_slice(), &[1_u32, 3, 6, 1, 6, 3, 15, 1, 1, 6, 0]);
     }
 }

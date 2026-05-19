@@ -590,7 +590,7 @@ pub fn encode_get_request_with_context_engine_id(
         version: 3.into(),
         global_data: HeaderData {
             message_id: msg_id.into(),
-            max_size: 65535.into(),
+            max_size: 0xFFFF.into(),
             flags: rasn::types::OctetString::from(vec![0x04]),
             security_model: 3.into(),
         },
@@ -603,6 +603,7 @@ pub fn encode_get_request_with_context_engine_id(
 /// Encode an engine-ID discovery probe: a `GetRequest` with empty
 /// `msgAuthoritativeEngineID` in the USM security parameters and the
 /// `reportableFlag` (bit 2, `0x04`) set in `msgFlags`.
+///
 /// The `contextEngineID` in the `ScopedPDU` is left empty.
 ///
 /// # Panics
@@ -673,7 +674,7 @@ fn encode_discovery_probe_with_flags(flags: Vec<u8>) -> Vec<u8> {
         version: 3.into(),
         global_data: HeaderData {
             message_id: 42.into(),
-            max_size: 65535.into(),
+            max_size: 0xFFFF.into(),
             flags: rasn::types::OctetString::from(flags),
             security_model: 3.into(),
         },
@@ -765,7 +766,7 @@ fn encode_v3_message_with_usm_params(
         version: 3.into(),
         global_data: HeaderData {
             message_id: msg_id.into(),
-            max_size: 65535.into(),
+            max_size: 0xFFFF.into(),
             flags: rasn::types::OctetString::from(vec![msg_flags_byte]),
             security_model: 3.into(),
         },

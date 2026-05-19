@@ -29,7 +29,12 @@ rasn-snmp = "0.22"
 snmpv3-frames = { path = "tests/snmpv3-frames" }
 
 [workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+
+# Suppress these from "nursery":
+missing_const_for_fn = "allow"
 
 # Don't Panic
 string_slice = "warn"
@@ -72,3 +77,17 @@ dbg_macro = "warn"
 # Don't `allow` Your Way Around These Lints
 allow_attributes = "warn"
 allow_attributes_without_reason = "warn"
+
+# Various restriction warnings
+decimal_literal_representation = "warn"
+default_union_representation = "warn"
+empty_structs_with_brackets = "warn"
+filetype_is_file = "warn"
+if_then_some_else_none = "warn"
+mixed_read_write_in_expression = "warn"
+mod_module_files = "warn"
+multiple_inherent_impl = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+str_to_string = "warn"
+try_err = "warn"
+unseparated_literal_suffix = "warn"

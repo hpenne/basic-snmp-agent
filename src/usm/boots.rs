@@ -8,7 +8,7 @@
 ///
 /// # Requirements
 /// Implements: REQ-0097
-pub const MAX_ENGINE_BOOTS: u32 = 2_147_483_647;
+pub const MAX_ENGINE_BOOTS: u32 = 0x7FFF_FFFF;
 
 // RFC 3411 §3.3 caps snmpEngineID at 32 bytes; used in FileEngineBootsStore::load
 // to reject absurd lengths from corrupted files before any arithmetic on the value.
@@ -18,7 +18,7 @@ const MAX_ENGINE_ID_LEN: usize = 32;
 ///
 /// # Requirements
 /// Implements: REQ-0095
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct StoredBootsState {
     pub engine_id: Vec<u8>,
     pub boots: u32,
@@ -576,7 +576,7 @@ mod tests {
             u32::try_from(MAX_ENGINE_ID_LEN).expect("MAX_ENGINE_ID_LEN fits in u32") + 1;
         let mut data = oversized_len.to_be_bytes().to_vec();
         // Pad with enough bytes so the file has the oversized_len + 4 structure.
-        data.extend(vec![0u8; usize::try_from(oversized_len).unwrap() + 4]);
+        data.extend(vec![0_u8; usize::try_from(oversized_len).unwrap() + 4]);
         std::fs::write(&tmp_path, &data).unwrap();
 
         let mut store = FileEngineBootsStore::new(&tmp_path);
@@ -596,7 +596,7 @@ mod tests {
         let engine_id_len: u32 = 4;
         let mut data = engine_id_len.to_be_bytes().to_vec();
         // Add only 3 bytes of engine_id (should be 4) + 4 bytes boots = 7, but expected 8.
-        data.extend(vec![0u8; 3]);
+        data.extend(vec![0_u8; 3]);
         std::fs::write(&tmp_path, &data).unwrap();
 
         let mut store = FileEngineBootsStore::new(&tmp_path);
@@ -614,7 +614,7 @@ mod tests {
         // "> with >=" would incorrectly reject this boundary value.
         let tmp_dir = std::env::temp_dir();
         let tmp_path = tmp_dir.join(format!("boots_test_maxlen_{}.bin", std::process::id()));
-        let engine_id = vec![0xAAu8; MAX_ENGINE_ID_LEN];
+        let engine_id = vec![0xAA_u8; MAX_ENGINE_ID_LEN];
         let boots_value: u32 = 1;
         let mut store = FileEngineBootsStore::new(&tmp_path);
         store
