@@ -3,8 +3,9 @@
 [govctl]
 id = "WI-2026-05-16-001"
 title = "Seed snmpv3_request fuzzer from snmpv3_request_structured corpus"
-status = "queue"
+status = "active"
 created = "2026-05-16"
+started = "2026-05-20"
 
 [content]
 description = """
