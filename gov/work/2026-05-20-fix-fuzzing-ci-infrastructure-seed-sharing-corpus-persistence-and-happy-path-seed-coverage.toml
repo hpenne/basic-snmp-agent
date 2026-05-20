@@ -10,10 +10,12 @@ created = "2026-05-20"
 description = """
 The fuzzing CI infrastructure has several gaps that reduce the effectiveness of both the nightly ClusterFuzzLite batch fuzzing and the CI smoke test.
 
-**Gap 1: Nightly fuzzer ignores generated seeds.**
+**Gap 1: Nightly fuzzer never receives generated seeds.**
 `.clusterfuzzlite/build.sh` copies fuzz target binaries and dictionaries to `$OUT` but never runs `make fuzz-gen-seeds` and never copies seed corpus directories.
 ClusterFuzzLite expects seed corpus at `$OUT/<target>_seed_corpus/`.
-As a result, the nightly 30-minute batch fuzz starts cold every time — without the hand-written BER seeds that let it skip past rediscovering valid framing.
+The nightly fuzzer accumulates its own corpus across runs (and should continue to do so), but the seeds produced by `generate_seeds.rs` are never added to that corpus.
+As a result, the hand-crafted BER seeds that let it skip past rediscovering valid framing are never used as starting points.
+These seeds should be added on every run.
 
 **Gap 2: CI smoke test does not use accumulated corpus.**
 The `fuzz` job in `.github/workflows/ci.yml` does a fresh checkout, generates seeds, and runs `make fuzz-1m`.
