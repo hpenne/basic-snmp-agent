@@ -321,7 +321,7 @@ fn write_auth_seeds(auth_corpus: &Path) {
 // structured fuzzer has accumulated from prior runs.
 //
 // `decode_and_encode` takes the raw corpus bytes and returns BER-encoded output,
-// or `None` if the entry cannot be decoded or encoded.
+// or an `Err` describing the failure if the entry cannot be decoded or encoded.
 //
 // `label` identifies the target fuzzer in log output (e.g. "snmpv3_request").
 //
@@ -433,7 +433,7 @@ fn cross_pollinate<F>(
         converted += 1;
     }
 
-    println!("cross-pollination ({label}): converted {converted} of {total}");
+    println!("cross-pollination ({label}): converted {converted} of {total} structured entries");
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
