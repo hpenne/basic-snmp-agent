@@ -42,7 +42,12 @@ mod arbitrary_snmpv3;
 // fuzz_targets/snmpv3_request_auth.rs.
 const ENGINE_ID: &[u8] = b"\x80\x00\x1f\x88\x80test";
 
-const CORPUS_DIR: &str = "fuzz/corpus/snmpv3_request";
+const SNMPV3_REQUEST_CORPUS_DIR: &str = "fuzz/corpus/snmpv3_request";
+const CROSS_POLLINATED_PREFIX: &str = "structured_";
+const TCP_FRAMING_CORPUS_DIR: &str = "fuzz/corpus/tcp_framing";
+const AUTH_CORPUS_DIR: &str = "fuzz/corpus/snmpv3_request_auth";
+const STRUCTURED_CORPUS_DIR: &str = "fuzz/corpus/snmpv3_request_structured";
+const AUTH_STRUCTURED_CORPUS_DIR: &str = "fuzz/corpus/snmpv3_request_auth_structured";
 
 // sysDescr.0 — a real, universally known OID, giving the fuzzer a
 // concrete starting point in the MIB tree.
@@ -113,13 +118,12 @@ fn write_structured_seeds(corpus_dir: &Path) {
         let path = corpus_dir.join(name);
         fs::write(&path, bytes)
             .unwrap_or_else(|e| panic!("failed to write structured seed '{name}': {e}"));
-        println!(
-            "wrote {} ({} bytes) → {}",
-            name,
-            bytes.len(),
-            path.display()
-        );
     }
+    println!(
+        "wrote {} structured fuzzer seeds → {}",
+        seeds.len(),
+        corpus_dir.display()
+    );
 }
 
 fn write_snmpv3_request_seeds(corpus: &Path) {
@@ -154,13 +158,12 @@ fn write_snmpv3_request_seeds(corpus: &Path) {
 
         let path = corpus.join(name);
         fs::write(&path, encoded).unwrap_or_else(|e| panic!("failed to write seed '{name}': {e}"));
-        println!(
-            "wrote {} ({} bytes) → {}",
-            name,
-            encoded.len(),
-            path.display()
-        );
     }
+    println!(
+        "wrote {} snmpv3_request seeds → {}",
+        seeds.len(),
+        corpus.display()
+    );
 }
 
 fn write_tcp_framing_seeds(tcp_corpus: &Path) {
@@ -179,13 +182,12 @@ fn write_tcp_framing_seeds(tcp_corpus: &Path) {
         let path = tcp_corpus.join(name);
         fs::write(&path, bytes)
             .unwrap_or_else(|e| panic!("failed to write TCP seed '{name}': {e}"));
-        println!(
-            "wrote {} ({} bytes) → {}",
-            name,
-            bytes.len(),
-            path.display()
-        );
     }
+    println!(
+        "wrote {} tcp_framing seeds → {}",
+        tcp_seeds.len(),
+        tcp_corpus.display()
+    );
 }
 
 // Build the valid-HMAC seed: encode with zeroed auth_params, compute the
@@ -302,13 +304,12 @@ fn write_auth_seeds(auth_corpus: &Path) {
         let path = auth_corpus.join(name);
         fs::write(&path, encoded)
             .unwrap_or_else(|e| panic!("failed to write auth seed '{name}': {e}"));
-        println!(
-            "wrote {} ({} bytes) → {}",
-            name,
-            encoded.len(),
-            path.display()
-        );
     }
+    println!(
+        "wrote {} snmpv3_request_auth seeds → {}",
+        auth_seeds.len(),
+        auth_corpus.display()
+    );
 }
 
 // Converts whatever is present in the structured corpus directory into
@@ -326,13 +327,43 @@ fn convert_structured_corpus_to_unstructured_seeds(
     let entries = match fs::read_dir(structured_corpus_dir) {
         Ok(entries) => entries,
         Err(e) => {
-            println!(
+            eprintln!(
                 "cross-pollination: skipping — cannot read {}: {e}",
                 structured_corpus_dir.display()
             );
             return;
         }
     };
+
+    // Remove stale cross-pollinated seeds from prior runs so orphaned files do
+    // not accumulate when structured corpus entries are renamed or removed.
+    let existing_entries = fs::read_dir(unstructured_corpus_dir).unwrap_or_else(|e| {
+        panic!(
+            "failed to read {} for stale seed cleanup: {e}",
+            unstructured_corpus_dir.display()
+        )
+    });
+    for existing_entry in existing_entries {
+        let existing_entry = match existing_entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                eprintln!("cross-pollination: skipping cleanup entry: {e}");
+                continue;
+            }
+        };
+        if existing_entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(CROSS_POLLINATED_PREFIX)
+        {
+            if let Err(e) = fs::remove_file(existing_entry.path()) {
+                eprintln!(
+                    "cross-pollination: failed to remove stale seed {}: {e}",
+                    existing_entry.file_name().to_string_lossy()
+                );
+            }
+        }
+    }
 
     let mut converted = 0usize;
     let mut total = 0usize;
@@ -341,7 +372,7 @@ fn convert_structured_corpus_to_unstructured_seeds(
         let dir_entry = match dir_entry {
             Ok(entry) => entry,
             Err(e) => {
-                println!("cross-pollination: skipping directory entry: {e}");
+                eprintln!("cross-pollination: skipping directory entry: {e}");
                 continue;
             }
         };
@@ -360,7 +391,7 @@ fn convert_structured_corpus_to_unstructured_seeds(
         let entry_bytes = match fs::read(dir_entry.path()) {
             Ok(bytes) => bytes,
             Err(e) => {
-                println!(
+                eprintln!(
                     "cross-pollination: skipping {}: failed to read: {e}",
                     dir_entry.file_name().to_string_lossy()
                 );
@@ -372,7 +403,7 @@ fn convert_structured_corpus_to_unstructured_seeds(
             match Unstructured::new(&entry_bytes).arbitrary::<arbitrary_snmpv3::FuzzSnmpv3>() {
                 Ok(value) => value,
                 Err(e) => {
-                    println!(
+                    eprintln!(
                         "cross-pollination: skipping {}: failed to deserialise: {e}",
                         dir_entry.file_name().to_string_lossy()
                     );
@@ -383,7 +414,7 @@ fn convert_structured_corpus_to_unstructured_seeds(
         let ber_encoded = match fuzz_snmpv3.encode() {
             Some(bytes) => bytes,
             None => {
-                println!(
+                eprintln!(
                     "cross-pollination: skipping {}: failed to encode",
                     dir_entry.file_name().to_string_lossy()
                 );
@@ -392,19 +423,13 @@ fn convert_structured_corpus_to_unstructured_seeds(
         };
 
         let original_filename = dir_entry.file_name();
-        let output_filename = format!("structured_{}", original_filename.to_string_lossy());
+        let output_filename =
+            format!("{CROSS_POLLINATED_PREFIX}{}", original_filename.to_string_lossy());
         let output_path = unstructured_corpus_dir.join(&output_filename);
-        let ber_byte_count = ber_encoded.len();
 
         fs::write(&output_path, ber_encoded).unwrap_or_else(|e| {
             panic!("failed to write cross-pollinated seed '{output_filename}': {e}")
         });
-        println!(
-            "wrote {} ({} bytes) → {}",
-            output_filename,
-            ber_byte_count,
-            output_path.display()
-        );
 
         converted += 1;
     }
@@ -417,28 +442,28 @@ fn convert_structured_corpus_to_unstructured_seeds(
 // ── main ─────────────────────────────────────────────────────────────────────
 
 fn main() {
-    let corpus = Path::new(CORPUS_DIR);
-    fs::create_dir_all(corpus).expect("failed to create corpus directory");
-    write_snmpv3_request_seeds(corpus);
+    let snmpv3_request_corpus = Path::new(SNMPV3_REQUEST_CORPUS_DIR);
+    fs::create_dir_all(snmpv3_request_corpus).expect("failed to create corpus directory");
+    write_snmpv3_request_seeds(snmpv3_request_corpus);
 
-    let tcp_corpus = Path::new("fuzz/corpus/tcp_framing");
-    fs::create_dir_all(tcp_corpus).expect("failed to create TCP framing corpus directory");
-    write_tcp_framing_seeds(tcp_corpus);
+    let tcp_framing_corpus = Path::new(TCP_FRAMING_CORPUS_DIR);
+    fs::create_dir_all(tcp_framing_corpus).expect("failed to create TCP framing corpus directory");
+    write_tcp_framing_seeds(tcp_framing_corpus);
 
-    let auth_corpus = Path::new("fuzz/corpus/snmpv3_request_auth");
+    let auth_corpus = Path::new(AUTH_CORPUS_DIR);
     fs::create_dir_all(auth_corpus).expect("failed to create auth corpus directory");
     write_auth_seeds(auth_corpus);
 
-    let structured_corpus = Path::new("fuzz/corpus/snmpv3_request_structured");
+    let structured_corpus = Path::new(STRUCTURED_CORPUS_DIR);
     fs::create_dir_all(structured_corpus).expect("failed to create structured corpus directory");
     write_structured_seeds(structured_corpus);
 
-    let auth_structured_corpus = Path::new("fuzz/corpus/snmpv3_request_auth_structured");
+    let auth_structured_corpus = Path::new(AUTH_STRUCTURED_CORPUS_DIR);
     fs::create_dir_all(auth_structured_corpus)
         .expect("failed to create auth structured corpus directory");
     write_structured_seeds(auth_structured_corpus);
 
-    convert_structured_corpus_to_unstructured_seeds(structured_corpus, corpus);
+    convert_structured_corpus_to_unstructured_seeds(structured_corpus, snmpv3_request_corpus);
 }
 
 fn empty_mib() -> basic_snmp_agent::mib::Store {
