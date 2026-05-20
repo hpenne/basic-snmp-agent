@@ -1,0 +1,62 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-05-20-001"
+title = "Fix fuzzing CI infrastructure: seed sharing, corpus persistence, and happy-path seed coverage"
+status = "queue"
+created = "2026-05-20"
+
+[content]
+description = """
+The fuzzing CI infrastructure has several gaps that reduce the effectiveness of both the nightly ClusterFuzzLite batch fuzzing and the CI smoke test.
+
+**Gap 1: Nightly fuzzer ignores generated seeds.**
+`.clusterfuzzlite/build.sh` copies fuzz target binaries and dictionaries to `$OUT` but never runs `make fuzz-gen-seeds` and never copies seed corpus directories.
+ClusterFuzzLite expects seed corpus at `$OUT/<target>_seed_corpus/`.
+As a result, the nightly 30-minute batch fuzz starts cold every time — without the hand-written BER seeds that let it skip past rediscovering valid framing.
+
+**Gap 2: CI smoke test does not use accumulated corpus.**
+The `fuzz` job in `.github/workflows/ci.yml` does a fresh checkout, generates seeds, and runs `make fuzz-1m`.
+It has no step to restore the corpus accumulated by nightly batch fuzzing.
+The cross-pollination step only sees the 3 synthetic bootstrap seeds instead of the hundreds of entries the nightly fuzzer has found.
+
+**Gap 3: ClusterFuzzLite has no accessible corpus storage.**
+No `storage-repo` is configured in `cflite_daily.yml` or `cflite_prune.yml`, so corpus is stored as GitHub artifacts internal to ClusterFuzzLite.
+This makes the accumulated corpus inaccessible to other workflows.
+Configuring `storage-repo` (e.g. a `corpus` branch in the same repo) would make the corpus available to the CI smoke test.
+
+**Gap 4: Insufficient seed coverage.**
+The current hand-written seeds cover only four bare-bones requests (one per PDU type) with an empty context name and a single OID (sysDescr.0).
+There are no seeds that exercise the agent's actual MIB configuration — the happy paths that a real SNMP manager would exercise.
+Seeds should cover GET/GETNEXT/GETBULK for every OID the agent's MIB exposes, SET requests for writable objects, and requests with the context name the agent expects.
+These richer seeds would let both the nightly fuzzer and the CI smoke test start from realistic traffic patterns rather than minimal scaffolding."""
+
+[[content.acceptance_criteria]]
+text = "build.sh runs make fuzz-gen-seeds and copies seed corpus to $OUT/<target>_seed_corpus/ for each fuzz target"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "ClusterFuzzLite workflows configure storage-repo so accumulated corpus is accessible to other workflows"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "CI smoke test restores accumulated corpus before running seed generation and fuzzing"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "Seed corpus covers GET, GETNEXT, and GETBULK for every OID the agent's MIB exposes"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "Seed corpus covers SET requests for writable MIB objects"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "Cross-pollination summary in CI shows corpus entry counts matching the accumulated nightly corpus, not just the 3 synthetic bootstrap seeds"
+status = "pending"
+category = "added"

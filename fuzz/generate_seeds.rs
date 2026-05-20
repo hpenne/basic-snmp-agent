@@ -21,9 +21,11 @@
 ///   `fuzz/corpus/snmpv3_request_auth_structured`): raw byte buffers that the `Arbitrary`
 ///   derive deserialises into `FuzzSnmpv3` and `FuzzSnmpv3Auth` structs respectively.
 ///
-/// - **Cross-pollinated seeds** (`fuzz/corpus/snmpv3_request`): structured corpus entries
-///   from `snmpv3_request_structured` are decoded via `Arbitrary` and re-encoded as BER,
-///   then written as additional seeds for the unstructured `snmpv3_request` fuzzer.
+/// - **Cross-pollinated seeds** (`fuzz/corpus/snmpv3_request` and
+///   `fuzz/corpus/snmpv3_request_auth`): structured corpus entries from
+///   `snmpv3_request_structured` and `snmpv3_request_auth_structured` are decoded via
+///   `Arbitrary` and re-encoded as BER, then written as additional seeds for the
+///   corresponding unstructured fuzzers.
 ///
 /// All `SNMPv3` seeds use the engine ID that matches the fuzz targets' fixed value so they
 /// exercise the full dispatch path rather than the early-discard path.
@@ -312,23 +314,32 @@ fn write_auth_seeds(auth_corpus: &Path) {
     );
 }
 
-// Converts whatever is present in the structured corpus directory into
-// BER-encoded seeds for the unstructured snmpv3_request fuzzer. On a fresh run
+// Converts whatever is present in a structured corpus directory into
+// BER-encoded seeds for the corresponding unstructured fuzzer. On a fresh run
 // this is just the three synthetic bootstrap seeds written by
 // `write_structured_seeds`; on subsequent runs it also includes any entries the
 // structured fuzzer has accumulated from prior runs.
 //
+// `decode_and_encode` takes the raw corpus bytes and returns BER-encoded output,
+// or `None` if the entry cannot be decoded or encoded.
+//
+// `label` identifies the target fuzzer in log output (e.g. "snmpv3_request").
+//
 // Precondition: `unstructured_corpus_dir` must already exist. `main` creates it
 // before calling this function.
-fn convert_structured_corpus_to_unstructured_seeds(
+fn cross_pollinate<F>(
     structured_corpus_dir: &Path,
     unstructured_corpus_dir: &Path,
-) {
+    label: &str,
+    decode_and_encode: F,
+) where
+    F: Fn(&[u8]) -> Result<Vec<u8>, &'static str>,
+{
     let entries = match fs::read_dir(structured_corpus_dir) {
         Ok(entries) => entries,
         Err(e) => {
             eprintln!(
-                "cross-pollination: skipping — cannot read {}: {e}",
+                "cross-pollination ({label}): skipping — cannot read {}: {e}",
                 structured_corpus_dir.display()
             );
             return;
@@ -347,7 +358,7 @@ fn convert_structured_corpus_to_unstructured_seeds(
         let existing_entry = match existing_entry {
             Ok(entry) => entry,
             Err(e) => {
-                eprintln!("cross-pollination: skipping cleanup entry: {e}");
+                eprintln!("cross-pollination ({label}): skipping cleanup entry: {e}");
                 continue;
             }
         };
@@ -358,7 +369,7 @@ fn convert_structured_corpus_to_unstructured_seeds(
         {
             if let Err(e) = fs::remove_file(existing_entry.path()) {
                 eprintln!(
-                    "cross-pollination: failed to remove stale seed {}: {e}",
+                    "cross-pollination ({label}): failed to remove stale seed {}: {e}",
                     existing_entry.file_name().to_string_lossy()
                 );
             }
@@ -372,7 +383,7 @@ fn convert_structured_corpus_to_unstructured_seeds(
         let dir_entry = match dir_entry {
             Ok(entry) => entry,
             Err(e) => {
-                eprintln!("cross-pollination: skipping directory entry: {e}");
+                eprintln!("cross-pollination ({label}): skipping directory entry: {e}");
                 continue;
             }
         };
@@ -392,30 +403,18 @@ fn convert_structured_corpus_to_unstructured_seeds(
             Ok(bytes) => bytes,
             Err(e) => {
                 eprintln!(
-                    "cross-pollination: skipping {}: failed to read: {e}",
+                    "cross-pollination ({label}): skipping {}: failed to read: {e}",
                     dir_entry.file_name().to_string_lossy()
                 );
                 continue;
             }
         };
 
-        let fuzz_snmpv3 =
-            match Unstructured::new(&entry_bytes).arbitrary::<arbitrary_snmpv3::FuzzSnmpv3>() {
-                Ok(value) => value,
-                Err(e) => {
-                    eprintln!(
-                        "cross-pollination: skipping {}: failed to deserialise: {e}",
-                        dir_entry.file_name().to_string_lossy()
-                    );
-                    continue;
-                }
-            };
-
-        let ber_encoded = match fuzz_snmpv3.encode() {
-            Some(bytes) => bytes,
-            None => {
+        let ber_encoded = match decode_and_encode(&entry_bytes) {
+            Ok(encoded) => encoded,
+            Err(reason) => {
                 eprintln!(
-                    "cross-pollination: skipping {}: failed to encode",
+                    "cross-pollination ({label}): skipping {}: {reason}",
                     dir_entry.file_name().to_string_lossy()
                 );
                 continue;
@@ -434,9 +433,7 @@ fn convert_structured_corpus_to_unstructured_seeds(
         converted += 1;
     }
 
-    println!(
-        "cross-pollination: converted {converted} of {total} structured corpus entries to snmpv3_request seeds"
-    );
+    println!("cross-pollination ({label}): converted {converted} of {total}");
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
@@ -463,7 +460,29 @@ fn main() {
         .expect("failed to create auth structured corpus directory");
     write_structured_seeds(auth_structured_corpus);
 
-    convert_structured_corpus_to_unstructured_seeds(structured_corpus, snmpv3_request_corpus);
+    cross_pollinate(
+        structured_corpus,
+        snmpv3_request_corpus,
+        "snmpv3_request",
+        |entry_bytes| {
+            let value = Unstructured::new(entry_bytes)
+                .arbitrary::<arbitrary_snmpv3::FuzzSnmpv3>()
+                .map_err(|_| "failed to deserialise")?;
+            value.encode().ok_or("failed to encode")
+        },
+    );
+
+    cross_pollinate(
+        auth_structured_corpus,
+        auth_corpus,
+        "snmpv3_request_auth",
+        |entry_bytes| {
+            let value = Unstructured::new(entry_bytes)
+                .arbitrary::<arbitrary_snmpv3::FuzzSnmpv3Auth>()
+                .map_err(|_| "failed to deserialise")?;
+            value.encode().ok_or("failed to encode")
+        },
+    );
 }
 
 fn empty_mib() -> basic_snmp_agent::mib::Store {
