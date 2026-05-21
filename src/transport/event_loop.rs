@@ -926,7 +926,6 @@ pub fn parse_ber_length(buf: &[u8]) -> Result<Option<(usize, usize)>, BerLengthE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use std::net::SocketAddr;
     use std::thread;
     use std::time::Duration;
@@ -2030,6 +2029,81 @@ mod tests {
         assert_eq!(
             second.request_id, 51,
             "connection must remain open for an active client"
+        );
+
+        sender.send(Command::Shutdown).unwrap();
+        loop_handle
+            .join()
+            .expect("event loop thread panicked")
+            .unwrap();
+    }
+
+    #[test]
+    fn given_single_connection_at_pressure_boundary_when_timeout_elapses_then_connection_is_swept()
+    {
+        // Verifies: REQ-0124
+        // With 1 connection open, headroom=2, max=3: `1 + 2 = 3 >= 3` -> pressure mode,
+        // so the short pressure_timeout applies and the connection is swept.
+        //
+        // The `+` -> `*` mutant gives `1 * 2 = 2 >= 3` -> false -> pressure is disabled
+        // -> the long normal_timeout (60 s) applies -> connection is NOT swept -> test fails.
+        //
+        // The `>=` -> `<` mutant gives `3 < 3` -> false -> same outcome -> test fails.
+        //
+        // Strategy: wake the event loop with a non-shutdown QueryValue command so that
+        // drain_commands returns false and sweep_idle_connections runs in that poll cycle.
+        // We wait for the QueryValue reply (which is sent before the sweep), then read
+        // from the client socket; we expect EOF from the sweep.
+        let config = ConnectionTimeoutConfig {
+            pressure_timeout: Duration::from_millis(1),
+            normal_timeout: Duration::from_secs(60),
+            pressure_headroom: 2,
+        };
+        let (event_loop, bound_addr, sender) = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            3, // max_connections: 1 connection + headroom(2) = 3 >= 3 -> pressure
+            config,
+        )
+        .unwrap();
+        let loop_handle = thread::spawn(move || event_loop.run());
+
+        // Connect one client so that connections.len() + pressure_headroom == max_connections.
+        let mut client = std::net::TcpStream::connect(bound_addr).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+
+        // Let the pressure_timeout elapse.
+        thread::sleep(Duration::from_millis(50));
+
+        // Wake the event loop with QueryValue (does not trigger shutdown), causing
+        // drain_commands to return false and sweep_idle_connections to run next.
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        let probe_oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        sender
+            .send(Command::QueryValue {
+                oid: probe_oid,
+                reply: reply_tx,
+            })
+            .unwrap();
+        // Receiving the reply confirms drain_commands ran; sweep runs immediately after.
+        reply_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("QueryValue reply must arrive within 2 seconds");
+
+        // The client must see EOF because the pressure sweep closed the connection.
+        // The 500 ms read timeout ensures the test fails within the cargo-mutants
+        // timeout when sweep_idle_connections is replaced with ().
+        let mut read_buf = [0_u8; 1];
+        let bytes_read = client
+            .read(&mut read_buf)
+            .expect("pressure sweep must close the connection, not return an error");
+        assert_eq!(
+            bytes_read, 0,
+            "pressure-mode sweep must close the connection"
         );
 
         sender.send(Command::Shutdown).unwrap();

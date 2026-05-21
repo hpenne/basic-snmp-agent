@@ -665,4 +665,18 @@ mod tests {
             "bare filename must resolve parent to '.'"
         );
     }
+
+    #[test]
+    fn given_file_store_with_bare_filename_when_save_then_succeeds() {
+        // Verifies: REQ-0096
+        // The parent-path filter uses `!p.as_os_str().is_empty()` to fall back to
+        // "." for bare filenames. Deleting the `!` would open "" as the parent
+        // directory (ENOENT on Linux), causing save() to return an I/O error.
+        let filename = format!("boots_bare_save_test_{}.bin", std::process::id());
+        let mut store = FileEngineBootsStore::new(filename.as_str());
+        store
+            .save(b"bare-engine", 3)
+            .expect("save with a bare filename must succeed");
+        std::fs::remove_file(&filename).expect("test cleanup");
+    }
 }

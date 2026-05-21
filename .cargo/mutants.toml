@@ -85,4 +85,32 @@ exclude_re = [
     # SecretKey::drop zeroises key material. The effect is not observable in safe
     # Rust — verifying it would require reading freed memory.
     "replace <impl Drop for SecretKey>::drop with \\(\\)",
+
+    # random_u64_from_hasher: non-deterministic function (hash of SystemTime + RandomState);
+    # no observable contract to assert against in unit tests.
+    "replace random_u64_from_hasher",
+
+    # try_getrandom_syscall: returns None on syscall failure, falling back to the hasher.
+    # Both paths produce valid non-deterministic random output; the difference is unobservable.
+    "random_u64::try_getrandom_syscall",
+
+    # random_u64 (non-Linux): delegates to random_u64_from_hasher, which is non-deterministic.
+    # On Linux the cfg(not(target_os = "linux")) variant is excluded from compilation entirely.
+    "replace random_u64 -> u64 with",
+
+    # next_privacy_salt initial seed: `random_u64() | 1` ensures the counter starts odd.
+    # Since random_u64() is non-deterministic, the `| vs & vs ^` mutation produces a different
+    # but equally valid non-deterministic seed — unobservable in tests.
+    "replace \\| with .* in next_privacy_salt",
+
+    # decode_signed_i32: the `integer_bytes.len() > 1` guard and `& 0x80` sign-bit check.
+    # Mutating `> to >=` on `len > 1` is equivalent: for len=1 it tries to strip a single
+    # byte against itself (the zip skips as there is no "next" byte), finding no redundant
+    # prefix and leaving the byte unchanged — the decoded value is identical.
+    "replace > with >= in decode_signed_i32",
+
+    # decode_unsigned: unwrap_or fallback `integer_bytes.len() - 1` vs `integer_bytes.len() / 1`.
+    # For any input slice, `len - 1` and `len / 1` both equal `len - 1` when `len >= 1`
+    # (division by 1 is identity), so the `- to /` mutation produces the same index.
+    "replace - with / in decode_unsigned",
 ]

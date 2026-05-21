@@ -640,4 +640,37 @@ mod tests {
             "error message must include the raw flags byte"
         );
     }
+
+    #[test]
+    fn given_username_when_displayed_then_shows_the_name_string() {
+        // Verifies: REQ-0091
+        // Exercises UserName::fmt — a mutant replacing fmt with () would produce
+        // an empty string, causing this assertion to fail.
+        let name = user_name("admin");
+        assert_eq!(name.to_string(), "admin");
+    }
+
+    #[test]
+    fn given_username_when_asref_str_then_returns_name_as_str_slice() {
+        // Verifies: REQ-0091
+        // Calls the AsRef<str> impl explicitly so a mutant on that impl is caught.
+        let name = user_name("admin");
+        assert_eq!(<UserName as AsRef<str>>::as_ref(&name), "admin");
+    }
+
+    #[test]
+    fn given_username_when_asref_bytes_then_returns_name_as_byte_slice() {
+        // Verifies: REQ-0091
+        // Calls the AsRef<[u8]> impl explicitly so a mutant on that impl is caught.
+        let name = user_name("admin");
+        assert_eq!(<UserName as AsRef<[u8]>>::as_ref(&name), b"admin");
+    }
+
+    #[test]
+    fn given_usm_user_when_displayed_then_shows_user_name() {
+        // Verifies: REQ-0091
+        // Exercises UsmUser::fmt, which delegates to the user name's Display impl.
+        let user = UsmUser::no_auth_no_priv(user_name("test"));
+        assert_eq!(user.to_string(), "test");
+    }
 }

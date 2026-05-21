@@ -1188,6 +1188,7 @@ mod tests {
 
     #[test]
     fn given_v2c_message_when_encoded_and_decoded_then_fields_match() {
+        // Verifies: REQ-0044
         let community = b"test-community";
         let raw_pdu = [0xA7, 0x00]; // empty Trap PDU
         let encoded = encode_v2c_message(community, &raw_pdu);
@@ -1203,6 +1204,7 @@ mod tests {
 
     #[test]
     fn given_v2c_message_with_trap_pdu_when_encoded_and_decoded_then_pdu_preserved() {
+        // Verifies: REQ-0044
         use super::super::TAG_TRAP;
         use super::super::pdu::encode_pdu;
 
@@ -1217,5 +1219,34 @@ mod tests {
         assert_eq!(version, 1);
         assert_eq!(community, b"");
         assert_eq!(decoded_pdu, trap_pdu.as_slice());
+    }
+
+    // ── msgID boundary value (0) must be accepted ────────────────────────────
+
+    #[test]
+    fn given_v3_message_with_msg_id_zero_when_decoded_then_succeeds() {
+        // Verifies: REQ-0118
+        // RFC 3412 §6.4: msgID is in [0, 2^31-1]. The boundary value 0 must be
+        // accepted. The mutant `<` -> `<=` in `if msg_id < 0` would reject it.
+        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
+        let (encoded, _) = encode_v3_message(
+            0, // msg_id = 0: lower boundary of the valid range
+            MSG_MAX_SIZE_UDP,
+            0x04,
+            3,
+            &[],
+            0,
+            0,
+            &[],
+            &[],
+            &[],
+            &scoped_pdu,
+            false,
+        )
+        .expect("encoding msg_id 0 must succeed");
+
+        let envelope = decode_v3_envelope(&encoded)
+            .expect("msg_id 0 is valid per RFC 3412 §6.4 and must decode without error");
+        assert_eq!(envelope.msg_id, 0);
     }
 }

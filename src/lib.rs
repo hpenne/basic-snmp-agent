@@ -66,6 +66,8 @@ struct AgentInner {
     command_sender: crate::transport::event_loop::CommandSender,
     trap_sender: TrapSender,
     thread_handle: Mutex<Option<std::thread::JoinHandle<io::Result<()>>>>,
+    /// Actual address the TCP listener bound to; stored so [`Agent::local_addr`] can return it.
+    bound_addr: SocketAddr,
 }
 
 impl Drop for AgentInner {
@@ -183,6 +185,31 @@ impl Agent {
             .command_sender
             .send(Command::SetValue { oid, value })
             .map_err(|_| SetError::Disconnected)
+    }
+
+    /// Return the local address the agent's TCP listener is bound to.
+    ///
+    /// Useful when the agent was built with port `0` (OS-assigned port) to
+    /// discover which port was selected.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0050
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use basic_snmp_agent::AgentBuilder;
+    ///
+    /// let agent = AgentBuilder::new()
+    ///     .listen_addr("127.0.0.1:0".parse().unwrap())
+    ///     .build()
+    ///     .unwrap();
+    /// let addr = agent.local_addr();
+    /// assert_eq!(addr.ip(), std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    /// ```
+    #[must_use]
+    pub fn local_addr(&self) -> SocketAddr {
+        self.0.bound_addr
     }
 }
 
@@ -369,7 +396,7 @@ impl AgentBuilder {
         // own copy; the event loop takes ownership of the original.
         let trap_engine_id = self.engine_id.clone();
 
-        let (event_loop, _bound_addr, command_sender) = EventLoop::new(
+        let (event_loop, bound_addr, command_sender) = EventLoop::new(
             listen_addr,
             self.engine_id,
             engine_boots,
@@ -396,6 +423,7 @@ impl AgentBuilder {
             command_sender,
             trap_sender,
             thread_handle: Mutex::new(Some(thread_handle)),
+            bound_addr,
         })))
     }
 }
@@ -460,7 +488,7 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].destination, dest);
-        assert!(results[0].outcome.is_ok());
+        results[0].outcome.as_ref().expect("trap send must succeed");
     }
 
     #[test]
@@ -472,10 +500,7 @@ mod tests {
             .engine_id(custom_engine_id)
             .build();
 
-        assert!(
-            agent.is_ok(),
-            "expected agent to build with custom engine ID"
-        );
+        agent.expect("expected agent to build with custom engine ID");
     }
 
     #[test]
@@ -516,10 +541,7 @@ mod tests {
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .engine_id(min_valid)
             .build();
-        assert!(
-            result.is_ok(),
-            "expected Ok for 5-byte engine ID (minimum valid length)"
-        );
+        result.expect("expected Ok for 5-byte engine ID (minimum valid length)");
     }
 
     #[test]
@@ -532,10 +554,7 @@ mod tests {
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .engine_id(max_valid)
             .build();
-        assert!(
-            result.is_ok(),
-            "expected Ok for 32-byte engine ID (maximum valid length)"
-        );
+        result.expect("expected Ok for 32-byte engine ID (maximum valid length)");
     }
 
     #[test]
@@ -546,7 +565,7 @@ mod tests {
 
         let result = agent.set(oid, Value::Integer32(42));
 
-        assert!(result.is_ok());
+        result.expect("set must succeed");
     }
 
     #[test]
@@ -560,10 +579,12 @@ mod tests {
             .join()
             .unwrap();
 
-        assert!(thread_result.is_ok());
+        thread_result.expect("set from spawned thread must succeed");
         // Use the original handle to confirm both clones remain functional.
         let another_oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
-        assert!(agent.set(another_oid, Value::Integer32(2)).is_ok());
+        agent
+            .set(another_oid, Value::Integer32(2))
+            .expect("set from original handle must succeed");
     }
 
     #[test]
@@ -575,7 +596,7 @@ mod tests {
 
         let result = agent.set(oid, Value::Integer32(7));
 
-        assert!(result.is_ok());
+        result.expect("set must succeed");
     }
 
     #[test]
@@ -623,10 +644,7 @@ mod tests {
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .usm_user(user)
             .build();
-        assert!(
-            result.is_ok(),
-            "expected agent to start with USM user configured"
-        );
+        result.expect("expected agent to start with USM user configured");
     }
 
     #[test]
@@ -722,32 +740,6 @@ mod tests {
     }
 
     #[test]
-    fn given_max_connections_when_build_then_agent_starts() {
-        // Verifies: REQ-0120
-        let _agent = AgentBuilder::new()
-            .listen_addr("127.0.0.1:0".parse().unwrap())
-            .max_connections(10)
-            .build()
-            .expect("agent should start with custom max_connections");
-    }
-
-    #[test]
-    fn given_connection_timeout_config_when_build_then_agent_starts() {
-        // Verifies: REQ-0123
-        use std::time::Duration;
-        let config = ConnectionTimeoutConfig {
-            normal_timeout: Duration::from_mins(1),
-            pressure_timeout: Duration::from_secs(10),
-            pressure_headroom: 3,
-        };
-        let _agent = AgentBuilder::new()
-            .listen_addr("127.0.0.1:0".parse().unwrap())
-            .connection_timeout_config(config)
-            .build()
-            .expect("agent should start with custom connection timeout config");
-    }
-
-    #[test]
     fn given_usm_user_when_usm_user_called_then_agent_sends_v3_traps() {
         // Verifies: REQ-0074, REQ-0076, REQ-0081
         // The mutant replaces the usm_user() body with Default::default(),
@@ -807,6 +799,68 @@ mod tests {
             flags_byte & 0x01,
             0,
             "authFlag must be set when an auth usm_user is configured"
+        );
+    }
+
+    #[test]
+    fn given_listen_addr_when_set_then_agent_binds_to_specified_address() {
+        // Verifies: REQ-0050
+        // The mutant replaces listen_addr() with Default::default(), resetting
+        // the address to "0.0.0.0:10161". local_addr() exposes the actual bound
+        // address so we can confirm it is 127.0.0.1, not 0.0.0.0.
+        let agent = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .build()
+            .expect("agent must bind to 127.0.0.1");
+        let bound = agent.local_addr();
+        assert_eq!(
+            bound.ip(),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            "agent must bind on 127.0.0.1, not the default 0.0.0.0"
+        );
+    }
+
+    #[test]
+    fn given_max_connections_when_set_then_prior_listen_addr_is_preserved() {
+        // Verifies: REQ-0120
+        // The mutant replaces max_connections() with Default::default(), resetting
+        // all previously chained builder fields. Setting listen_addr first and then
+        // checking local_addr() detects the reset: the agent must still bind on
+        // 127.0.0.1 rather than the default 0.0.0.0.
+        let agent = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .max_connections(2)
+            .build()
+            .expect("agent must build with custom max_connections");
+        let bound = agent.local_addr();
+        assert_eq!(
+            bound.ip(),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            "listen_addr set before max_connections must be preserved"
+        );
+    }
+
+    #[test]
+    fn given_connection_timeout_config_when_set_then_prior_listen_addr_is_preserved() {
+        // Verifies: REQ-0123
+        // The mutant replaces connection_timeout_config() with Default::default(),
+        // resetting all previously chained builder fields. Setting listen_addr first
+        // detects the reset via local_addr().
+        let config = ConnectionTimeoutConfig {
+            normal_timeout: Duration::from_secs(60),
+            pressure_timeout: Duration::from_secs(10),
+            pressure_headroom: 3,
+        };
+        let agent = AgentBuilder::new()
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .connection_timeout_config(config)
+            .build()
+            .expect("agent must build with custom timeout config");
+        let bound = agent.local_addr();
+        assert_eq!(
+            bound.ip(),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            "listen_addr set before connection_timeout_config must be preserved"
         );
     }
 }

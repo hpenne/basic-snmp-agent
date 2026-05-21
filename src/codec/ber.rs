@@ -1944,12 +1944,14 @@ mod tests {
 
     #[test]
     fn given_single_zero_byte_when_decoded_as_unsigned_then_returns_zero() {
+        // Verifies: REQ-0021
         let result = decode_unsigned(&[0x00], 4, 0).expect("single zero byte should decode");
         assert_eq!(result, 0);
     }
 
     #[test]
     fn given_two_byte_unsigned_with_sign_padding_when_decoded_then_strips_leading_zero() {
+        // Verifies: REQ-0021
         // [0x00, 0x80] has leading 0x00 sign byte; significant bytes = [0x80] → value 128
         let result = decode_unsigned(&[0x00, 0x80], 4, 0)
             .expect("two-byte unsigned with sign padding should decode");
@@ -1958,6 +1960,7 @@ mod tests {
 
     #[test]
     fn given_ber_encoded_integer_zero_when_decoded_as_unsigned32_then_returns_zero() {
+        // Verifies: REQ-0021
         // INTEGER 0 is BER-encoded as tag=0x02, length=0x01, value=0x00.
         // The decode_unsigned path must keep the single [0x00] byte as significant
         // (len == 1, so len > 1 is false) rather than stripping it to empty.
@@ -1971,7 +1974,21 @@ mod tests {
     }
 
     #[test]
+    fn given_empty_bytes_when_decoded_as_unsigned_then_returns_error() {
+        // Verifies: REQ-0021
+        // Without the None match arm in decode_unsigned, an empty slice would skip
+        // the error guard and return Ok(0) instead of an error.
+        let ber_error =
+            decode_unsigned(&[], 4, 0).expect_err("empty byte slice must not decode as unsigned");
+        assert!(
+            ber_error.to_string().contains("zero length"),
+            "error must report zero length, got: {ber_error}"
+        );
+    }
+
+    #[test]
     fn given_multiple_redundant_leading_zeroes_when_decoded_as_unsigned_then_strips_all() {
+        // Verifies: REQ-0021
         // [0x00, 0x00, 0x00, 0x01] → 1 (three redundant sign bytes)
         let result = decode_unsigned(&[0x00, 0x00, 0x00, 0x01], 4, 0)
             .expect("three leading zeroes before 0x01 should decode");
@@ -2001,6 +2018,7 @@ mod tests {
 
     #[test]
     fn given_multiple_redundant_leading_bytes_when_decoded_as_signed_then_strips_all() {
+        // Verifies: REQ-0021
         // [0x00, 0x00, 0x00, 0x01] encodes +1 with three redundant 0x00 sign bytes.
         let result = decode_signed_i32(&[0x00, 0x00, 0x00, 0x01], 0)
             .expect("three leading zeroes before 0x01 should decode as +1");
@@ -2023,6 +2041,19 @@ mod tests {
         // significant bytes — must fail because 5 > max i32 width of 4.
         decode_signed_i32(&[0xFF, 0xFF, 0x80, 0x00, 0x00, 0x00, 0x01], 0)
             .expect_err("five significant bytes must exceed i32 capacity");
+    }
+
+    #[test]
+    fn given_five_leading_zeros_and_value_one_when_decoded_as_signed_then_returns_one() {
+        // Verifies: REQ-0021
+        // [0x00, 0x00, 0x00, 0x00, 0x01] encodes +1 with four redundant 0x00 sign bytes.
+        // Stripping must reduce this to [0x01] (1 significant byte), yielding value 1.
+        // Mutations on `is_negative`, the `len > 1` guard, or the `& 0x80` sign-bit
+        // check in `decode_signed_i32` prevent the stripping, leaving 5 significant
+        // bytes and causing a "too large for i32" error in place of Ok(1).
+        let result = decode_signed_i32(&[0x00, 0x00, 0x00, 0x00, 0x01], 0)
+            .expect("four leading zeroes before 0x01 should decode as +1");
+        assert_eq!(result, 1);
     }
 
     // --- Mutant-killing tests: OID arc boundary values ---

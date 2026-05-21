@@ -505,4 +505,26 @@ mod tests {
         );
         assert_eq!(result.unwrap().len(), 32);
     }
+
+    #[test]
+    fn given_kdf_error_empty_password_when_displayed_then_shows_rfc_message() {
+        // Verifies: REQ-0090
+        // Exercises KdfError::fmt — a mutant replacing fmt with () would produce
+        // an empty string, causing this assertion to fail.
+        let error = KdfError::EmptyPassword;
+        assert_eq!(
+            error.to_string(),
+            "USM password must not be empty per RFC 3414",
+        );
+    }
+
+    #[test]
+    fn given_kdf_error_too_short_when_displayed_then_includes_length_in_message() {
+        // Verifies: REQ-0090
+        let error = KdfError::PasswordTooShort { length: 5 };
+        assert_eq!(
+            error.to_string(),
+            "USM password must be at least 8 bytes per RFC 3414 §11.2, got 5",
+        );
+    }
 }
