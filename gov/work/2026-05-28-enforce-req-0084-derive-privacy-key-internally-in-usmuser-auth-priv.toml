@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-05-28-002"
 title = "Enforce REQ-0084: derive privacy key internally in UsmUser::auth_priv"
-status = "active"
+status = "done"
 created = "2026-05-28"
 started = "2026-05-28"
+completed = "2026-05-28"
 refs = ["RFC-0007"]
 
 [content]
@@ -53,10 +54,10 @@ category = "chore"
 
 [[content.acceptance_criteria]]
 text = "System tests pass against net-snmp with authPriv"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "govctl check passes"
-status = "pending"
+status = "done"
 category = "chore"
