@@ -1,0 +1,61 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-05-28-002"
+title = "Enforce REQ-0084: derive privacy key internally in UsmUser::auth_priv"
+status = "queue"
+created = "2026-05-28"
+refs = ["RFC-0007"]
+
+[content]
+description = """
+UsmUser::auth_priv currently accepts a separate priv_key parameter, contradicting RFC-0007 REQ-0084 which states:
+"The agent MUST derive the privacy key from the localised authentication key by taking the leading N bytes of the localised authentication key... Embedders MUST NOT supply a separate privacy key."
+
+Additionally, derive_priv_key_from_auth_key in usm::kdf applies an extra hash round (H(auth_key || engineID || auth_key)) that is not specified by REQ-0084.
+REQ-0084 defines simple truncation: priv_key = auth_key[..N].
+The function is only used in its own unit tests and has no production callers.
+
+Changes required:
+
+1. Remove derive_priv_key_from_auth_key entirely (and its tests).
+2. Change UsmUser::auth_priv to drop the priv_key parameter.
+   It should accept only (name, auth_protocol, auth_key, priv_protocol) and derive the priv key internally as auth_key[..N] per REQ-0084.
+3. Update all callers: test binaries (test-agent, test-agent-mib-auth-priv) and README examples.
+   The manual truncation and separate priv password patterns disappear.
+4. password_to_localised_key remains unchanged (name and signature)."""
+
+[[content.acceptance_criteria]]
+text = "Remove derive_priv_key_from_auth_key and its tests from usm::kdf"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "UsmUser::auth_priv no longer accepts a priv_key parameter; derives it internally as auth_key[..N] per REQ-0084"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "Test binaries updated to use the new UsmUser::auth_priv signature"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "README authPriv example updated"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "All existing tests pass"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "System tests pass against net-snmp with authPriv"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"
