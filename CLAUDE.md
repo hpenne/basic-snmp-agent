@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`basic-snmp-agent` is a Rust project (edition 2024) intended to implement an SNMP agent. It is currently in its initial scaffold stage with no dependencies yet.
+`basic-snmp-agent` is a Rust (edition 2024) SNMPv3 agent library. It accepts inbound SNMP requests over plain TCP (RFC 3430) and sends outbound traps over UDP. Security uses the User-based Security Model (USM, RFC 3414) with noAuthNoPriv, authNoPriv (HMAC-SHA-2), and authPriv (AES-128-CFB) security levels.
 
 ## Common Commands
 
@@ -55,13 +55,47 @@ Never substitute a cheaper version of work and report it as the full thing.
 
 ## Architecture
 
-The project currently has a single binary entry point at `src/main.rs`. As SNMP agent functionality is added, the expected areas of concern will include:
+Single crate, no `main.rs` — this is a library (`src/lib.rs`) that embedding applications link against (ADR-0001). Test binaries under `tests/` exercise the library.
 
-- UDP socket handling (SNMP uses UDP port 161)
-- ASN.1 / BER encoding and decoding for SNMP PDUs
-- OID tree / MIB management
-- Request dispatch (GET, GETNEXT, GETBULK, SET)
-- Agent configuration and trap emission
+### Threading model (ADR-0002, ADR-0003)
+
+A dedicated OS thread runs a single-threaded **mio**-based event loop (ADR-0014) that owns the TCP listener, all accepted connections, and the MIB store. No async runtime. Application threads communicate with the event loop via `std::sync::mpsc` channels; a self-pipe wakes the poller immediately. `Agent` is `Clone + Send + Sync` (holds only channel senders). Shutdown is implicit on drop (ADR-0018).
+
+### Module layout
+
+- **`src/lib.rs`** — public API: `Agent`, `AgentBuilder` (builder pattern), re-exports. `AgentBuilder` accepts a single USM user, an optional `EngineBootsStore`, listen address, connection limits, and timeout configuration.
+- **`src/codec/`** — hand-written BER codec with zero external ASN.1 dependencies (ADR-0026, ADR-0027). `ber/` has the TLV reader/writer and SNMP-specific encode/decode (`pdu.rs`, `varbind.rs`, `snmp.rs`). `pdu/` defines public PDU types, decode/encode entry points, and the `Value` enum covering all nine SMIv2 types (ADR-0006). `oid.rs` is the project's `Oid` type. rasn is retained only as a dev-dependency for cross-implementation verification.
+- **`src/mib.rs`** — `BTreeMap<Oid, Value>` store (ADR-0010). Supports GET (point lookup), GETNEXT/GETBULK (range iteration), and upsert. Lives on the event loop thread; no locking needed.
+- **`src/transport/`** — `event_loop.rs`: mio poll loop, TCP accept, RFC 6353 framing, connection management (idle timeouts, max-connections cap). `dispatch.rs`: the SNMPv3 message-processing pipeline — a single sequential function with RFC 3414 §3.1-ordered security checks and early returns (ADR-0020). `request.rs`: PDU handling (GET, GETNEXT, GETBULK, SET → notWritable). `trap.rs`: synchronous UDP trap sending (bypasses the event loop; ADR-0003).
+- **`src/usm/`** — USM implementation (RFC 3414 + RFC 7860). `auth.rs`: HMAC-SHA-2 authentication. `privacy.rs`: AES-128-CFB encryption. `kdf.rs`: password-to-key derivation. `keys.rs`: `SecretKey` newtype with zeroisation on drop via `write_volatile` + `compiler_fence` (ADR-0025). `user.rs`: `UsmUser` (single user, fixed at construction; ADR-0023). `boots.rs`: `EngineBootsStore` trait for persistent engine-boots counter (ADR-0024). `time_window.rs`: replay-window validation. `counters.rs`: USM stats counters.
+- **`src/error.rs`** — hand-rolled error enums implementing `std::error::Error` (ADR-0012).
+
+### Key design decisions
+
+| Area | Decision | ADR |
+|---|---|---|
+| Security model | USM only; TLS/TSM abandoned | ADR-0022 |
+| Inbound transport | Plain TCP (RFC 3430), permanent | ADR-0022 |
+| Outbound transport | Plain UDP for traps | ADR-0003 |
+| BER codec | Hand-written, zero external deps | ADR-0026 |
+| Wire types | Own internal structures, public API decoupled | ADR-0027 |
+| Polling | mio (epoll/kqueue) | ADR-0014 |
+| Error handling | Hand-rolled, no thiserror/anyhow | ADR-0012 |
+| USM users | Single user, fixed at construction | ADR-0023 |
+| Engine boots | Application-provided storage trait | ADR-0024 |
+| Key zeroisation | `write_volatile` + `compiler_fence` | ADR-0025 |
+
+### Production dependencies
+
+mio, libc, hmac, sha2, aes, cfb-mode, log. No other external crates without explicit approval.
+
+### Test infrastructure
+
+- **Unit tests**: inline `#[cfg(test)]` modules in every source file.
+- **System tests**: Gherkin feature files in `tests/system/features/`, driven by Python/behave against test-agent binaries.
+- **Test agent binaries**: workspace members under `tests/` (`test-agent`, `test-agent-mib`, `test-agent-mib-auth`, `test-agent-mib-auth-priv`, `test-agent-mib-common`).
+- **`tests/snmpv3-frames`**: helper crate for constructing SNMPv3 wire-format test vectors.
+- **Fuzz targets**: in `fuzz/` (excluded from workspace), covering BER decode paths.
 
 ## Coding rules
 
