@@ -1,0 +1,50 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-05-28-003"
+title = "Remove direct libc dependency for cross-platform support"
+status = "active"
+created = "2026-05-28"
+started = "2026-05-28"
+refs = ["ADR-0014"]
+
+[content]
+description = """
+Replace all direct usage of the `libc` crate from the codebase to enable cross-platform support.
+
+Two sites require changes:
+1. `src/transport/event_loop.rs` — the self-pipe mechanism (`pipe`, `read`, `write`, `fcntl`) used to wake the mio poll loop. Replace with `mio::Waker`.
+2. `src/codec/pdu/encode.rs` — `libc::getrandom` syscall used for request-ID entropy on Linux. Replace with the `getrandom` crate, which provides a cross-platform API.
+
+After both changes, `libc` can be removed from direct dependencies.
+It will remain as a transitive dependency (via `cpufeatures` in `aes`/`sha2`)."""
+
+[[content.acceptance_criteria]]
+text = "Replace self-pipe (libc::pipe/read/write/fcntl) with mio::Waker in event_loop.rs"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "All existing tests pass"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "No libc calls remain in event_loop.rs"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "Replace libc::getrandom syscall in pdu/encode.rs with the getrandom crate"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "Remove libc from Cargo.toml direct dependencies"
+status = "pending"
+category = "removed"
