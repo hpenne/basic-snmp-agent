@@ -2090,17 +2090,15 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
-        let priv_key_bytes = [0xAA_u8; 16];
         let alice = crate::usm::user::UsmUser::auth_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
-            SecretKey::new_from_exposed_slice(&priv_key_bytes),
         );
         let frame = build_authpriv_frame(
             &auth_key_bytes,
-            &priv_key_bytes,
+            &auth_key_bytes[..16],
             PrivProtocol::Aes128,
             1,
             0,
@@ -2148,9 +2146,9 @@ mod tests {
         aes_iv[0..4].copy_from_slice(&1_u32.to_be_bytes()); // engine_boots = 1
         aes_iv[4..8].copy_from_slice(&0_u32.to_be_bytes()); // engine_time = 0
         aes_iv[8..16].copy_from_slice(usm_params.privacy_parameters.as_ref());
-        let priv_key = SecretKey::new_from_exposed_slice(&priv_key_bytes);
+        let derived_priv_key = SecretKey::new_from_exposed_slice(&auth_key_bytes[..16]);
         let plaintext = PrivProtocol::Aes128
-            .decrypt(&priv_key, &aes_iv, ciphertext.as_ref())
+            .decrypt(&derived_priv_key, &aes_iv, ciphertext.as_ref())
             .expect("response decryption must succeed");
         let scoped_pdu: rasn_snmp::v3::ScopedPdu =
             rasn::ber::decode(&plaintext).expect("decrypted bytes must be a valid ScopedPdu");
@@ -2211,18 +2209,16 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
-        let priv_key_bytes = [0xAA_u8; 16];
-        let wrong_priv_key_bytes = [0xBB_u8; 16];
         let alice = crate::usm::user::UsmUser::auth_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
-            SecretKey::new_from_exposed_slice(&wrong_priv_key_bytes),
         );
+        // Frame encrypted with a different key so the agent's derived key [0x42; 16] will not match.
         let frame = build_authpriv_frame(
             &auth_key_bytes,
-            &priv_key_bytes,
+            &[0xAA_u8; 16],
             PrivProtocol::Aes128,
             1,
             0,
@@ -2274,7 +2270,6 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
-        let priv_key_bytes = [0xAA_u8; 16];
         let mac_len = AuthProtocol::HmacSha256.mac_len();
         let engine_id = test_engine_id();
         let boots = 1_u32;
@@ -2285,7 +2280,6 @@ mod tests {
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
-            SecretKey::new_from_exposed_slice(&priv_key_bytes),
         );
 
         // Build a frame with privacy_parameters of length 4 (not 8) and fake ciphertext.
@@ -2375,7 +2369,6 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
-        let wrong_priv_key_bytes = [0xBB_u8; 16];
         let mac_len = AuthProtocol::HmacSha256.mac_len();
         let salt = [0x01_u8; 8];
         let engine_id = test_engine_id();
@@ -2387,7 +2380,6 @@ mod tests {
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
-            SecretKey::new_from_exposed_slice(&wrong_priv_key_bytes),
         );
 
         // Build frame with flags = 0x03 (authPriv, no reportableFlag) and corrupted ciphertext.
@@ -2451,18 +2443,16 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
-        let priv_key_bytes = [0xAA_u8; 16];
-        let wrong_priv_key_bytes = [0xBB_u8; 16];
         let alice = crate::usm::user::UsmUser::auth_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
-            SecretKey::new_from_exposed_slice(&wrong_priv_key_bytes),
         );
+        // Frame encrypted with a mismatched key to trigger decryption failure.
         let frame = build_authpriv_frame(
             &auth_key_bytes,
-            &priv_key_bytes,
+            &[0xAA_u8; 16],
             PrivProtocol::Aes128,
             1,
             0,

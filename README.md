@@ -117,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine_id = b"\x80\x00\x1f\x88\x04my-agent";
 
     // Derive a localised authentication key from a password.
-    let auth_key = password_to_localised_key(
+    let localised_key = password_to_localised_key(
         b"my-auth-password",
         engine_id,
         AuthProtocol::HmacSha256,
@@ -126,7 +126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let user = UsmUser::auth_no_priv(
         UserName::new("operator")?,
         AuthProtocol::HmacSha256,
-        auth_key,
+        localised_key,
     );
 
     let agent = AgentBuilder::new()
@@ -146,37 +146,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 use basic_snmp_agent::AgentBuilder;
 use basic_snmp_agent::usm::auth::AuthProtocol;
 use basic_snmp_agent::usm::kdf::password_to_localised_key;
-use basic_snmp_agent::usm::keys::SecretKey;
 use basic_snmp_agent::usm::privacy::PrivProtocol;
 use basic_snmp_agent::usm::user::{UserName, UsmUser};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine_id = b"\x80\x00\x1f\x88\x04my-agent";
 
-    let auth_key = password_to_localised_key(
+    let localised_key = password_to_localised_key(
         b"my-auth-password",
         engine_id,
         AuthProtocol::HmacSha256,
     )?;
 
-    // Derive a localised privacy key. The KDF produces a key sized for
-    // the auth protocol; truncate it to the privacy protocol's key length.
-    let priv_key_full = password_to_localised_key(
-        b"my-priv-password",
-        engine_id,
-        AuthProtocol::HmacSha256,
-    )?;
-    let (priv_key_bytes, _) = priv_key_full
-        .as_bytes()
-        .split_at(PrivProtocol::Aes128.key_len());
-    let priv_key = SecretKey::new_from_exposed_slice(priv_key_bytes);
-
+    // No separate privacy key needed — REQ-0084 derives it from localised_key.
     let user = UsmUser::auth_priv(
         UserName::new("secure-operator")?,
         AuthProtocol::HmacSha256,
-        auth_key,
+        localised_key,
         PrivProtocol::Aes128,
-        priv_key,
     );
 
     let agent = AgentBuilder::new()

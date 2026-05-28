@@ -368,13 +368,12 @@ def step_send_trap_auth_no_priv_to_two_receivers(
 
 
 @when(
-    'the agent at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" sends a trap with OID "{trap_oid}"'
+    'the agent at authPriv with user "{user}" and auth password "{auth_password}" sends a trap with OID "{trap_oid}"'
 )
 def step_send_trap_auth_priv(
     context: SnmpAgentContext,
     user: str,
     auth_password: str,
-    priv_password: str,
     trap_oid: str,
 ) -> None:
     _run_agent_docker(
@@ -393,20 +392,18 @@ def step_send_trap_auth_priv(
             "USM_AUTH_PROTO": "SHA-256",
             "USM_AUTH_PASS": auth_password,
             "USM_PRIV_PROTO": "AES-128",
-            "USM_PRIV_PASS": priv_password,
             "USM_SECURITY_LEVEL": "authPriv",
         },
     )
 
 
 @when(
-    'the agent at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" sends a trap with OID "{trap_oid}" and varbinds'
+    'the agent at authPriv with user "{user}" and auth password "{auth_password}" sends a trap with OID "{trap_oid}" and varbinds'
 )
 def step_send_trap_auth_priv_with_varbinds(
     context: SnmpAgentContext,
     user: str,
     auth_password: str,
-    priv_password: str,
     trap_oid: str,
 ) -> None:
     varbinds = _parse_varbind_table(context)
@@ -426,20 +423,18 @@ def step_send_trap_auth_priv_with_varbinds(
             "USM_AUTH_PROTO": "SHA-256",
             "USM_AUTH_PASS": auth_password,
             "USM_PRIV_PROTO": "AES-128",
-            "USM_PRIV_PASS": priv_password,
             "USM_SECURITY_LEVEL": "authPriv",
         },
     )
 
 
 @when(
-    'the agent at authPriv with user "{user}", auth password "{auth_password}", and priv password "{priv_password}" sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"'
+    'the agent at authPriv with user "{user}" and auth password "{auth_password}" sends to receivers "{receiver1}" and "{receiver2}" a trap with OID "{trap_oid}"'
 )
 def step_send_trap_auth_priv_to_two_receivers(
     context: SnmpAgentContext,
     user: str,
     auth_password: str,
-    priv_password: str,
     receiver1: str,
     receiver2: str,
     trap_oid: str,
@@ -462,7 +457,6 @@ def step_send_trap_auth_priv_to_two_receivers(
             "USM_AUTH_PROTO": "SHA-256",
             "USM_AUTH_PASS": auth_password,
             "USM_PRIV_PROTO": "AES-128",
-            "USM_PRIV_PASS": priv_password,
             "USM_SECURITY_LEVEL": "authPriv",
         },
     )

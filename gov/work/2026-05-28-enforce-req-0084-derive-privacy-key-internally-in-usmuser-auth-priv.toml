@@ -28,27 +28,27 @@ Changes required:
 
 [[content.acceptance_criteria]]
 text = "Remove derive_priv_key_from_auth_key and its tests from usm::kdf"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "UsmUser::auth_priv no longer accepts a priv_key parameter; derives it internally as auth_key[..N] per REQ-0084"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "Test binaries updated to use the new UsmUser::auth_priv signature"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "README authPriv example updated"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "All existing tests pass"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]

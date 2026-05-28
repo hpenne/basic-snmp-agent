@@ -17,20 +17,20 @@ const ENGINE_ID: &[u8] = b"\x80\x00\x1f\x88\x04test-agent-auth";
 fn main() {
     test_agent_mib_common::init_logging();
 
-    let auth_key = basic_snmp_agent::usm::kdf::password_to_localised_key(
+    let localised_key = basic_snmp_agent::usm::kdf::password_to_localised_key(
         b"authpassword",
         ENGINE_ID,
         AuthProtocol::HmacSha256,
     )
     .unwrap_or_else(|e| {
-        eprintln!("error: failed to derive auth key: {e}");
+        eprintln!("error: failed to derive localised key: {e}");
         std::process::exit(1);
     });
     let usm_user = basic_snmp_agent::usm::user::UsmUser::auth_no_priv(
         basic_snmp_agent::usm::user::UserName::new("authuser")
             .expect("\"authuser\" is a valid user name"),
         AuthProtocol::HmacSha256,
-        auth_key,
+        localised_key,
     );
 
     let agent = AgentBuilder::new()

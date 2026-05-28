@@ -12,7 +12,6 @@
 
 use basic_snmp_agent::AgentBuilder;
 use basic_snmp_agent::usm::auth::AuthProtocol;
-use basic_snmp_agent::usm::keys::SecretKey;
 use basic_snmp_agent::usm::privacy::PrivProtocol;
 
 const ENGINE_ID: &[u8] = b"\x80\x00\x1f\x88\x04test-agent-priv";
@@ -20,37 +19,21 @@ const ENGINE_ID: &[u8] = b"\x80\x00\x1f\x88\x04test-agent-priv";
 fn main() {
     test_agent_mib_common::init_logging();
 
-    let auth_key = basic_snmp_agent::usm::kdf::password_to_localised_key(
+    let localised_key = basic_snmp_agent::usm::kdf::password_to_localised_key(
         b"authpassword",
         ENGINE_ID,
         AuthProtocol::HmacSha256,
     )
     .unwrap_or_else(|e| {
-        eprintln!("error: failed to derive auth key: {e}");
+        eprintln!("error: failed to derive localised key: {e}");
         std::process::exit(1);
     });
-    let priv_key_full = basic_snmp_agent::usm::kdf::password_to_localised_key(
-        b"privpassword",
-        ENGINE_ID,
-        AuthProtocol::HmacSha256,
-    )
-    .unwrap_or_else(|e| {
-        eprintln!("error: failed to derive priv key: {e}");
-        std::process::exit(1);
-    });
-    // password_to_localised_key guarantees output length >= PrivProtocol::Aes128.key_len();
-    // split_at panicking here would indicate a bug in the KDF.
-    let (priv_key_bytes, _) = priv_key_full
-        .as_bytes()
-        .split_at(PrivProtocol::Aes128.key_len());
-    let priv_key = SecretKey::new_from_exposed_slice(priv_key_bytes);
     let usm_user = basic_snmp_agent::usm::user::UsmUser::auth_priv(
         basic_snmp_agent::usm::user::UserName::new("privuser")
             .expect("\"privuser\" is a valid user name"),
         AuthProtocol::HmacSha256,
-        auth_key,
+        localised_key,
         PrivProtocol::Aes128,
-        priv_key,
     );
 
     let agent = AgentBuilder::new()

@@ -606,14 +606,12 @@ mod tests {
         use rasn_snmp::v3::{Message as V3Message, ScopedPduData, USMSecurityParameters};
 
         let auth_key = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
-        let priv_key = SecretKey::new_from_exposed_slice(&[0xBB_u8; 16]);
         let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
         let user = Arc::new(UsmUser::auth_priv(
             UserName::new("trappriv").unwrap(),
             AuthProtocol::HmacSha256,
             auth_key,
             PrivProtocol::Aes128,
-            priv_key,
         ));
         let sender = TrapSender::new(Instant::now(), engine_id, 2, Some(user)).unwrap();
         let (receiver, dest) = loopback_receiver();

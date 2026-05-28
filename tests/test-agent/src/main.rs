@@ -167,7 +167,8 @@ fn main() {
 /// are set. The required additional variables depend on `USM_SECURITY_LEVEL`:
 /// - `noAuthNoPriv`: only engine ID and user name are needed.
 /// - `authNoPriv`: also requires `USM_AUTH_PROTO` and `USM_AUTH_PASS`.
-/// - `authPriv`: additionally requires `USM_PRIV_PROTO` and `USM_PRIV_PASS`.
+/// - `authPriv`: additionally requires `USM_PRIV_PROTO`. The privacy key is
+///   derived internally from the localised authentication key (REQ-0084).
 ///
 /// Returns `None` when `USM_ENGINE_ID` is absent. Exits on partial or invalid
 /// configuration.
@@ -191,17 +192,13 @@ fn parse_usm_env() -> Option<(Vec<u8>, UsmUser)> {
     let usm_user = match security_level.as_str() {
         "noAuthNoPriv" => UsmUser::no_auth_no_priv(parsed_user_name),
         "authNoPriv" => {
-            let (auth_protocol, auth_key) = parse_auth_env(&engine_id);
-            UsmUser::auth_no_priv(parsed_user_name, auth_protocol, auth_key)
+            let (auth_protocol, localised_key) = parse_auth_env(&engine_id);
+            UsmUser::auth_no_priv(parsed_user_name, auth_protocol, localised_key)
         }
         "authPriv" => {
-            let (auth_protocol, auth_key) = parse_auth_env(&engine_id);
+            let (auth_protocol, localised_key) = parse_auth_env(&engine_id);
             let priv_proto_name = std::env::var("USM_PRIV_PROTO").unwrap_or_else(|_| {
                 eprintln!("error: USM_SECURITY_LEVEL=authPriv but USM_PRIV_PROTO missing");
-                process::exit(1);
-            });
-            let priv_password = std::env::var("USM_PRIV_PASS").unwrap_or_else(|_| {
-                eprintln!("error: USM_SECURITY_LEVEL=authPriv but USM_PRIV_PASS missing");
                 process::exit(1);
             });
 
@@ -214,26 +211,11 @@ fn parse_usm_env() -> Option<(Vec<u8>, UsmUser)> {
                 }
             };
 
-            let priv_key_full = basic_snmp_agent::usm::kdf::password_to_localised_key(
-                priv_password.as_bytes(),
-                &engine_id,
-                auth_protocol,
-            )
-            .unwrap_or_else(|e| {
-                eprintln!("error: failed to derive priv key: {e}");
-                process::exit(1);
-            });
-            // password_to_localised_key guarantees output length >= priv_protocol.key_len();
-            // split_at panicking here would indicate a bug in the KDF.
-            let (priv_key_bytes, _) = priv_key_full.as_bytes().split_at(priv_protocol.key_len());
-            let priv_key = SecretKey::new_from_exposed_slice(priv_key_bytes);
-
             UsmUser::auth_priv(
                 parsed_user_name,
                 auth_protocol,
-                auth_key,
+                localised_key,
                 priv_protocol,
-                priv_key,
             )
         }
         other => {
@@ -269,17 +251,17 @@ fn parse_auth_env(engine_id: &[u8]) -> (AuthProtocol, SecretKey) {
         }
     };
 
-    let auth_key = basic_snmp_agent::usm::kdf::password_to_localised_key(
+    let localised_key = basic_snmp_agent::usm::kdf::password_to_localised_key(
         auth_password.as_bytes(),
         engine_id,
         auth_protocol,
     )
     .unwrap_or_else(|e| {
-        eprintln!("error: failed to derive auth key: {e}");
+        eprintln!("error: failed to derive localised key: {e}");
         process::exit(1);
     });
 
-    (auth_protocol, auth_key)
+    (auth_protocol, localised_key)
 }
 
 /// Decode a hex-encoded engine ID string (with optional `0x` prefix) into bytes.
