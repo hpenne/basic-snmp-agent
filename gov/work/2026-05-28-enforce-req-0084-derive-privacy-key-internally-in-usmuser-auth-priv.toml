@@ -3,8 +3,9 @@
 [govctl]
 id = "WI-2026-05-28-002"
 title = "Enforce REQ-0084: derive privacy key internally in UsmUser::auth_priv"
-status = "queue"
+status = "active"
 created = "2026-05-28"
+started = "2026-05-28"
 refs = ["RFC-0007"]
 
 [content]
