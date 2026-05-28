@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-05-28-001"
 title = "Write project README.md with examples"
-status = "active"
+status = "done"
 created = "2026-05-28"
 started = "2026-05-28"
+completed = "2026-05-28"
 
 [content]
 description = """
@@ -14,20 +15,20 @@ What is the goal? What are the acceptance criteria?"""
 
 [[content.acceptance_criteria]]
 text = "README.md with project overview and features"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "Example code for creating an agent and populating MIB entries"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "Example code for sending a trap"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "govctl check passes"
-status = "pending"
+status = "done"
 category = "chore"
