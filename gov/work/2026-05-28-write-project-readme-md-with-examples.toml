@@ -1,0 +1,33 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-05-28-001"
+title = "Write project README.md with examples"
+status = "active"
+created = "2026-05-28"
+started = "2026-05-28"
+
+[content]
+description = """
+Describe the work to be done.
+What is the goal? What are the acceptance criteria?"""
+
+[[content.acceptance_criteria]]
+text = "README.md with project overview and features"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "Example code for creating an agent and populating MIB entries"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "Example code for sending a trap"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"
