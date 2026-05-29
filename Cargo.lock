@@ -49,8 +49,8 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "cfb-mode",
+ "getrandom",
  "hmac",
- "libc",
  "log",
  "mio",
  "rasn",

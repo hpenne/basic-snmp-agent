@@ -1,18 +1,13 @@
-//! TLS transport layer and event loop for the SNMP agent.
+//! Plain TCP transport layer and event loop for the SNMP agent.
 //!
 //! Responsibilities:
 //!
-//! - **Inbound connections**: accepts TLS-over-TCP connections on port 10161
-//!   (IANA SNMP-over-TLS), using `rustls` for the TLS engine. Frames inbound
+//! - **Inbound connections**: accepts plain TCP connections, framing inbound
 //!   messages per RFC 6353.
-//! - **Outbound traps**: sends plain UDP datagrams to trap destinations on
-//!   port 162. No encryption or authentication is applied to traps.
-//! - **Certificate handling**: stores the agent's own certificate/key and the
-//!   set of trusted CA certificates, provided at construction time. Replacing
-//!   certificates requires restarting the agent.
+//! - **Outbound traps**: sends plain UDP datagrams to trap destinations.
 //! - **Event loop**: the central poll loop driven by `mio` (epoll/kqueue).
-//!   Sequences TCP listener events, TLS connection I/O, command channel
-//!   draining (via self-pipe wakeup), and MIB request dispatch.
+//!   Sequences TCP listener events, connection I/O, command channel draining
+//!   (via `mio::Waker` wakeup), and MIB request dispatch.
 //!
 //! This module uses [`codec`] for `SNMPv3` message framing and [`mib`] for
 //! OID resolution during request handling.

@@ -14,12 +14,12 @@ publish = false
 workspace = true
 
 [dependencies]
-mio = { version = "1", features = ["net", "os-poll", "os-ext"] }
-libc = "0.2"
+mio = { version = "1", features = ["net", "os-poll"] }
 hmac = "0.12"
 sha2 = "0.10"
 aes = "0.8"
 cfb-mode = "0.8"
+getrandom = "0.4"
 log = "0.4"
 
 [dev-dependencies]

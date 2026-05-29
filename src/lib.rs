@@ -406,7 +406,7 @@ impl AgentBuilder {
         )
         .map_err(|e| match e {
             EventLoopError::Bind { addr, source } => AgentError::Bind { addr, source },
-            EventLoopError::Pipe(source) | EventLoopError::Registration(source) => {
+            EventLoopError::Waker(source) | EventLoopError::Registration(source) => {
                 AgentError::Socket(source)
             }
         })?;

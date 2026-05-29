@@ -59,7 +59,7 @@ Single crate, no `main.rs` — this is a library (`src/lib.rs`) that embedding a
 
 ### Threading model (ADR-0002, ADR-0003)
 
-A dedicated OS thread runs a single-threaded **mio**-based event loop (ADR-0014) that owns the TCP listener, all accepted connections, and the MIB store. No async runtime. Application threads communicate with the event loop via `std::sync::mpsc` channels; a self-pipe wakes the poller immediately. `Agent` is `Clone + Send + Sync` (holds only channel senders). Shutdown is implicit on drop (ADR-0018).
+A dedicated OS thread runs a single-threaded **mio**-based event loop (ADR-0014) that owns the TCP listener, all accepted connections, and the MIB store. No async runtime. Application threads communicate with the event loop via `std::sync::mpsc` channels; an `mio::Waker` wakes the poller immediately. `Agent` is `Clone + Send + Sync` (holds only channel senders). Shutdown is implicit on drop (ADR-0018).
 
 ### Module layout
 
@@ -87,7 +87,7 @@ A dedicated OS thread runs a single-threaded **mio**-based event loop (ADR-0014)
 
 ### Production dependencies
 
-mio, libc, hmac, sha2, aes, cfb-mode, log. No other external crates without explicit approval.
+mio, hmac, sha2, aes, cfb-mode, getrandom, log. No other external crates without explicit approval.
 
 ### Test infrastructure
 

@@ -13,22 +13,23 @@ refs = [
 [content]
 context = """
 ADR-0002 establishes a single-threaded event loop but does not specify the polling mechanism.
-The loop must poll a TCP listener for new connections, multiple TLS connections for incoming data, and a self-pipe for command channel wakeup.
-The set of TLS connections is dynamic: connections are accepted and dropped over time.
+The loop must poll a TCP listener for new connections, multiple TCP connections for incoming data, and respond to cross-thread wakeup signals for command channel draining.
+The set of TCP connections is dynamic: connections are accepted and dropped over time.
 The choice of mechanism affects CPU usage, latency, and how cleanly a dynamic fd set is managed."""
 decision = """
 Use mio as the event loop polling mechanism.
-The event loop creates a mio::Poll instance and registers the TCP listener, each accepted TLS connection, and the read end of a self-pipe for command wakeup.
+The event loop creates a mio::Poll instance and registers the TCP listener and each accepted TCP connection.
+An mio::Waker is used for cross-thread command channel wakeup.
 Each source is assigned a mio::Token for dispatch.
-When the application calls set(), it pushes a command to the mpsc channel and writes one byte to the pipe to wake the event loop immediately.
-The event loop drains the pipe byte(s) and the mpsc channel, processes commands, and sends results back via a std::sync::mpsc channel used as a oneshot.
-TLS connections are registered on accept and deregistered on close or timeout (ADR-0015).
+When the application calls set(), it pushes a command to the mpsc channel and calls Waker::wake() to wake the event loop immediately.
+The event loop drains the mpsc channel, processes commands, and sends results back via a std::sync::mpsc channel used as a oneshot.
+TCP connections are registered on accept and deregistered on close or timeout (ADR-0015).
 The UDP socket for outbound traps does not need to be registered with mio since it is used for sending only."""
 consequences = """
 Near-instant wakeup on set() calls with no polling latency.
 The event loop blocks in mio::Poll::poll() when idle, consuming no CPU.
 mio uses epoll on Linux and kqueue on macOS, providing efficient O(1) fd registration and event notification.
-Dynamic registration and deregistration of TLS connections is handled cleanly via mio's register/deregister API.
+Dynamic registration and deregistration of TCP connections is handled cleanly via mio's register/deregister API.
 mio is a well-established, lightweight crate with no transitive async runtime dependency.
 The trade-off is an additional dependency, but mio is widely used and well-maintained.
 Windows portability is available if needed in the future via mio's IOCP backend."""

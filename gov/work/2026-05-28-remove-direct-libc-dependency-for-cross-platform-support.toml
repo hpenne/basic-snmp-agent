@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-05-28-003"
 title = "Remove direct libc dependency for cross-platform support"
-status = "active"
+status = "done"
 created = "2026-05-28"
 started = "2026-05-28"
+completed = "2026-05-29"
 refs = ["ADR-0014"]
 
 [content]
@@ -21,30 +22,30 @@ It will remain as a transitive dependency (via `cpufeatures` in `aes`/`sha2`).""
 
 [[content.acceptance_criteria]]
 text = "Replace self-pipe (libc::pipe/read/write/fcntl) with mio::Waker in event_loop.rs"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
 text = "All existing tests pass"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "govctl check passes"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "No libc calls remain in event_loop.rs"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
 text = "Replace libc::getrandom syscall in pdu/encode.rs with the getrandom crate"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
 text = "Remove libc from Cargo.toml direct dependencies"
-status = "pending"
+status = "done"
 category = "removed"

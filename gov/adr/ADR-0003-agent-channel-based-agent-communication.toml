@@ -26,7 +26,7 @@ The event loop drains the command channel between socket polls."""
 consequences = """
 No shared mutable state between the application and the event loop.
 Agent::set() is a non-blocking channel send, callable from any thread without &mut self, satisfying RFC-0001:C-MIB-STORE.
-Trap sending is a simple synchronous call with no channel round-trip, no self-pipe wakeup, and no reply channel.
+Trap sending is a simple synchronous call with no channel round-trip, no Waker wakeup, and no reply channel.
 Per-destination results are returned directly to the caller.
 The trade-off is that MIB updates are not immediately visible to SNMP requests; there is a small delay until the event loop drains the channel.
 This is acceptable for monitoring workloads."""

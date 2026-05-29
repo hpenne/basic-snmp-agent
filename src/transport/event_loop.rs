@@ -1,26 +1,26 @@
 //! Central event loop for the SNMP agent.
 //!
-//! The loop multiplexes a TCP listener, accepted connections, and a
-//! self-pipe using `mio` (epoll/kqueue). Inbound SNMP requests arrive over
-//! plain TCP connections using RFC 3430 BER framing; outbound traps are sent
-//! as plain UDP datagrams.
+//! The loop multiplexes a TCP listener, accepted connections, and a waker
+//! using `mio` (epoll/kqueue). Inbound SNMP requests arrive over plain TCP
+//! connections using RFC 3430 BER framing; outbound traps are sent as plain
+//! UDP datagrams.
 //!
 //! # Design
 //!
-//! [`EventLoop::new`] binds the listener and allocates the self-pipe, then
+//! [`EventLoop::new`] binds the listener and creates an `mio::Waker`, then
 //! returns a [`CommandSender`] that callers use to send [`Command`]s from any
-//! thread. Writing one byte to the pipe's write end wakes the poll call so the
-//! event loop drains the mpsc channel promptly.
+//! thread. Calling [`CommandSender::send`] posts the command to the mpsc
+//! channel and wakes the poll loop via the Waker so it drains the channel
+//! promptly.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
 
 // Implements: [[RFC-0009:C-FACADE]]
@@ -29,8 +29,8 @@ use log::{debug, info};
 /// mio token for the TCP listener.
 const LISTENER_TOKEN: Token = Token(0);
 
-/// mio token for the self-pipe read end.
-const PIPE_TOKEN: Token = Token(1);
+/// mio token for the waker.
+const WAKER_TOKEN: Token = Token(1);
 
 /// First token index available for accepted client connections.
 const FIRST_CONN_TOKEN: usize = 2;
@@ -88,9 +88,9 @@ pub const PRESSURE_HEADROOM: usize = 5;
 pub enum EventLoopError {
     /// TCP listener could not be bound to the requested address.
     Bind { addr: SocketAddr, source: io::Error },
-    /// Self-pipe creation or configuration failed.
-    Pipe(io::Error),
-    /// mio token registration for the listener or self-pipe failed.
+    /// Waker creation failed.
+    Waker(io::Error),
+    /// mio token registration for the listener or waker failed.
     Registration(io::Error),
 }
 
@@ -100,7 +100,7 @@ impl fmt::Display for EventLoopError {
             Self::Bind { addr, source } => {
                 write!(f, "failed to bind TCP listener to {addr}: {source}")
             }
-            Self::Pipe(e) => write!(f, "self-pipe creation failed: {e}"),
+            Self::Waker(e) => write!(f, "waker creation failed: {e}"),
             Self::Registration(e) => write!(f, "mio token registration failed: {e}"),
         }
     }
@@ -110,7 +110,7 @@ impl std::error::Error for EventLoopError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Bind { source, .. } => Some(source),
-            Self::Pipe(e) | Self::Registration(e) => Some(e),
+            Self::Waker(e) | Self::Registration(e) => Some(e),
         }
     }
 }
@@ -162,19 +162,18 @@ pub enum Command {
 
 /// A cloneable handle for sending [`Command`]s to the event loop.
 ///
-/// Wraps an mpsc `Sender` and the write end of the self-pipe. Each call to
-/// [`send`][`CommandSender::send`] posts the command to the channel and writes
-/// one byte to the pipe so the poll loop wakes up immediately.
+/// Wraps an mpsc `Sender` and an `Arc<mio::Waker>`. Each call to
+/// [`send`][`CommandSender::send`] posts the command to the channel and wakes
+/// the poll loop via the Waker so it drains the channel promptly.
 ///
 /// # Clone behaviour
 ///
-/// Cloning duplicates the pipe write fd via `OwnedFd::try_clone` so that each
-/// instance owns an independent file descriptor. All clones share the same
-/// underlying mpsc channel.
+/// Cloning shares the same underlying `Arc<mio::Waker>` and mpsc channel.
 ///
 /// # Drop behaviour
 ///
-/// The pipe write fd is closed on drop via `OwnedFd`.
+/// The `Arc<mio::Waker>` reference count is decremented on drop. The Waker
+/// itself is released when the last reference is dropped.
 ///
 /// # Examples
 ///
@@ -191,13 +190,14 @@ pub enum Command {
 ///                    ConnectionTimeoutConfig::default()).unwrap();
 /// sender.send(Command::Shutdown).unwrap();
 /// ```
+#[derive(Clone)]
 pub struct CommandSender {
     tx: Sender<Command>,
-    /// Write end of the self-pipe; `OwnedFd` closes it on drop automatically.
-    pipe_write_fd: OwnedFd,
+    /// Waker shared with the event loop; waking it causes the poll call to return.
+    waker: Arc<mio::Waker>,
 }
 
-// `OwnedFd` is just an integer fd, and `Sender<Command>` is `Send`.
+// `Arc<mio::Waker>` is `Send + Sync`, and `Sender<Command>` is `Send`.
 // The documented contract requires `CommandSender` to be `Send + Sync` so that
 // `Agent` (which wraps it) can be shared across threads. This assertion catches
 // any future field addition that would break the contract at compile time.
@@ -207,41 +207,18 @@ const _: () = {
 };
 
 impl CommandSender {
-    /// Send a [`Command`] to the event loop and wake it via the self-pipe.
+    /// Send a [`Command`] to the event loop and wake it via the Waker.
     ///
     /// # Errors
     ///
     /// Returns an error if the event loop thread has exited (broken channel)
-    /// or if writing to the self-pipe fails.
+    /// or if waking the poll loop fails.
     pub fn send(&self, cmd: Command) -> io::Result<()> {
         self.tx
             .send(cmd)
             .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "event loop has exited"))?;
-        // Write one byte to wake the poll call; the value is irrelevant.
-        let byte: [u8; 1] = [1];
-        // SAFETY: `pipe_write_fd` holds a valid fd from pipe(2); `byte.as_ptr()` points to a 1-byte stack buffer, and the length argument matches.
-        let write_result =
-            unsafe { libc::write(self.pipe_write_fd.as_raw_fd(), byte.as_ptr().cast(), 1) };
-        if write_result < 0 {
-            return Err(io::Error::last_os_error());
-        }
+        self.waker.wake()?;
         Ok(())
-    }
-}
-
-impl Clone for CommandSender {
-    fn clone(&self) -> Self {
-        // try_clone performs dup(2) and wraps the result in OwnedFd. Panic on
-        // failure because Clone cannot return an error and a bad fd would cause
-        // silent data loss rather than a clear diagnostic.
-        let duped = self
-            .pipe_write_fd
-            .try_clone()
-            .expect("dup failed for CommandSender pipe write fd");
-        Self {
-            tx: self.tx.clone(),
-            pipe_write_fd: duped,
-        }
     }
 }
 
@@ -303,7 +280,7 @@ struct ConnectionState {
 // ── EventLoop ────────────────────────────────────────────────────────────────
 
 /// The mio-driven event loop that owns the TCP listener, accepted connections,
-/// the self-pipe read end, and the MIB store.
+/// the waker, and the MIB store.
 ///
 /// Call [`run`][`EventLoop::run`] from a dedicated OS thread. The loop exits
 /// when it receives [`Command::Shutdown`].
@@ -332,9 +309,8 @@ struct ConnectionState {
 pub struct EventLoop {
     poll: Poll,
     listener: mio::net::TcpListener,
-    /// Read end of the self-pipe. `OwnedFd` ensures the fd is closed on drop
-    /// even if `run()` is never called or returns early with an error.
-    pipe_read_fd: OwnedFd,
+    /// Keeps the Waker alive for the lifetime of the event loop.
+    _waker: Arc<mio::Waker>,
     rx: Receiver<Command>,
     /// Next token value to assign to an accepted connection.
     next_token: usize,
@@ -399,7 +375,7 @@ impl EventLoop {
     /// # Errors
     ///
     /// Returns [`EventLoopError::Bind`] if the TCP listener cannot be bound,
-    /// [`EventLoopError::Pipe`] if the self-pipe cannot be created, or
+    /// [`EventLoopError::Waker`] if the waker cannot be created, or
     /// [`EventLoopError::Registration`] if mio token registration fails.
     ///
     /// # Requirements
@@ -442,24 +418,16 @@ impl EventLoop {
             .register(&mut listener, LISTENER_TOKEN, Interest::READABLE)
             .map_err(EventLoopError::Registration)?;
 
-        // Allocate a Unix self-pipe for waking the poll loop from other threads.
-        // `create_pipe` returns `OwnedFd` values, so partial failures inside it
-        // automatically close any already-created fds.
-        let (pipe_read_fd, pipe_write_fd) = create_pipe().map_err(EventLoopError::Pipe)?;
-
-        // Register the pipe read end. If this fails the OwnedFd values are
-        // dropped here, which closes the fds without leaking them.
-        let mut source = SourceFd(&pipe_read_fd.as_raw_fd());
-        registry
-            .register(&mut source, PIPE_TOKEN, Interest::READABLE)
-            .map_err(EventLoopError::Registration)?;
+        // Create the mio Waker so application threads can wake the poll loop.
+        let waker =
+            Arc::new(mio::Waker::new(registry, WAKER_TOKEN).map_err(EventLoopError::Waker)?);
 
         let (tx, rx) = mpsc::channel::<Command>();
 
         let event_loop = Self {
             poll,
             listener,
-            pipe_read_fd,
+            _waker: Arc::clone(&waker),
             rx,
             next_token: FIRST_CONN_TOKEN,
             connections: HashMap::new(),
@@ -478,7 +446,7 @@ impl EventLoop {
             unknown_security_models_counter: 0,
             usm_user,
         };
-        let sender = CommandSender { tx, pipe_write_fd };
+        let sender = CommandSender { tx, waker };
 
         Ok((event_loop, bound_addr, sender))
     }
@@ -517,9 +485,8 @@ impl EventLoop {
                     LISTENER_TOKEN => {
                         self.accept_connections();
                     }
-                    PIPE_TOKEN => {
-                        // Drain the pipe bytes, then drain the command channel.
-                        drain_pipe(self.pipe_read_fd.as_raw_fd());
+                    WAKER_TOKEN => {
+                        // Drain the command channel.
                         if self.drain_commands() {
                             break 'outer;
                         }
@@ -536,7 +503,6 @@ impl EventLoop {
         }
 
         Ok(())
-        // `self.pipe_read_fd` (OwnedFd) is closed here automatically on drop.
     }
 
     /// Accept all pending connections, registering each with a unique token.
@@ -805,7 +771,7 @@ impl EventLoop {
     /// Allocate the next unique connection token, skipping reserved values.
     ///
     /// Wraps safely around `usize::MAX` and skips `LISTENER_TOKEN` and
-    /// `PIPE_TOKEN` to avoid collisions with reserved tokens. After wrap-around,
+    /// `WAKER_TOKEN` to avoid collisions with reserved tokens. After wrap-around,
     /// also skips any token already present in the connection map to prevent
     /// silent entry overwrites under theoretical token exhaustion.
     fn next_connection_token(&mut self) -> Token {
@@ -822,62 +788,6 @@ impl EventLoop {
             if candidate >= FIRST_CONN_TOKEN && !self.connections.contains_key(&Token(candidate)) {
                 return Token(candidate);
             }
-        }
-    }
-}
-
-/// Create a Unix self-pipe and set both ends to non-blocking mode.
-///
-/// Returns `(read_fd, write_fd)` as `OwnedFd` values so that any partial
-/// failure automatically closes already-created fds on drop.
-fn create_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
-    let mut fds: [libc::c_int; 2] = [0; 2];
-    // SAFETY: fds is a valid, aligned two-element array.
-    let pipe_result = unsafe { libc::pipe(fds.as_mut_ptr()) };
-    if pipe_result < 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    // SAFETY: pipe(2) succeeded so fds[0] is a valid, owned fd.
-    let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
-    // SAFETY: pipe(2) succeeded so fds[1] is a valid, owned fd.
-    let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
-
-    set_nonblocking(read_fd.as_raw_fd())?;
-    set_nonblocking(write_fd.as_raw_fd())?;
-
-    Ok((read_fd, write_fd))
-}
-
-/// Set a file descriptor to non-blocking mode via `fcntl`.
-fn set_nonblocking(fd: RawFd) -> io::Result<()> {
-    // SAFETY: fd was obtained from a successful pipe(2) or accept(2) call.
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: fd is valid (see above) and flags was obtained from a successful F_GETFL call.
-    let set_nonblock_result = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
-    if set_nonblock_result < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-/// Read and discard all bytes currently available on the pipe read end.
-///
-/// Stops on `WouldBlock`, which is the expected steady-state after draining.
-fn drain_pipe(fd: RawFd) {
-    let mut drain_buf = [0_u8; 64];
-    loop {
-        // SAFETY: fd is the read end of a pipe from a successful pipe(2) call; drain_buf is a valid stack buffer.
-        let bytes_read = unsafe { libc::read(fd, drain_buf.as_mut_ptr().cast(), drain_buf.len()) };
-        // TODO: `bytes_read <= 0` treats EAGAIN/WouldBlock and genuine errors (e.g.
-        // EBADF) identically — both silently stop the drain. A real error here
-        // would indicate a programming bug (bad fd); distinguishing the two
-        // would improve observability but has no correctness impact in practice.
-        if bytes_read <= 0 {
-            break;
         }
     }
 }
@@ -1157,10 +1067,13 @@ mod tests {
         let std_listener = std::net::TcpListener::bind(listener_addr).unwrap();
         let bound = std_listener.local_addr().unwrap();
 
+        let poll = Poll::new().unwrap();
+        let waker = Arc::new(mio::Waker::new(poll.registry(), WAKER_TOKEN).unwrap());
+
         let mut event_loop = EventLoop {
-            poll: Poll::new().unwrap(),
+            poll,
             listener: mio::net::TcpListener::bind("127.0.0.1:0".parse().unwrap()).unwrap(),
-            pipe_read_fd: create_pipe().unwrap().0,
+            _waker: Arc::clone(&waker),
             rx: mpsc::channel::<Command>().1,
             next_token: FIRST_CONN_TOKEN,
             connections: HashMap::new(),
@@ -1217,13 +1130,9 @@ mod tests {
     }
 
     #[test]
-    fn given_event_loop_error_pipe_when_display_then_mentions_self_pipe() {
-        let pipe_error = EventLoopError::Pipe(io::Error::other("pipe failed"));
-        assert!(
-            pipe_error.to_string().contains("self-pipe"),
-            "{}",
-            pipe_error
-        );
+    fn given_event_loop_error_waker_when_display_then_mentions_waker() {
+        let waker_error = EventLoopError::Waker(io::Error::other("waker failed"));
+        assert!(waker_error.to_string().contains("waker"), "{}", waker_error);
     }
 
     #[test]
@@ -1254,13 +1163,13 @@ mod tests {
                 .contains("bind source")
         );
 
-        let pipe_err = EventLoopError::Pipe(io::Error::other("pipe source"));
+        let waker_err = EventLoopError::Waker(io::Error::other("waker source"));
         assert!(
-            pipe_err
+            waker_err
                 .source()
                 .unwrap()
                 .to_string()
-                .contains("pipe source")
+                .contains("waker source")
         );
 
         let reg_err = EventLoopError::Registration(io::Error::other("reg source"));

@@ -67,8 +67,8 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
 
 // RFC 3826 §2.2: each message must use a unique salt. The counter is seeded
 // from an OS entropy source to prevent salt reuse across process restarts.
-// On Linux, the seed is drawn from the getrandom(2) syscall; on other
-// platforms, a RandomState hasher combined with high-resolution time provides
+// The getrandom crate provides a cross-platform interface to the OS CSPRNG;
+// if that fails, a RandomState hasher combined with high-resolution time provides
 // best-effort entropy (not cryptographically guaranteed).
 static PRIVACY_SALT_INIT: std::sync::Once = std::sync::Once::new();
 static PRIVACY_SALT_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -87,26 +87,13 @@ fn random_u64_from_hasher() -> u64 {
     hasher.finish()
 }
 
-#[cfg(target_os = "linux")]
 fn random_u64() -> u64 {
-    fn try_getrandom_syscall() -> Option<u64> {
-        let mut random_bytes = [0_u8; 8];
-        // SAFETY: random_bytes is a valid mutable buffer of known length.
-        let bytes_read = unsafe {
-            libc::getrandom(
-                random_bytes.as_mut_ptr().cast(),
-                random_bytes.len(),
-                libc::GRND_NONBLOCK,
-            )
-        };
-        (bytes_read == 8).then(|| u64::from_ne_bytes(random_bytes))
+    let mut random_bytes = [0_u8; 8];
+    if getrandom::fill(&mut random_bytes).is_ok() {
+        u64::from_ne_bytes(random_bytes)
+    } else {
+        random_u64_from_hasher()
     }
-    try_getrandom_syscall().unwrap_or_else(random_u64_from_hasher)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn random_u64() -> u64 {
-    random_u64_from_hasher()
 }
 
 // Implements: REQ-0101, REQ-0110
