@@ -16,9 +16,9 @@
 //! # Quick start
 //!
 //! ```no_run
-//! use basic_snmp_agent::{AgentBuilder, TrapPdu};
+//! use basic_snmp_agent::{AgentBuilder, SecurityConfig, TrapPdu};
 //!
-//! let agent = AgentBuilder::new()
+//! let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
 //!     .listen_addr("0.0.0.0:10161".parse().unwrap())
 //!     .build()
 //!     .unwrap();
@@ -105,9 +105,9 @@ impl Drop for AgentInner {
 /// # Examples
 ///
 /// ```no_run
-/// use basic_snmp_agent::{AgentBuilder, TrapPdu};
+/// use basic_snmp_agent::{AgentBuilder, SecurityConfig, TrapPdu};
 ///
-/// let agent = AgentBuilder::new().build().unwrap();
+/// let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv).build().unwrap();
 /// let pdu = TrapPdu {
 ///     request_id: 1,
 ///     trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
@@ -148,9 +148,9 @@ impl Agent {
     /// # Examples
     ///
     /// ```no_run
-    /// use basic_snmp_agent::{AgentBuilder, TrapPdu};
+    /// use basic_snmp_agent::{AgentBuilder, SecurityConfig, TrapPdu};
     ///
-    /// let agent = AgentBuilder::new().build().unwrap();
+    /// let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv).build().unwrap();
     /// let pdu = TrapPdu {
     ///     request_id: 1,
     ///     trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
@@ -199,9 +199,9 @@ impl Agent {
     /// # Examples
     ///
     /// ```no_run
-    /// use basic_snmp_agent::AgentBuilder;
+    /// use basic_snmp_agent::{AgentBuilder, SecurityConfig};
     ///
-    /// let agent = AgentBuilder::new()
+    /// let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
     ///     .listen_addr("127.0.0.1:0".parse().unwrap())
     ///     .build()
     ///     .unwrap();
@@ -306,9 +306,9 @@ pub enum SecurityConfig {
 /// # Examples
 ///
 /// ```no_run
-/// use basic_snmp_agent::AgentBuilder;
+/// use basic_snmp_agent::{AgentBuilder, SecurityConfig};
 ///
-/// let agent = AgentBuilder::new()
+/// let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
 ///     .listen_addr("0.0.0.0:10161".parse().unwrap())
 ///     .build()
 ///     .unwrap();
@@ -318,12 +318,9 @@ pub struct AgentBuilder {
     /// `SNMPv3` engine ID for this agent instance. Inbound requests with a
     /// different engine ID are rejected with a Report PDU (REQ-0104).
     engine_id: Vec<u8>,
-    // USM user configured for this agent instance; `None` means no USM enforcement.
-    // Implements: REQ-0074, REQ-0076, REQ-0081
-    usm_user: Option<crate::usm::user::UsmUser>,
-    // Engine-boots persistence store; `None` means boots start at 1 and are not persisted.
-    // Implements: REQ-0094, REQ-0095, REQ-0096
-    boots_store: Option<Box<dyn crate::usm::boots::EngineBootsStore + Send>>,
+    // Security configuration supplied at construction time.
+    // Implements: REQ-0075, REQ-0076, REQ-0077, REQ-0129
+    security: SecurityConfig,
     // Maximum number of concurrent TCP connections; defaults to DEFAULT_MAX_CONNECTIONS.
     max_connections: usize,
     // Idle-connection sweep configuration; defaults to ConnectionTimeoutConfig::default().
@@ -331,16 +328,24 @@ pub struct AgentBuilder {
 }
 
 impl AgentBuilder {
-    /// Create a builder with default settings.
+    /// Create a builder with the given security configuration.
+    ///
+    /// The [`SecurityConfig`] determines the agent's minimum security level and
+    /// bundles all required parameters for that level (user credentials and
+    /// engine-boots store). Optional parameters (listen address, engine ID,
+    /// max connections, timeout config) are set via builder methods.
     ///
     /// Default listen address: `0.0.0.0:10161` (IANA-assigned SNMP-over-TLS port).
     /// Default engine ID: enterprise-format OID-based identifier (REQ-0055).
+    ///
+    /// # Requirements
+    /// Implements: REQ-0129
     ///
     /// # Panics
     ///
     /// Never panics in practice; the `expect` guards a compile-time constant address.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(security: SecurityConfig) -> Self {
         Self {
             listen_addr: "0.0.0.0:10161"
                 .parse()
@@ -348,8 +353,7 @@ impl AgentBuilder {
             // Default engine ID: enterprise OID format (0x80 = enterprise,
             // 0x00 0x1f 0x88 = enterprise number 8072, 0x04 = text format).
             engine_id: b"\x80\x00\x1f\x88\x04basic-snmp-agent".to_vec(),
-            usm_user: None,
-            boots_store: None,
+            security,
             max_connections: DEFAULT_MAX_CONNECTIONS,
             timeout_config: ConnectionTimeoutConfig::default(),
         }
@@ -374,40 +378,6 @@ impl AgentBuilder {
     #[must_use]
     pub fn engine_id(mut self, engine_id: Vec<u8>) -> Self {
         self.engine_id = engine_id;
-        self
-    }
-
-    /// Set the USM user for this agent.
-    ///
-    /// The agent is configured with exactly one USM user per RFC 3414 (REQ-0076).
-    /// The user's localised keys must already be derived for the configured
-    /// engine ID (REQ-0081). If not set, the agent processes requests without
-    /// USM authentication or privacy enforcement.
-    ///
-    /// # Requirements
-    /// Implements: REQ-0074, REQ-0076, REQ-0081
-    #[must_use]
-    pub fn usm_user(mut self, user: crate::usm::user::UsmUser) -> Self {
-        self.usm_user = Some(user);
-        self
-    }
-
-    /// Set the engine-boots persistence store.
-    ///
-    /// Called once at [`build`][Self::build] time: the store is loaded, the
-    /// boots counter is incremented (or reset if the engine ID changed), and
-    /// the new value is saved back. All counter logic follows RFC 3414 §2.2.
-    ///
-    /// If not set, `snmpEngineBoots` starts at 1 and is not persisted.
-    ///
-    /// # Requirements
-    /// Implements: REQ-0094, REQ-0095, REQ-0096
-    #[must_use]
-    pub fn engine_boots_store(
-        mut self,
-        store: impl crate::usm::boots::EngineBootsStore + Send + 'static,
-    ) -> Self {
-        self.boots_store = Some(Box::new(store));
         self
     }
 
@@ -467,14 +437,26 @@ impl AgentBuilder {
             return Err(AgentError::InvalidEngineId);
         }
 
-        let engine_boots = match self.boots_store {
-            Some(mut store) => {
-                crate::usm::boots::initialise_engine_boots(&mut *store, &self.engine_id)
-                    .map_err(AgentError::EngineBoots)?
-            }
+        let (usm_user, mut boots_store) = match self.security {
+            SecurityConfig::NoAuthNoPriv => (None, None),
+            SecurityConfig::AuthNoPriv { user, boots_store } => (
+                Some(crate::usm::user::UsmUser::from(user)),
+                Some(boots_store),
+            ),
+            SecurityConfig::AuthPriv { user, boots_store } => (
+                Some(crate::usm::user::UsmUser::from(user)),
+                Some(boots_store),
+            ),
+        };
+
+        let engine_boots = match boots_store.as_deref_mut() {
+            Some(store) => crate::usm::boots::initialise_engine_boots(store, &self.engine_id)
+                .map_err(AgentError::EngineBoots)?,
+            // NoAuthNoPriv carries no boots store; boots is unused at this
+            // security level but the event loop still expects a value.
             None => 1,
         };
-        let usm_user = self.usm_user.map(std::sync::Arc::new);
+        let usm_user = usm_user.map(std::sync::Arc::new);
 
         let listen_addr = self.listen_addr;
 
@@ -514,12 +496,6 @@ impl AgentBuilder {
     }
 }
 
-impl Default for AgentBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 const _: () = {
     fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<crate::usm::user::UsmUser>;
@@ -532,9 +508,21 @@ mod tests {
     use std::net::UdpSocket;
     use std::time::Duration;
 
+    use crate::usm::boots::{EngineBootsStore, StoredBootsState};
+
+    struct NullStore;
+    impl EngineBootsStore for NullStore {
+        fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> {
+            Ok(None)
+        }
+        fn save(&mut self, _: &[u8], _: u32) -> Result<(), std::io::Error> {
+            Ok(())
+        }
+    }
+
     fn test_agent() -> Agent {
         // Port 0 lets the OS assign a free port, avoiding conflicts between tests.
-        AgentBuilder::new()
+        AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .build()
             .unwrap()
@@ -581,7 +569,7 @@ mod tests {
     fn given_custom_engine_id_when_build_then_agent_starts() {
         // Verifies: REQ-0001, REQ-0002, REQ-0048, REQ-0049, REQ-0055
         let custom_engine_id = b"\x80\x00\x1f\x88\x04custom".to_vec();
-        let agent = AgentBuilder::new()
+        let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .engine_id(custom_engine_id)
             .build();
@@ -593,7 +581,7 @@ mod tests {
     fn given_engine_id_too_short_when_build_then_invalid_engine_id_error() {
         // Verifies: REQ-0055
         let too_short = b"ab".to_vec(); // 2 bytes, below the 5-byte minimum
-        let result = AgentBuilder::new()
+        let result = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .engine_id(too_short)
             .build();
@@ -607,7 +595,7 @@ mod tests {
     fn given_engine_id_too_long_when_build_then_invalid_engine_id_error() {
         // Verifies: REQ-0055
         let too_long = vec![0_u8; 33]; // 33 bytes, above the 32-byte maximum
-        let result = AgentBuilder::new()
+        let result = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .engine_id(too_long)
             .build();
@@ -623,7 +611,7 @@ mod tests {
         // 5 bytes is the minimum valid length per RFC 3411 §5. The mutant
         // `< with <=` would incorrectly reject this boundary value.
         let min_valid = vec![0x80_u8, 0x00, 0x1f, 0x88, 0x01]; // exactly 5 bytes
-        let result = AgentBuilder::new()
+        let result = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .engine_id(min_valid)
             .build();
@@ -636,7 +624,7 @@ mod tests {
         // 32 bytes is the maximum valid length per RFC 3411 §5. The mutant
         // `> with >=` would incorrectly reject this boundary value.
         let max_valid = vec![0xAA_u8; 32]; // exactly 32 bytes
-        let result = AgentBuilder::new()
+        let result = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .engine_id(max_valid)
             .build();
@@ -722,21 +710,35 @@ mod tests {
     }
 
     #[test]
-    fn given_usm_user_when_build_then_agent_starts() {
-        // Verifies: REQ-0074, REQ-0076
-        use crate::usm::user::{UserName, UsmUser};
-        let user = UsmUser::no_auth_no_priv(UserName::new("public").unwrap());
-        let result = AgentBuilder::new()
+    fn given_auth_no_priv_config_when_build_then_agent_starts() {
+        // Verifies: REQ-0076, REQ-0129
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::user::UserName;
+
+        let key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+        let user = AuthNoPrivUser::new(
+            UserName::new("public").unwrap(),
+            AuthProtocol::HmacSha256,
+            key,
+        )
+        .unwrap();
+        let config = SecurityConfig::AuthNoPriv {
+            user,
+            boots_store: Box::new(NullStore),
+        };
+        let result = AgentBuilder::new(config)
             .listen_addr("127.0.0.1:0".parse().unwrap())
-            .usm_user(user)
             .build();
-        result.expect("expected agent to start with USM user configured");
+        result.expect("expected agent to start with AuthNoPriv SecurityConfig");
     }
 
     #[test]
-    fn given_boots_store_when_build_then_boots_initialised() {
-        // Verifies: REQ-0094, REQ-0095
-        use crate::usm::boots::{EngineBootsStore, StoredBootsState};
+    fn given_auth_no_priv_config_with_boots_store_when_build_then_boots_initialised() {
+        // Verifies: REQ-0094, REQ-0095, REQ-0129
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::user::UserName;
         use std::sync::{Arc, Mutex};
 
         struct TrackingStore {
@@ -778,9 +780,19 @@ mod tests {
             saved_boots: 0,
         }));
         let store = ObservableStore(Arc::clone(&inner));
-        AgentBuilder::new()
+        let key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+        let user = AuthNoPrivUser::new(
+            UserName::new("testuser").unwrap(),
+            AuthProtocol::HmacSha256,
+            key,
+        )
+        .unwrap();
+        let config = SecurityConfig::AuthNoPriv {
+            user,
+            boots_store: Box::new(store),
+        };
+        AgentBuilder::new(config)
             .listen_addr("127.0.0.1:0".parse().unwrap())
-            .engine_boots_store(store)
             .build()
             .unwrap();
 
@@ -798,7 +810,10 @@ mod tests {
     fn given_boots_at_ceiling_when_build_then_engine_boots_error() {
         // Verifies: REQ-0097
         use crate::error::AgentError;
-        use crate::usm::boots::{EngineBootsStore, MAX_ENGINE_BOOTS, StoredBootsState};
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::boots::MAX_ENGINE_BOOTS;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::user::UserName;
 
         struct CeilingStore;
         impl EngineBootsStore for CeilingStore {
@@ -818,34 +833,46 @@ mod tests {
             }
         }
 
-        let result = AgentBuilder::new()
+        let key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+        let user = AuthNoPrivUser::new(
+            UserName::new("testuser").unwrap(),
+            AuthProtocol::HmacSha256,
+            key,
+        )
+        .unwrap();
+        let config = SecurityConfig::AuthNoPriv {
+            user,
+            boots_store: Box::new(CeilingStore),
+        };
+        let result = AgentBuilder::new(config)
             .listen_addr("127.0.0.1:0".parse().unwrap())
-            .engine_boots_store(CeilingStore)
             .build();
         assert!(matches!(result, Err(AgentError::EngineBoots(_))));
     }
 
     #[test]
-    fn given_usm_user_when_usm_user_called_then_agent_sends_v3_traps() {
-        // Verifies: REQ-0074, REQ-0076, REQ-0081
-        // The mutant replaces the usm_user() body with Default::default(),
-        // which resets all builder fields so usm_user stays None. Without a
-        // stored user the agent falls back to SNMPv2c (version 1). This test
+    fn given_auth_no_priv_config_when_send_trap_then_v3_authenticated_trap() {
+        // Verifies: REQ-0076, REQ-0081, REQ-0129
+        // Without a stored user the agent falls back to SNMPv2c (version 1). This test
         // detects that by verifying the received datagram carries SNMP version 3.
         use crate::usm::auth::AuthProtocol;
         use crate::usm::keys::SecretKey;
-        use crate::usm::user::{UserName, UsmUser};
+        use crate::usm::user::UserName;
 
         let auth_key = SecretKey::new_from_exposed_slice(&[0x11_u8; 32]);
-        let user = UsmUser::auth_no_priv(
+        let user = AuthNoPrivUser::new(
             UserName::new("testuser").unwrap(),
             AuthProtocol::HmacSha256,
             auth_key,
-        );
+        )
+        .unwrap();
+        let config = SecurityConfig::AuthNoPriv {
+            user,
+            boots_store: Box::new(NullStore),
+        };
 
-        let agent = AgentBuilder::new()
+        let agent = AgentBuilder::new(config)
             .listen_addr("127.0.0.1:0".parse().unwrap())
-            .usm_user(user)
             .build()
             .expect("agent must build");
 
@@ -864,27 +891,93 @@ mod tests {
         assert_eq!(results.len(), 1);
         results[0].outcome.as_ref().expect("trap send must succeed");
 
-        // Verify the datagram decodes as a V3 message (not V2c). If usm_user
-        // was not stored by the builder, the agent would fall back to V2c and
-        // rasn would fail to decode the datagram as a V3 message.
+        // Verify the datagram decodes as a V3 message (not V2c). If the security
+        // config was not applied, the agent would fall back to V2c and rasn would
+        // fail to decode the datagram as a V3 message.
         let mut recv_buf = vec![0_u8; 2048];
         let (bytes_received, _src) = receiver
             .recv_from(&mut recv_buf)
             .expect("must receive a datagram");
         let received_bytes = &recv_buf[..bytes_received];
         let decoded: rasn_snmp::v3::Message = rasn::ber::decode(received_bytes)
-            .expect("datagram must decode as SNMPv3 Message when usm_user is set");
+            .expect("datagram must decode as SNMPv3 Message when auth config is set");
         let version: i64 = decoded.version.try_into().expect("version must fit in i64");
         assert_eq!(
             version, 3,
-            "version must be 3 (SNMPv3) when usm_user is set"
+            "version must be 3 (SNMPv3) when auth config is set"
         );
         // Also verify the auth flag is set, confirming the auth user was stored.
         let flags_byte = decoded.global_data.flags.first().copied().unwrap_or(0);
         assert_ne!(
             flags_byte & 0x01,
             0,
-            "authFlag must be set when an auth usm_user is configured"
+            "authFlag must be set when an AuthNoPriv SecurityConfig is configured"
+        );
+    }
+
+    #[test]
+    fn given_auth_priv_config_when_send_trap_then_v3_authenticated_encrypted_trap() {
+        // Verifies: REQ-0077, REQ-0081, REQ-0129
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::privacy::PrivProtocol;
+        use crate::usm::user::UserName;
+
+        let auth_key = SecretKey::new_from_exposed_slice(&[0x22_u8; 32]);
+        let user = AuthPrivUser::new(
+            UserName::new("privtester").unwrap(),
+            AuthProtocol::HmacSha256,
+            auth_key,
+            PrivProtocol::Aes128,
+        )
+        .unwrap();
+        let config = SecurityConfig::AuthPriv {
+            user,
+            boots_store: Box::new(NullStore),
+        };
+
+        let agent = AgentBuilder::new(config)
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .build()
+            .expect("agent must build");
+
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let dest = receiver.local_addr().unwrap();
+
+        let pdu = TrapPdu {
+            request_id: 2,
+            trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
+            varbinds: vec![],
+        };
+        let results = agent.send_trap(&pdu, &[dest]).unwrap();
+        assert_eq!(results.len(), 1);
+        results[0].outcome.as_ref().expect("trap send must succeed");
+
+        let mut recv_buf = vec![0_u8; 2048];
+        let (bytes_received, _src) = receiver
+            .recv_from(&mut recv_buf)
+            .expect("must receive a datagram");
+        let received_bytes = &recv_buf[..bytes_received];
+        let decoded: rasn_snmp::v3::Message = rasn::ber::decode(received_bytes)
+            .expect("datagram must decode as SNMPv3 Message when authPriv config is set");
+        let version: i64 = decoded.version.try_into().expect("version must fit in i64");
+        assert_eq!(
+            version, 3,
+            "version must be 3 (SNMPv3) when authPriv config is set"
+        );
+        let flags_byte = decoded.global_data.flags.first().copied().unwrap_or(0);
+        assert_ne!(
+            flags_byte & 0x01,
+            0,
+            "authFlag must be set when an AuthPriv SecurityConfig is configured"
+        );
+        assert_ne!(
+            flags_byte & 0x02,
+            0,
+            "privFlag must be set when an AuthPriv SecurityConfig is configured"
         );
     }
 
@@ -894,7 +987,7 @@ mod tests {
         // The mutant replaces listen_addr() with Default::default(), resetting
         // the address to "0.0.0.0:10161". local_addr() exposes the actual bound
         // address so we can confirm it is 127.0.0.1, not 0.0.0.0.
-        let agent = AgentBuilder::new()
+        let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .build()
             .expect("agent must bind to 127.0.0.1");
@@ -913,7 +1006,7 @@ mod tests {
         // all previously chained builder fields. Setting listen_addr first and then
         // checking local_addr() detects the reset: the agent must still bind on
         // 127.0.0.1 rather than the default 0.0.0.0.
-        let agent = AgentBuilder::new()
+        let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .max_connections(2)
             .build()
@@ -937,7 +1030,7 @@ mod tests {
             pressure_timeout: Duration::from_secs(10),
             pressure_headroom: 3,
         };
-        let agent = AgentBuilder::new()
+        let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .connection_timeout_config(config)
             .build()
@@ -953,27 +1046,8 @@ mod tests {
     // ── SecurityConfig ────────────────────────────────────────────────────────
 
     #[test]
-    fn given_no_auth_no_priv_variant_when_constructed_then_matches() {
-        // Verifies: REQ-0075, REQ-0077, REQ-0129
-        let config = SecurityConfig::NoAuthNoPriv;
-        assert!(matches!(config, SecurityConfig::NoAuthNoPriv));
-    }
-
-    #[test]
     fn given_auth_no_priv_variant_when_constructed_then_holds_user_and_store() {
-        // Verifies: REQ-0076, REQ-0077, REQ-0129
-        use crate::usm::boots::{EngineBootsStore, StoredBootsState};
-
-        struct NullStore;
-        impl EngineBootsStore for NullStore {
-            fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> {
-                Ok(None)
-            }
-            fn save(&mut self, _: &[u8], _: u32) -> Result<(), std::io::Error> {
-                Ok(())
-            }
-        }
-
+        // Verifies: REQ-0076, REQ-0129
         use crate::usm::auth::AuthProtocol;
         use crate::usm::keys::SecretKey;
         use crate::usm::user::UserName;
@@ -998,18 +1072,6 @@ mod tests {
     #[test]
     fn given_auth_priv_variant_when_constructed_then_holds_user_and_store() {
         // Verifies: REQ-0077, REQ-0129
-        use crate::usm::boots::{EngineBootsStore, StoredBootsState};
-
-        struct NullStore;
-        impl EngineBootsStore for NullStore {
-            fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> {
-                Ok(None)
-            }
-            fn save(&mut self, _: &[u8], _: u32) -> Result<(), std::io::Error> {
-                Ok(())
-            }
-        }
-
         use crate::usm::auth::AuthProtocol;
         use crate::usm::keys::SecretKey;
         use crate::usm::privacy::PrivProtocol;
@@ -1031,5 +1093,31 @@ mod tests {
             panic!("expected AuthPriv variant");
         };
         assert_eq!(user.name().as_str(), "bob");
+    }
+
+    #[test]
+    fn given_auth_priv_config_when_build_then_agent_starts() {
+        // Verifies: REQ-0077, REQ-0129
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::privacy::PrivProtocol;
+        use crate::usm::user::UserName;
+
+        let key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+        let user = AuthPrivUser::new(
+            UserName::new("bob").unwrap(),
+            AuthProtocol::HmacSha256,
+            key,
+            PrivProtocol::Aes128,
+        )
+        .unwrap();
+        let config = SecurityConfig::AuthPriv {
+            user,
+            boots_store: Box::new(NullStore),
+        };
+        let result = AgentBuilder::new(config)
+            .listen_addr("127.0.0.1:0".parse().unwrap())
+            .build();
+        result.expect("expected agent to start with AuthPriv SecurityConfig");
     }
 }

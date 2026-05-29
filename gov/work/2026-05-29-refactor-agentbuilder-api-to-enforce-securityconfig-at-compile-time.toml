@@ -43,20 +43,20 @@ Messages at or above the floor are accepted if the user's credentials can satisf
 - [x] Create AuthNoPrivUser and AuthPrivUser public types
 - [x] Create SecurityConfig enum
 - [ ] Implement From conversions
-- [ ] Refactor AgentBuilder to take SecurityConfig in new()
+- [x] Refactor AgentBuilder to take SecurityConfig in new()
 - [ ] Convert internal UsmUser to capabilities-based model
 - [ ] Update dispatch logic for floor-based acceptance
-- [ ] Update all tests and test-agent binaries
+- [x] Update all tests and test-agent binaries
 - [ ] Update README examples"""
 
 [[content.acceptance_criteria]]
 text = "AgentBuilder::new takes SecurityConfig as mandatory parameter; optional params stay as builder methods"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
 text = "Code compiles without EngineBootsStore only for NoAuthNoPriv; AuthNoPriv and AuthPriv require it"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
@@ -101,5 +101,5 @@ category = "changed"
 
 [[content.acceptance_criteria]]
 text = "All test-agent binaries under tests/ compile and pass with the new SecurityConfig API"
-status = "pending"
+status = "done"
 category = "chore"

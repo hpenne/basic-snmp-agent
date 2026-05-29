@@ -10,9 +10,10 @@
 //! The agent listens on port 10161 (plain TCP) and parks the main thread
 //! forever once it has printed its ready message.
 
-use basic_snmp_agent::AgentBuilder;
 use basic_snmp_agent::usm::auth::AuthProtocol;
 use basic_snmp_agent::usm::privacy::PrivProtocol;
+use basic_snmp_agent::usm::user::UserName;
+use basic_snmp_agent::{AgentBuilder, AuthPrivUser, SecurityConfig};
 
 const ENGINE_ID: &[u8] = b"\x80\x00\x1f\x88\x04test-agent-priv";
 
@@ -28,23 +29,28 @@ fn main() {
         eprintln!("error: failed to derive localised key: {e}");
         std::process::exit(1);
     });
-    let usm_user = basic_snmp_agent::usm::user::UsmUser::auth_priv(
-        basic_snmp_agent::usm::user::UserName::new("privuser")
-            .expect("\"privuser\" is a valid user name"),
+    let user = AuthPrivUser::new(
+        UserName::new("privuser").expect("\"privuser\" is a valid user name"),
         AuthProtocol::HmacSha256,
         localised_key,
         PrivProtocol::Aes128,
-    );
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("error: failed to create USM user: {e}");
+        std::process::exit(1);
+    });
 
-    let agent = AgentBuilder::new()
-        .listen_addr("0.0.0.0:10161".parse().expect("listen address is valid"))
-        .engine_id(ENGINE_ID.to_vec())
-        .usm_user(usm_user)
-        .build()
-        .unwrap_or_else(|e| {
-            eprintln!("error: failed to build agent: {e}");
-            std::process::exit(1);
-        });
+    let agent = AgentBuilder::new(SecurityConfig::AuthPriv {
+        user,
+        boots_store: Box::new(test_agent_mib_common::NullStore),
+    })
+    .listen_addr("0.0.0.0:10161".parse().expect("listen address is valid"))
+    .engine_id(ENGINE_ID.to_vec())
+    .build()
+    .unwrap_or_else(|e| {
+        eprintln!("error: failed to build agent: {e}");
+        std::process::exit(1);
+    });
 
     // Seed the MIB with a small, predictable set of OIDs that the system
     // tests can query by name without guessing their values.

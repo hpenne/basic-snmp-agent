@@ -1,6 +1,22 @@
 //! Shared test-agent MIB seeding utility and logging initialisation for system-level tests.
 
+use basic_snmp_agent::usm::boots::{EngineBootsStore, StoredBootsState};
 use basic_snmp_agent::{Agent, Value};
+
+/// An [`EngineBootsStore`] that does no persistence.
+///
+/// Returns `None` on load and discards saves. Suitable for test-agent binaries
+/// where boot-counter persistence is not required.
+pub struct NullStore;
+
+impl EngineBootsStore for NullStore {
+    fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> {
+        Ok(None)
+    }
+    fn save(&mut self, _: &[u8], _: u32) -> Result<(), std::io::Error> {
+        Ok(())
+    }
+}
 
 /// A minimal logger that writes to stderr, used by test agent binaries.
 struct StderrLogger {

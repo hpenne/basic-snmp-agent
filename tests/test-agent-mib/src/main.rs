@@ -7,12 +7,12 @@
 //! The agent listens on port 10161 (plain TCP, no TLS) and parks the main
 //! thread forever once it has printed its ready message.
 
-use basic_snmp_agent::AgentBuilder;
+use basic_snmp_agent::{AgentBuilder, SecurityConfig};
 
 fn main() {
     test_agent_mib_common::init_logging();
 
-    let agent = AgentBuilder::new()
+    let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
         .listen_addr("0.0.0.0:10161".parse().expect("listen address is valid"))
         .engine_id(b"\x80\x00\x1f\x88\x04test-agent-mib".to_vec())
         .build()

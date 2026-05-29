@@ -25,10 +25,26 @@ use std::net::SocketAddr;
 use std::process;
 
 use basic_snmp_agent::usm::auth::AuthProtocol;
+use basic_snmp_agent::usm::boots::{EngineBootsStore, StoredBootsState};
 use basic_snmp_agent::usm::keys::SecretKey;
 use basic_snmp_agent::usm::privacy::PrivProtocol;
-use basic_snmp_agent::usm::user::{UserName, UsmUser};
-use basic_snmp_agent::{AgentBuilder, Oid, TrapPdu, Value, Varbind, VarbindValue};
+use basic_snmp_agent::usm::user::UserName;
+use basic_snmp_agent::{
+    AgentBuilder, AuthNoPrivUser, AuthPrivUser, Oid, SecurityConfig, TrapPdu, Value, Varbind,
+    VarbindValue,
+};
+
+// ── NullStore ─────────────────────────────────────────────────────────────────
+
+struct NullStore;
+impl EngineBootsStore for NullStore {
+    fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> {
+        Ok(None)
+    }
+    fn save(&mut self, _: &[u8], _: u32) -> Result<(), std::io::Error> {
+        Ok(())
+    }
+}
 
 // ── Deserialisation types ─────────────────────────────────────────────────────
 
@@ -72,13 +88,14 @@ fn main() {
         process::exit(1);
     });
 
-    // Use port 0 so the OS assigns a free TCP port; no inbound requests are
-    // served in this binary, but the event loop must bind a listener.
-    let mut builder =
-        AgentBuilder::new().listen_addr("0.0.0.0:0".parse().expect("listen address is valid"));
-
-    if let Some((engine_id, usm_user)) = parse_usm_env() {
-        builder = builder.engine_id(engine_id).usm_user(usm_user);
+    let (security, custom_engine_id) = match parse_usm_env() {
+        Some((engine_id, config)) => (config, Some(engine_id)),
+        None => (SecurityConfig::NoAuthNoPriv, None),
+    };
+    let mut builder = AgentBuilder::new(security)
+        .listen_addr("0.0.0.0:0".parse().expect("listen address is valid"));
+    if let Some(engine_id) = custom_engine_id {
+        builder = builder.engine_id(engine_id);
     }
 
     let agent = builder.build().unwrap_or_else(|e| {
@@ -163,21 +180,17 @@ fn main() {
 
 /// Read optional USM configuration from environment variables.
 ///
-/// Returns `Some((engine_id, usm_user))` when `USM_ENGINE_ID` and `USM_USER`
-/// are set. The required additional variables depend on `USM_SECURITY_LEVEL`:
-/// - `noAuthNoPriv`: only engine ID and user name are needed.
-/// - `authNoPriv`: also requires `USM_AUTH_PROTO` and `USM_AUTH_PASS`.
+/// Returns `Some((engine_id, security_config))` when `USM_ENGINE_ID` is set.
+/// The required additional variables depend on `USM_SECURITY_LEVEL`:
+/// - `noAuthNoPriv`: only engine ID is needed.
+/// - `authNoPriv`: also requires `USM_USER`, `USM_AUTH_PROTO` and `USM_AUTH_PASS`.
 /// - `authPriv`: additionally requires `USM_PRIV_PROTO`. The privacy key is
 ///   derived internally from the localised authentication key (REQ-0084).
 ///
 /// Returns `None` when `USM_ENGINE_ID` is absent. Exits on partial or invalid
 /// configuration.
-fn parse_usm_env() -> Option<(Vec<u8>, UsmUser)> {
+fn parse_usm_env() -> Option<(Vec<u8>, SecurityConfig)> {
     let engine_id_hex = std::env::var("USM_ENGINE_ID").ok()?;
-    let user_name = std::env::var("USM_USER").unwrap_or_else(|_| {
-        eprintln!("error: USM_ENGINE_ID set but USM_USER missing");
-        process::exit(1);
-    });
     let security_level = std::env::var("USM_SECURITY_LEVEL").unwrap_or_else(|_| {
         eprintln!("error: USM_ENGINE_ID set but USM_SECURITY_LEVEL missing");
         process::exit(1);
@@ -185,17 +198,23 @@ fn parse_usm_env() -> Option<(Vec<u8>, UsmUser)> {
 
     let engine_id = decode_hex_engine_id(&engine_id_hex);
 
-    let parsed_user_name = UserName::new(user_name).unwrap_or_else(|_| {
-        eprintln!("error: USM_USER must not be empty");
-        process::exit(1);
-    });
-    let usm_user = match security_level.as_str() {
-        "noAuthNoPriv" => UsmUser::no_auth_no_priv(parsed_user_name),
+    let config = match security_level.as_str() {
+        "noAuthNoPriv" => SecurityConfig::NoAuthNoPriv,
         "authNoPriv" => {
+            let user_name = parse_user_name_env();
             let (auth_protocol, localised_key) = parse_auth_env(&engine_id);
-            UsmUser::auth_no_priv(parsed_user_name, auth_protocol, localised_key)
+            let user =
+                AuthNoPrivUser::new(user_name, auth_protocol, localised_key).unwrap_or_else(|e| {
+                    eprintln!("error: failed to create USM user: {e}");
+                    process::exit(1);
+                });
+            SecurityConfig::AuthNoPriv {
+                user,
+                boots_store: Box::new(NullStore),
+            }
         }
         "authPriv" => {
+            let user_name = parse_user_name_env();
             let (auth_protocol, localised_key) = parse_auth_env(&engine_id);
             let priv_proto_name = std::env::var("USM_PRIV_PROTO").unwrap_or_else(|_| {
                 eprintln!("error: USM_SECURITY_LEVEL=authPriv but USM_PRIV_PROTO missing");
@@ -211,12 +230,15 @@ fn parse_usm_env() -> Option<(Vec<u8>, UsmUser)> {
                 }
             };
 
-            UsmUser::auth_priv(
-                parsed_user_name,
-                auth_protocol,
-                localised_key,
-                priv_protocol,
-            )
+            let user = AuthPrivUser::new(user_name, auth_protocol, localised_key, priv_protocol)
+                .unwrap_or_else(|e| {
+                    eprintln!("error: failed to create USM user: {e}");
+                    process::exit(1);
+                });
+            SecurityConfig::AuthPriv {
+                user,
+                boots_store: Box::new(NullStore),
+            }
         }
         other => {
             eprintln!("error: unsupported USM_SECURITY_LEVEL '{other}'");
@@ -224,7 +246,21 @@ fn parse_usm_env() -> Option<(Vec<u8>, UsmUser)> {
         }
     };
 
-    Some((engine_id, usm_user))
+    Some((engine_id, config))
+}
+
+/// Read `USM_USER` from the environment and parse it into a [`UserName`].
+///
+/// Exits the process with an error message if the variable is absent or empty.
+fn parse_user_name_env() -> UserName {
+    let user_name = std::env::var("USM_USER").unwrap_or_else(|_| {
+        eprintln!("error: USM_USER required for authenticated security levels");
+        process::exit(1);
+    });
+    UserName::new(user_name).unwrap_or_else(|_| {
+        eprintln!("error: USM_USER must not be empty");
+        process::exit(1);
+    })
 }
 
 /// Read `USM_AUTH_PROTO` and `USM_AUTH_PASS` from the environment, parse the
