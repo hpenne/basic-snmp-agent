@@ -111,7 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 use basic_snmp_agent::AgentBuilder;
 use basic_snmp_agent::usm::auth::AuthProtocol;
 use basic_snmp_agent::usm::kdf::password_to_localised_key;
-use basic_snmp_agent::usm::user::{UserName, UsmUser};
+use basic_snmp_agent::usm::user::{AuthNoPrivUser, UserName, UsmUser};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine_id = b"\x80\x00\x1f\x88\x04my-agent";
@@ -123,11 +123,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         AuthProtocol::HmacSha256,
     )?;
 
-    let user = UsmUser::auth_no_priv(
+    let user: UsmUser = AuthNoPrivUser::new(
         UserName::new("operator")?,
         AuthProtocol::HmacSha256,
         localised_key,
-    );
+    )?
+    .into();
 
     let agent = AgentBuilder::new()
         .engine_id(engine_id.to_vec())
@@ -147,7 +148,7 @@ use basic_snmp_agent::AgentBuilder;
 use basic_snmp_agent::usm::auth::AuthProtocol;
 use basic_snmp_agent::usm::kdf::password_to_localised_key;
 use basic_snmp_agent::usm::privacy::PrivProtocol;
-use basic_snmp_agent::usm::user::{UserName, UsmUser};
+use basic_snmp_agent::usm::user::{AuthPrivUser, UserName, UsmUser};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine_id = b"\x80\x00\x1f\x88\x04my-agent";
@@ -159,12 +160,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // No separate privacy key needed — REQ-0084 derives it from localised_key.
-    let user = UsmUser::auth_priv(
+    let user: UsmUser = AuthPrivUser::new(
         UserName::new("secure-operator")?,
         AuthProtocol::HmacSha256,
         localised_key,
         PrivProtocol::Aes128,
-    );
+    )?
+    .into();
 
     let agent = AgentBuilder::new()
         .engine_id(engine_id.to_vec())

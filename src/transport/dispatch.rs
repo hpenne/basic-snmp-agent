@@ -1374,11 +1374,13 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
-        let alice = crate::usm::user::UsmUser::auth_no_priv(
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthNoPrivUser::new(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
-        );
+        )
+        .unwrap()
+        .into();
         let authenticated_frame = build_authenticated_frame(&auth_key_bytes);
         let mut tc = TestCtx::new();
         let result = {
@@ -1412,11 +1414,13 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let mib = crate::mib::Store::new();
-        let alice = crate::usm::user::UsmUser::auth_no_priv(
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthNoPrivUser::new(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&[0x42_u8; 32]),
-        );
+        )
+        .unwrap()
+        .into();
         // Build frame with an incorrect MAC (all-0xBB bytes)
         let frame_with_wrong_mac = snmpv3_frames::encode_get_request_with_auth_params(
             test_engine_id(),
@@ -1483,11 +1487,13 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let mib = crate::mib::Store::new();
-        let alice = crate::usm::user::UsmUser::auth_no_priv(
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthNoPrivUser::new(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&[0x42_u8; 32]),
-        );
+        )
+        .unwrap()
+        .into();
         // Build frame with authFlag but empty auth_params (malformed)
         let frame = snmpv3_frames::encode_get_request_with_auth_params(
             test_engine_id(),
@@ -1522,11 +1528,13 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let mib = crate::mib::Store::new();
-        let alice = crate::usm::user::UsmUser::auth_no_priv(
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthNoPrivUser::new(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&[0x42_u8; 32]),
-        );
+        )
+        .unwrap()
+        .into();
         // flags 0x01 = authFlag only (no reportableFlag)
         let frame = snmpv3_frames::encode_get_request_with_auth_params(
             test_engine_id(),
@@ -1560,11 +1568,13 @@ mod tests {
         use crate::usm::keys::SecretKey;
 
         let mib = crate::mib::Store::new();
-        let alice = crate::usm::user::UsmUser::auth_no_priv(
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthNoPrivUser::new(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&[0x42_u8; 32]),
-        );
+        )
+        .unwrap()
+        .into();
         let frame = snmpv3_frames::encode_get_request_with_auth_params(
             test_engine_id(),
             b"alice",
@@ -1686,11 +1696,13 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
-        let alice = crate::usm::user::UsmUser::auth_no_priv(
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthNoPrivUser::new(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
-        );
+        )
+        .unwrap()
+        .into();
         // boots=1 matches engine_boots=1; time=0 matches engine_time=0 (within 150s window)
         let frame = build_authenticated_frame_with_time(&auth_key_bytes, 1, 0);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
@@ -1725,11 +1737,13 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
-        let alice = crate::usm::user::UsmUser::auth_no_priv(
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthNoPrivUser::new(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
-        );
+        )
+        .unwrap()
+        .into();
         // boots=2 does not match engine_boots=1 → out of window
         let frame = build_authenticated_frame_with_time(&auth_key_bytes, 2, 0);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
@@ -1806,11 +1820,13 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
-        let alice = crate::usm::user::UsmUser::auth_no_priv(
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthNoPrivUser::new(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
-        );
+        )
+        .unwrap()
+        .into();
 
         // boots=2 does not match engine_boots=1 → out of window; flags=0x01 = authFlag only,
         // reportableFlag cleared, so agent must discard silently (no Report sent).
@@ -1839,11 +1855,13 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
-        let alice = crate::usm::user::UsmUser::auth_no_priv(
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthNoPrivUser::new(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
-        );
+        )
+        .unwrap()
+        .into();
         let frame = build_authenticated_frame_with_time(&auth_key_bytes, 2, 0);
         let mut tc = TestCtx::new()
             .with_not_in_time_windows(u32::MAX)
@@ -1900,11 +1918,13 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
-        let alice = crate::usm::user::UsmUser::auth_no_priv(
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthNoPrivUser::new(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
-        );
+        )
+        .unwrap()
+        .into();
         // boots=1 matches engine_boots=1, but msg_time=200, engine_time=0 → diff=200 > 150
         let frame = build_authenticated_frame_with_time(&auth_key_bytes, 1, 200);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
@@ -2090,12 +2110,14 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
-        let alice = crate::usm::user::UsmUser::auth_priv(
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthPrivUser::new(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
-        );
+        )
+        .unwrap()
+        .into();
         let frame = build_authpriv_frame(
             &auth_key_bytes,
             &auth_key_bytes[..16],
@@ -2209,12 +2231,14 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
-        let alice = crate::usm::user::UsmUser::auth_priv(
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthPrivUser::new(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
-        );
+        )
+        .unwrap()
+        .into();
         // Frame encrypted with a different key so the agent's derived key [0x42; 16] will not match.
         let frame = build_authpriv_frame(
             &auth_key_bytes,
@@ -2275,12 +2299,14 @@ mod tests {
         let boots = 1_u32;
         let time = 0_u32;
 
-        let alice = crate::usm::user::UsmUser::auth_priv(
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthPrivUser::new(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
-        );
+        )
+        .unwrap()
+        .into();
 
         // Build a frame with privacy_parameters of length 4 (not 8) and fake ciphertext.
         let zeroed_auth_params = vec![0_u8; mac_len];
@@ -2375,12 +2401,14 @@ mod tests {
         let boots = 1_u32;
         let time = 0_u32;
 
-        let alice = crate::usm::user::UsmUser::auth_priv(
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthPrivUser::new(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
-        );
+        )
+        .unwrap()
+        .into();
 
         // Build frame with flags = 0x03 (authPriv, no reportableFlag) and corrupted ciphertext.
         let fake_ciphertext = b"corrupted-ciphertext-that-wont-decode-as-scoped-pdu".to_vec();
@@ -2443,12 +2471,14 @@ mod tests {
 
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
-        let alice = crate::usm::user::UsmUser::auth_priv(
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthPrivUser::new(
             crate::usm::user::UserName::new("alice").unwrap(),
             AuthProtocol::HmacSha256,
             SecretKey::new_from_exposed_slice(&auth_key_bytes),
             PrivProtocol::Aes128,
-        );
+        )
+        .unwrap()
+        .into();
         // Frame encrypted with a mismatched key to trigger decryption failure.
         let frame = build_authpriv_frame(
             &auth_key_bytes,

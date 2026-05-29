@@ -16,7 +16,7 @@ use basic_snmp_agent::process_snmpv3_request;
 use basic_snmp_agent::transport::dispatch::DispatchContext;
 use basic_snmp_agent::usm::auth::AuthProtocol;
 use basic_snmp_agent::usm::keys::SecretKey;
-use basic_snmp_agent::usm::user::{UserName, UsmUser};
+use basic_snmp_agent::usm::user::{AuthNoPrivUser, UserName, UsmUser};
 use libfuzzer_sys::fuzz_target;
 
 static USER: OnceLock<UsmUser> = OnceLock::new();
@@ -24,11 +24,13 @@ static USER: OnceLock<UsmUser> = OnceLock::new();
 fn user() -> &'static UsmUser {
     USER.get_or_init(|| {
         let auth_key = SecretKey::new_from_exposed_slice(&[0xAB; 32]);
-        UsmUser::auth_no_priv(
+        AuthNoPrivUser::new(
             UserName::new("fuzz-user").expect("valid user name"),
             AuthProtocol::HmacSha256,
             auth_key,
         )
+        .expect("valid key length")
+        .into()
     })
 }
 

@@ -541,18 +541,18 @@ mod tests {
         // Verifies: REQ-0105
         use crate::usm::auth::AuthProtocol;
         use crate::usm::keys::SecretKey;
-        use crate::usm::user::{UserName, UsmUser};
+        use crate::usm::user::{AuthNoPrivUser, UserName, UsmUser};
         use rasn_snmp::v3::{Message as V3Message, USMSecurityParameters};
 
         let auth_key = SecretKey::new_from_exposed_slice(&[0x42_u8; 32]);
         let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42_u8; 32]);
         let auth_protocol = AuthProtocol::HmacSha256;
         let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
-        let user = Arc::new(UsmUser::auth_no_priv(
-            UserName::new("trapauth").unwrap(),
-            auth_protocol,
-            auth_key,
-        ));
+        let user: Arc<UsmUser> = Arc::new(
+            AuthNoPrivUser::new(UserName::new("trapauth").unwrap(), auth_protocol, auth_key)
+                .unwrap()
+                .into(),
+        );
         let sender = TrapSender::new(Instant::now(), engine_id, 1, Some(user)).unwrap();
         let (receiver, dest) = loopback_receiver();
         receiver
@@ -602,17 +602,21 @@ mod tests {
         use crate::usm::auth::AuthProtocol;
         use crate::usm::keys::SecretKey;
         use crate::usm::privacy::PrivProtocol;
-        use crate::usm::user::{UserName, UsmUser};
+        use crate::usm::user::{AuthPrivUser, UserName, UsmUser};
         use rasn_snmp::v3::{Message as V3Message, ScopedPduData, USMSecurityParameters};
 
         let auth_key = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
         let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
-        let user = Arc::new(UsmUser::auth_priv(
-            UserName::new("trappriv").unwrap(),
-            AuthProtocol::HmacSha256,
-            auth_key,
-            PrivProtocol::Aes128,
-        ));
+        let user: Arc<UsmUser> = Arc::new(
+            AuthPrivUser::new(
+                UserName::new("trappriv").unwrap(),
+                AuthProtocol::HmacSha256,
+                auth_key,
+                PrivProtocol::Aes128,
+            )
+            .unwrap()
+            .into(),
+        );
         let sender = TrapSender::new(Instant::now(), engine_id, 2, Some(user)).unwrap();
         let (receiver, dest) = loopback_receiver();
         receiver

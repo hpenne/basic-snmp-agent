@@ -1,5 +1,5 @@
-//! USM user representation, associating a user name with its security level
-//! and the key material required for that level.
+//! USM user representation, associating a user name with optional
+//! authentication and privacy credentials.
 //!
 //! # Requirements
 //! Implements: REQ-0075, REQ-0076, REQ-0077, REQ-0079, REQ-0083, REQ-0084, REQ-0090, REQ-0091, REQ-0092
@@ -177,11 +177,18 @@ impl TryFrom<u8> for SecurityLevel {
 
 // ── UsmUser ───────────────────────────────────────────────────────────────────
 
-/// A USM user entry, holding the user name and all key material required for
-/// its security level.
+/// A USM user entry, holding the user name and the credential material
+/// (authentication and/or privacy keys) that determines which security
+/// levels this user can satisfy.
 ///
-/// The [`UserCredentials`] enum ensures that invalid states (e.g. a privacy
-/// key without an authentication key) are unrepresentable at the type level.
+/// Per RFC 3414 §5, the user table stores credentials — not a security level.
+/// The security level is a per-message property determined by `msgFlags`.
+/// Use [`security_level()`](Self::security_level) to query the highest level
+/// this user's credentials can satisfy.
+///
+/// External callers construct a `UsmUser` via [`From<AuthNoPrivUser>`] or
+/// [`From<AuthPrivUser>`], which enforce correct credential combinations
+/// through the type system.
 ///
 /// `Clone` is intentionally not derived: [`SecretKey`] does not implement
 /// `Clone` to prevent accidental duplication of key material.
@@ -190,123 +197,23 @@ impl TryFrom<u8> for SecurityLevel {
 /// Implements: REQ-0084, REQ-0090, REQ-0091, REQ-0092
 pub struct UsmUser {
     name: UserName,
-    credentials: UserCredentials,
+    auth_credentials: Option<AuthCredentials>,
+    priv_credentials: Option<PrivCredentials>,
+}
+
+// Implements: REQ-0091, REQ-0092
+struct AuthCredentials {
+    protocol: AuthProtocol,
+    key: SecretKey,
+}
+
+// Implements: REQ-0091, REQ-0092
+struct PrivCredentials {
+    protocol: PrivProtocol,
+    key: SecretKey,
 }
 
 impl UsmUser {
-    /// Create a user that sends unauthenticated, unencrypted messages.
-    ///
-    /// # Requirements
-    /// Implements: REQ-0090, REQ-0091, REQ-0092
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use basic_snmp_agent::usm::user::{UsmUser, UserName, SecurityLevel};
-    ///
-    /// let name = UserName::new("public").unwrap();
-    /// let user = UsmUser::no_auth_no_priv(name);
-    /// assert_eq!(user.security_level(), SecurityLevel::NoAuthNoPriv);
-    /// ```
-    #[must_use]
-    pub fn no_auth_no_priv(name: UserName) -> Self {
-        Self {
-            name,
-            credentials: UserCredentials::NoAuthNoPriv,
-        }
-    }
-
-    /// Create a user that authenticates messages but does not encrypt them.
-    ///
-    /// # Requirements
-    /// Implements: REQ-0090, REQ-0091, REQ-0092
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use basic_snmp_agent::usm::user::{UsmUser, UserName, SecurityLevel};
-    /// use basic_snmp_agent::usm::auth::AuthProtocol;
-    /// use basic_snmp_agent::usm::keys::SecretKey;
-    ///
-    /// let name = UserName::new("alice").unwrap();
-    /// let auth_key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
-    /// let user = UsmUser::auth_no_priv(name, AuthProtocol::HmacSha256, auth_key);
-    /// assert_eq!(user.security_level(), SecurityLevel::AuthNoPriv);
-    /// ```
-    #[must_use]
-    pub fn auth_no_priv(name: UserName, auth_protocol: AuthProtocol, auth_key: SecretKey) -> Self {
-        Self {
-            name,
-            credentials: UserCredentials::AuthNoPriv {
-                auth_protocol,
-                auth_key,
-            },
-        }
-    }
-
-    /// Create a user that both authenticates and encrypts messages.
-    ///
-    /// The privacy key is derived internally as the leading bytes of `localised_key`,
-    /// taking `priv_protocol.key_len()` bytes. Embedders must not supply a
-    /// separate privacy key.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `localised_key.len() < priv_protocol.key_len()`. In practice this
-    /// cannot occur: all supported authentication protocols produce keys of at
-    /// least 32 bytes (SHA-256 → 32, SHA-512 → 64), which covers all supported
-    /// privacy protocols (AES-128 needs 16, AES-256 needs 32).
-    ///
-    /// # Requirements
-    /// Implements: REQ-0084, REQ-0090, REQ-0091, REQ-0092
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use basic_snmp_agent::usm::user::{UsmUser, UserName, SecurityLevel};
-    /// use basic_snmp_agent::usm::auth::AuthProtocol;
-    /// use basic_snmp_agent::usm::keys::SecretKey;
-    /// use basic_snmp_agent::usm::privacy::PrivProtocol;
-    ///
-    /// let name = UserName::new("bob").unwrap();
-    /// let localised_key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
-    /// let user = UsmUser::auth_priv(
-    ///     name,
-    ///     AuthProtocol::HmacSha256,
-    ///     localised_key,
-    ///     PrivProtocol::Aes128,
-    /// );
-    /// assert_eq!(user.security_level(), SecurityLevel::AuthPriv);
-    /// ```
-    #[must_use]
-    pub fn auth_priv(
-        name: UserName,
-        auth_protocol: AuthProtocol,
-        localised_key: SecretKey,
-        priv_protocol: PrivProtocol,
-    ) -> Self {
-        // REQ-0084: the privacy key is the leading N bytes of the localised
-        // authentication key, where N = priv_protocol.key_len(). Slicing before
-        // moving localised_key into the struct avoids a borrow-after-move.
-        let priv_key_bytes = localised_key
-            .as_bytes()
-            .get(..priv_protocol.key_len())
-            // The localised auth key is always >= priv key length: SHA-256 produces
-            // 32 bytes and SHA-512 produces 64 bytes; AES-128 needs 16 and AES-256
-            // needs 32. No valid protocol combination can trigger this.
-            .expect("auth key is always at least as long as the privacy key");
-        let priv_key = SecretKey::new_from_exposed_slice(priv_key_bytes);
-        Self {
-            name,
-            credentials: UserCredentials::AuthPriv {
-                auth_protocol,
-                auth_key: localised_key,
-                priv_protocol,
-                priv_key,
-            },
-        }
-    }
-
     /// Return the user name.
     ///
     /// # Requirements
@@ -322,10 +229,17 @@ impl UsmUser {
     /// Implements: REQ-0075, REQ-0076, REQ-0077
     #[must_use]
     pub fn security_level(&self) -> SecurityLevel {
-        match &self.credentials {
-            UserCredentials::NoAuthNoPriv => SecurityLevel::NoAuthNoPriv,
-            UserCredentials::AuthNoPriv { .. } => SecurityLevel::AuthNoPriv,
-            UserCredentials::AuthPriv { .. } => SecurityLevel::AuthPriv,
+        match (&self.auth_credentials, &self.priv_credentials) {
+            (Some(_), Some(_)) => SecurityLevel::AuthPriv,
+            (Some(_), None) => SecurityLevel::AuthNoPriv,
+            (None, None) => SecurityLevel::NoAuthNoPriv,
+            (None, Some(_)) => {
+                debug_assert!(
+                    false,
+                    "privacy credentials without authentication credentials"
+                );
+                SecurityLevel::NoAuthNoPriv
+            }
         }
     }
 
@@ -337,11 +251,7 @@ impl UsmUser {
     /// Implements: REQ-0092
     #[must_use]
     pub fn auth_protocol(&self) -> Option<AuthProtocol> {
-        match &self.credentials {
-            UserCredentials::AuthNoPriv { auth_protocol, .. }
-            | UserCredentials::AuthPriv { auth_protocol, .. } => Some(*auth_protocol),
-            UserCredentials::NoAuthNoPriv => None,
-        }
+        self.auth_credentials.as_ref().map(|a| a.protocol)
     }
 
     /// Return a reference to the authentication key, if configured.
@@ -352,11 +262,7 @@ impl UsmUser {
     /// Implements: REQ-0092
     #[must_use]
     pub fn auth_key(&self) -> Option<&SecretKey> {
-        match &self.credentials {
-            UserCredentials::AuthNoPriv { auth_key, .. }
-            | UserCredentials::AuthPriv { auth_key, .. } => Some(auth_key),
-            UserCredentials::NoAuthNoPriv => None,
-        }
+        self.auth_credentials.as_ref().map(|a| &a.key)
     }
 
     /// Return the privacy protocol, if configured.
@@ -367,10 +273,7 @@ impl UsmUser {
     /// Implements: REQ-0092
     #[must_use]
     pub fn priv_protocol(&self) -> Option<PrivProtocol> {
-        match &self.credentials {
-            UserCredentials::AuthPriv { priv_protocol, .. } => Some(*priv_protocol),
-            UserCredentials::NoAuthNoPriv | UserCredentials::AuthNoPriv { .. } => None,
-        }
+        self.priv_credentials.as_ref().map(|p| p.protocol)
     }
 
     /// Return a reference to the privacy key, if configured.
@@ -381,9 +284,17 @@ impl UsmUser {
     /// Implements: REQ-0092
     #[must_use]
     pub fn priv_key(&self) -> Option<&SecretKey> {
-        match &self.credentials {
-            UserCredentials::AuthPriv { priv_key, .. } => Some(priv_key),
-            UserCredentials::NoAuthNoPriv | UserCredentials::AuthNoPriv { .. } => None,
+        self.priv_credentials.as_ref().map(|p| &p.key)
+    }
+
+    // Implements: REQ-0090, REQ-0091, REQ-0092
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn no_auth_no_priv(name: UserName) -> Self {
+        Self {
+            name,
+            auth_credentials: None,
+            priv_credentials: None,
         }
     }
 }
@@ -392,26 +303,6 @@ impl fmt::Display for UsmUser {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name)
     }
-}
-
-// ── UserCredentials ───────────────────────────────────────────────────────────
-
-#[expect(
-    clippy::enum_variant_names,
-    reason = "NoAuthNoPriv / AuthNoPriv / AuthPriv are RFC 3414 security-level names; renaming would harm clarity"
-)]
-enum UserCredentials {
-    NoAuthNoPriv,
-    AuthNoPriv {
-        auth_protocol: AuthProtocol,
-        auth_key: SecretKey,
-    },
-    AuthPriv {
-        auth_protocol: AuthProtocol,
-        auth_key: SecretKey,
-        priv_protocol: PrivProtocol,
-        priv_key: SecretKey,
-    },
 }
 
 // ── InvalidKeyLength ──────────────────────────────────────────────────────────
@@ -563,7 +454,14 @@ impl AuthNoPrivUser {
 // Implements: REQ-0090
 impl From<AuthNoPrivUser> for UsmUser {
     fn from(user: AuthNoPrivUser) -> Self {
-        Self::auth_no_priv(user.name, user.auth_protocol, user.auth_key)
+        Self {
+            name: user.name,
+            auth_credentials: Some(AuthCredentials {
+                protocol: user.auth_protocol,
+                key: user.auth_key,
+            }),
+            priv_credentials: None,
+        }
     }
 }
 
@@ -703,12 +601,28 @@ impl AuthPrivUser {
 // Implements: REQ-0084, REQ-0090
 impl From<AuthPrivUser> for UsmUser {
     fn from(user: AuthPrivUser) -> Self {
-        Self::auth_priv(
-            user.name,
-            user.auth_protocol,
-            user.auth_key,
-            user.priv_protocol,
-        )
+        // REQ-0084: the privacy key is the leading N bytes of the localised
+        // authentication key, where N = priv_protocol.key_len().
+        let priv_key_bytes = user
+            .auth_key
+            .as_bytes()
+            .get(..user.priv_protocol.key_len())
+            // The localised auth key is always >= priv key length: SHA-256 produces
+            // 32 bytes and SHA-512 produces 64 bytes; AES-128 needs 16 and AES-256
+            // needs 32. No valid protocol combination can trigger this.
+            .expect("auth key is always at least as long as the privacy key");
+        let priv_key = SecretKey::new_from_exposed_slice(priv_key_bytes);
+        Self {
+            name: user.name,
+            auth_credentials: Some(AuthCredentials {
+                protocol: user.auth_protocol,
+                key: user.auth_key,
+            }),
+            priv_credentials: Some(PrivCredentials {
+                protocol: user.priv_protocol,
+                key: priv_key,
+            }),
+        }
     }
 }
 
@@ -740,6 +654,25 @@ mod tests {
         UserName::new(s).unwrap()
     }
 
+    fn auth_no_priv_user(name: &str, key_bytes: &[u8]) -> UsmUser {
+        let key = SecretKey::new_from_exposed_slice(key_bytes);
+        AuthNoPrivUser::new(user_name(name), AuthProtocol::HmacSha256, key)
+            .unwrap()
+            .into()
+    }
+
+    fn auth_priv_user(name: &str, key_bytes: &[u8]) -> UsmUser {
+        let key = SecretKey::new_from_exposed_slice(key_bytes);
+        AuthPrivUser::new(
+            user_name(name),
+            AuthProtocol::HmacSha256,
+            key,
+            PrivProtocol::Aes128,
+        )
+        .unwrap()
+        .into()
+    }
+
     #[test]
     fn given_non_empty_string_when_username_new_then_ok() {
         // Verifies: REQ-0091, REQ-0116
@@ -768,21 +701,14 @@ mod tests {
     #[test]
     fn auth_no_priv_has_correct_security_level() {
         // Verifies: REQ-0076
-        let auth_key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
-        let user = UsmUser::auth_no_priv(user_name("alice"), AuthProtocol::HmacSha256, auth_key);
+        let user = auth_no_priv_user("alice", &[0_u8; 32]);
         assert_eq!(user.security_level(), SecurityLevel::AuthNoPriv);
     }
 
     #[test]
     fn auth_priv_has_correct_security_level() {
         // Verifies: REQ-0077
-        let auth_key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
-        let user = UsmUser::auth_priv(
-            user_name("bob"),
-            AuthProtocol::HmacSha256,
-            auth_key,
-            PrivProtocol::Aes128,
-        );
+        let user = auth_priv_user("bob", &[0_u8; 32]);
         assert_eq!(user.security_level(), SecurityLevel::AuthPriv);
     }
 
@@ -796,21 +722,14 @@ mod tests {
     #[test]
     fn given_auth_no_priv_when_auth_key_then_some() {
         // Verifies: REQ-0092
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
-        let user = UsmUser::auth_no_priv(user_name("alice"), AuthProtocol::HmacSha256, auth_key);
+        let user = auth_no_priv_user("alice", &[0xAA_u8; 32]);
         assert_eq!(user.auth_key().unwrap().as_bytes(), &[0xAA_u8; 32]);
     }
 
     #[test]
     fn given_auth_priv_when_priv_key_then_some() {
         // Verifies: REQ-0084, REQ-0092
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xBB_u8; 32]);
-        let user = UsmUser::auth_priv(
-            user_name("bob"),
-            AuthProtocol::HmacSha256,
-            auth_key,
-            PrivProtocol::Aes128,
-        );
+        let user = auth_priv_user("bob", &[0xBB_u8; 32]);
         // REQ-0084: priv_key is the first 16 bytes of auth_key
         assert_eq!(user.priv_key().unwrap().as_bytes(), &[0xBB_u8; 16]);
     }
@@ -840,21 +759,14 @@ mod tests {
     #[test]
     fn given_auth_no_priv_user_when_name_then_returns_name() {
         // Verifies: REQ-0091
-        let auth_key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
-        let user = UsmUser::auth_no_priv(user_name("alice"), AuthProtocol::HmacSha256, auth_key);
+        let user = auth_no_priv_user("alice", &[0_u8; 32]);
         assert_eq!(user.name().as_str(), "alice");
     }
 
     #[test]
     fn given_auth_priv_user_when_name_then_returns_name() {
         // Verifies: REQ-0091
-        let auth_key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
-        let user = UsmUser::auth_priv(
-            user_name("bob"),
-            AuthProtocol::HmacSha256,
-            auth_key,
-            PrivProtocol::Aes128,
-        );
+        let user = auth_priv_user("bob", &[0_u8; 32]);
         assert_eq!(user.name().as_str(), "bob");
     }
 
@@ -871,8 +783,7 @@ mod tests {
     #[test]
     fn given_auth_no_priv_when_all_accessors_then_correct_values() {
         // Verifies: REQ-0092
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
-        let user = UsmUser::auth_no_priv(user_name("alice"), AuthProtocol::HmacSha256, auth_key);
+        let user = auth_no_priv_user("alice", &[0xAA_u8; 32]);
         assert_eq!(user.auth_protocol(), Some(AuthProtocol::HmacSha256));
         assert_eq!(user.auth_key().unwrap().as_bytes(), &[0xAA_u8; 32]);
         assert!(user.priv_protocol().is_none());
@@ -882,13 +793,7 @@ mod tests {
     #[test]
     fn given_auth_priv_when_all_accessors_then_correct_values() {
         // Verifies: REQ-0084, REQ-0092
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
-        let user = UsmUser::auth_priv(
-            user_name("bob"),
-            AuthProtocol::HmacSha256,
-            auth_key,
-            PrivProtocol::Aes128,
-        );
+        let user = auth_priv_user("bob", &[0xAA_u8; 32]);
         assert_eq!(user.security_level(), SecurityLevel::AuthPriv);
         assert_eq!(user.auth_protocol(), Some(AuthProtocol::HmacSha256));
         assert_eq!(user.auth_key().unwrap().as_bytes(), &[0xAA_u8; 32]);
@@ -901,13 +806,15 @@ mod tests {
     fn given_auth_priv_aes256_when_priv_key_then_first_32_bytes_of_auth_key() {
         // Verifies: REQ-0084
         // AES-256 requires a 32-byte privacy key, so the full auth_key is used.
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xBB_u8; 64]);
-        let user = UsmUser::auth_priv(
+        let key = SecretKey::new_from_exposed_slice(&[0xBB_u8; 64]);
+        let user: UsmUser = AuthPrivUser::new(
             user_name("carol"),
             AuthProtocol::HmacSha512,
-            auth_key,
+            key,
             PrivProtocol::Aes256,
-        );
+        )
+        .unwrap()
+        .into();
         assert_eq!(user.priv_key().unwrap().as_bytes(), &[0xBB_u8; 32]);
     }
 
@@ -916,13 +823,15 @@ mod tests {
         // Verifies: REQ-0084
         // SHA-256 produces exactly 32 bytes; AES-256 needs exactly 32 bytes.
         // This is the tightest valid combination: the full auth key becomes the priv key.
-        let auth_key = SecretKey::new_from_exposed_slice(&[0xCC_u8; 32]);
-        let user = UsmUser::auth_priv(
+        let key = SecretKey::new_from_exposed_slice(&[0xCC_u8; 32]);
+        let user: UsmUser = AuthPrivUser::new(
             user_name("dave"),
             AuthProtocol::HmacSha256,
-            auth_key,
+            key,
             PrivProtocol::Aes256,
-        );
+        )
+        .unwrap()
+        .into();
         assert_eq!(user.priv_key().unwrap().as_bytes(), &[0xCC_u8; 32]);
     }
 
@@ -932,13 +841,15 @@ mod tests {
         // Distinct byte values prove the priv key is the leading prefix of auth_key,
         // not some other subset or a copy of the full key.
         let auth_key_bytes: Vec<u8> = (0..32).collect();
-        let auth_key = SecretKey::new_from_exposed_slice(&auth_key_bytes);
-        let user = UsmUser::auth_priv(
+        let key = SecretKey::new_from_exposed_slice(&auth_key_bytes);
+        let user: UsmUser = AuthPrivUser::new(
             user_name("eve"),
             AuthProtocol::HmacSha256,
-            auth_key,
+            key,
             PrivProtocol::Aes128,
-        );
+        )
+        .unwrap()
+        .into();
         let expected_priv_key: Vec<u8> = (0..16).collect();
         assert_eq!(user.priv_key().unwrap().as_bytes(), &expected_priv_key);
     }

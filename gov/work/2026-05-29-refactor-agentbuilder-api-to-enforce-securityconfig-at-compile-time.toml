@@ -42,9 +42,9 @@ Messages at or above the floor are accepted if the user's credentials can satisf
 - [x] Amend RFC-0007 clauses for floor-based acceptance and capabilities-based user model
 - [x] Create AuthNoPrivUser and AuthPrivUser public types
 - [x] Create SecurityConfig enum
-- [ ] Implement From conversions
+- [x] Implement From conversions
 - [x] Refactor AgentBuilder to take SecurityConfig in new()
-- [ ] Convert internal UsmUser to capabilities-based model
+- [x] Convert internal UsmUser to capabilities-based model
 - [ ] Update dispatch logic for floor-based acceptance
 - [ ] Update all tests and test-agent binaries
 - [ ] Update README examples"""
@@ -86,12 +86,12 @@ category = "added"
 
 [[content.acceptance_criteria]]
 text = "UsmUser::auth_no_priv() and UsmUser::auth_priv() constructors removed from public API"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
 text = "Internal UsmUser converted to capabilities-based model with From<AuthNoPrivUser> and From<AuthPrivUser>"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]

@@ -231,11 +231,14 @@ fn build_authenticated_frame() -> Vec<u8> {
 fn write_auth_seeds(auth_corpus: &Path) {
     let auth_key_for_user =
         basic_snmp_agent::usm::keys::SecretKey::new_from_exposed_slice(&[0xAB; 32]);
-    let auth_user = basic_snmp_agent::usm::user::UsmUser::auth_no_priv(
-        basic_snmp_agent::usm::user::UserName::new("fuzz-user").expect("valid user name"),
-        basic_snmp_agent::usm::auth::AuthProtocol::HmacSha256,
-        auth_key_for_user,
-    );
+    let auth_user: basic_snmp_agent::usm::user::UsmUser =
+        basic_snmp_agent::usm::user::AuthNoPrivUser::new(
+            basic_snmp_agent::usm::user::UserName::new("fuzz-user").expect("valid user name"),
+            basic_snmp_agent::usm::auth::AuthProtocol::HmacSha256,
+            auth_key_for_user,
+        )
+        .expect("valid key length")
+        .into();
 
     let auth_seeds: &[(&str, Vec<u8>, bool)] = &[
         (
