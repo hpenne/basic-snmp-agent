@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-05-29-001"
 title = "Add cargo-deny for dependency auditing and duplicate detection"
-status = "active"
+status = "done"
 created = "2026-05-29"
 started = "2026-05-29"
+completed = "2026-05-29"
 
 [content]
 description = """
@@ -15,32 +16,32 @@ The check must run locally as part of `make pre-commit` and daily in CI via a sc
 
 ## Implementation plan
 
-- [ ] Create `deny.toml` with advisories and bans configuration
-- [ ] Add `cargo-deny` target to Makefile and wire into `pre-commit`
-- [ ] Create daily CI workflow (`.github/workflows/deny.yml`)
-- [ ] Verify `cargo deny check` passes on current dependency tree"""
+- [x] Create `deny.toml` with advisories and bans configuration
+- [x] Add `cargo-deny` target to Makefile and wire into `pre-commit`
+- [x] Create daily CI workflow (`.github/workflows/deny.yml`)
+- [x] Verify `cargo deny check` passes on current dependency tree"""
 
 [[content.acceptance_criteria]]
 text = "deny.toml configured with advisories (RUSTSEC) and bans (no duplicate crate versions)"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "cargo deny check target in Makefile, wired into pre-commit"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "daily CI workflow runs cargo deny check on schedule"
-status = "pending"
+status = "done"
 category = "added"
 
 [[content.acceptance_criteria]]
 text = "cargo deny check passes on current dependency tree"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "govctl check passes"
-status = "pending"
+status = "done"
 category = "chore"

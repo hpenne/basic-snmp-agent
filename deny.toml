@@ -1,0 +1,26 @@
+# Supply-chain checks: RUSTSEC advisories, duplicate crate versions, and licence compliance.
+
+[advisories]
+
+[bans]
+multiple-versions = "deny"
+highlight = "all"
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "Unlicense",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

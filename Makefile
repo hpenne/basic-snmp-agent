@@ -1,13 +1,17 @@
 PYTHON_FILES := $(shell find tools/ tests/ -name '*.py' -not -path '*/__pycache__/*')
 
-.PHONY: test trace clippy rust-test python-test python-lint behave-test fuzz-gen-seeds fuzz-1s fuzz-1m fuzz-10m fuzz-30m
+.PHONY: test trace clippy rust-test python-test python-lint behave-test fuzz-gen-seeds fuzz-1s fuzz-1m fuzz-10m fuzz-30m deny
 
 SNMPV3_DICT := $(CURDIR)/fuzz/snmpv3.dict
 
 # Run the full test suite: lint, Rust unit/doc tests, Python unit tests, and Behave system tests.
 test: clippy rust-test python-test behave-test
 
-pre-commit: clippy rust-test python-test python-lint fuzz-gen-seeds fuzz-1s trace check-format
+pre-commit: deny clippy rust-test python-test python-lint fuzz-gen-seeds fuzz-1s trace check-format
+
+# Audit dependencies for known vulnerabilities, duplicate crate versions, licence compliance, and source provenance.
+deny:
+	cargo deny check
 
 # Lint — workspace lints are configured in Cargo.toml.
 clippy:
