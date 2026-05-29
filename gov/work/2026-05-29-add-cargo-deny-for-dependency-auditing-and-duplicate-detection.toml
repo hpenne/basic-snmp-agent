@@ -1,0 +1,46 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-05-29-001"
+title = "Add cargo-deny for dependency auditing and duplicate detection"
+status = "active"
+created = "2026-05-29"
+started = "2026-05-29"
+
+[content]
+description = """
+Add `cargo-deny` to the project to enforce supply-chain hygiene.
+Two checks are required: advisory scanning against the RUSTSEC database, and banning duplicate versions of the same crate in the dependency tree.
+The check must run locally as part of `make pre-commit` and daily in CI via a scheduled GitHub Actions workflow.
+
+## Implementation plan
+
+- [ ] Create `deny.toml` with advisories and bans configuration
+- [ ] Add `cargo-deny` target to Makefile and wire into `pre-commit`
+- [ ] Create daily CI workflow (`.github/workflows/deny.yml`)
+- [ ] Verify `cargo deny check` passes on current dependency tree"""
+
+[[content.acceptance_criteria]]
+text = "deny.toml configured with advisories (RUSTSEC) and bans (no duplicate crate versions)"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "cargo deny check target in Makefile, wired into pre-commit"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "daily CI workflow runs cargo deny check on schedule"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "cargo deny check passes on current dependency tree"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"
