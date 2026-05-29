@@ -50,6 +50,7 @@ pub use crate::codec::{Oid, Value, Varbind, VarbindValue};
 pub use crate::transport::event_loop::ConnectionTimeoutConfig;
 pub use crate::transport::process_snmpv3_request;
 pub use crate::transport::{TrapPdu, TrapResult};
+pub use crate::usm::user::{AuthNoPrivUser, AuthPrivUser};
 pub use error::{AgentError, SetError, TrapError};
 
 use crate::transport::event_loop::{Command, DEFAULT_MAX_CONNECTIONS, EventLoop, EventLoopError};
@@ -213,6 +214,91 @@ impl Agent {
     }
 }
 
+// ── SecurityConfig ────────────────────────────────────────────────────────────
+
+/// The security configuration supplied to [`AgentBuilder`].
+///
+/// Each variant corresponds to one of the three USM security levels defined in
+/// RFC 3414. The variant chosen determines which key material is required and
+/// what behaviour the agent enforces when processing inbound requests and
+/// sending outbound traps.
+///
+/// # Requirements
+/// Implements: REQ-0075, REQ-0076, REQ-0077, REQ-0129
+///
+/// # Examples
+///
+/// ```
+/// use basic_snmp_agent::{SecurityConfig, AuthNoPrivUser, AuthPrivUser};
+/// use basic_snmp_agent::usm::boots::{EngineBootsStore, StoredBootsState};
+/// use basic_snmp_agent::usm::user::UserName;
+/// use basic_snmp_agent::usm::auth::AuthProtocol;
+/// use basic_snmp_agent::usm::keys::SecretKey;
+/// use basic_snmp_agent::usm::privacy::PrivProtocol;
+///
+/// struct NullStore;
+/// impl EngineBootsStore for NullStore {
+///     fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> { Ok(None) }
+///     fn save(&mut self, _: &[u8], _: u32) -> Result<(), std::io::Error> { Ok(()) }
+/// }
+///
+/// // No authentication or encryption.
+/// let _config = SecurityConfig::NoAuthNoPriv;
+///
+/// // Authentication without encryption.
+/// let key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+/// let user = AuthNoPrivUser::new(UserName::new("alice").unwrap(), AuthProtocol::HmacSha256, key).unwrap();
+/// assert_eq!(user.name().as_str(), "alice");
+/// let _config = SecurityConfig::AuthNoPriv { user, boots_store: Box::new(NullStore) };
+///
+/// // Authentication with encryption.
+/// let key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+/// let user = AuthPrivUser::new(UserName::new("bob").unwrap(), AuthProtocol::HmacSha256, key, PrivProtocol::Aes128).unwrap();
+/// assert_eq!(user.name().as_str(), "bob");
+/// let _config = SecurityConfig::AuthPriv { user, boots_store: Box::new(NullStore) };
+/// ```
+pub enum SecurityConfig {
+    /// No authentication and no privacy.
+    ///
+    /// Requests are accepted without any credential check. No engine-boots
+    /// counter is maintained.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0075
+    NoAuthNoPriv,
+
+    /// Authentication without privacy.
+    ///
+    /// Inbound requests must carry a valid HMAC-SHA-2 MAC; outbound traps are
+    /// authenticated. Payloads are transmitted in the clear. The engine-boots
+    /// counter is persisted via the provided [`EngineBootsStore`][crate::usm::boots::EngineBootsStore].
+    ///
+    /// # Requirements
+    /// Implements: REQ-0076
+    AuthNoPriv {
+        /// The authenticated user.
+        user: AuthNoPrivUser,
+        /// Storage for the persistent engine-boots counter (RFC 3414 §2.2).
+        boots_store: Box<dyn crate::usm::boots::EngineBootsStore + Send>,
+    },
+
+    /// Authentication with privacy.
+    ///
+    /// Inbound requests must carry a valid HMAC-SHA-2 MAC and an encrypted
+    /// payload; outbound traps are both authenticated and encrypted. The
+    /// engine-boots counter is persisted via the provided
+    /// [`EngineBootsStore`][crate::usm::boots::EngineBootsStore].
+    ///
+    /// # Requirements
+    /// Implements: REQ-0077
+    AuthPriv {
+        /// The authenticated and privacy-enabled user.
+        user: AuthPrivUser,
+        /// Storage for the persistent engine-boots counter (RFC 3414 §2.2).
+        boots_store: Box<dyn crate::usm::boots::EngineBootsStore + Send>,
+    },
+}
+
 // ── AgentBuilder ─────────────────────────────────────────────────────────────
 
 /// Builder for constructing and starting an [`Agent`].
@@ -237,7 +323,7 @@ pub struct AgentBuilder {
     usm_user: Option<crate::usm::user::UsmUser>,
     // Engine-boots persistence store; `None` means boots start at 1 and are not persisted.
     // Implements: REQ-0094, REQ-0095, REQ-0096
-    boots_store: Option<Box<dyn crate::usm::boots::EngineBootsStore>>,
+    boots_store: Option<Box<dyn crate::usm::boots::EngineBootsStore + Send>>,
     // Maximum number of concurrent TCP connections; defaults to DEFAULT_MAX_CONNECTIONS.
     max_connections: usize,
     // Idle-connection sweep configuration; defaults to ConnectionTimeoutConfig::default().
@@ -319,7 +405,7 @@ impl AgentBuilder {
     #[must_use]
     pub fn engine_boots_store(
         mut self,
-        store: impl crate::usm::boots::EngineBootsStore + 'static,
+        store: impl crate::usm::boots::EngineBootsStore + Send + 'static,
     ) -> Self {
         self.boots_store = Some(Box::new(store));
         self
@@ -862,5 +948,88 @@ mod tests {
             std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
             "listen_addr set before connection_timeout_config must be preserved"
         );
+    }
+
+    // ── SecurityConfig ────────────────────────────────────────────────────────
+
+    #[test]
+    fn given_no_auth_no_priv_variant_when_constructed_then_matches() {
+        // Verifies: REQ-0075, REQ-0077, REQ-0129
+        let config = SecurityConfig::NoAuthNoPriv;
+        assert!(matches!(config, SecurityConfig::NoAuthNoPriv));
+    }
+
+    #[test]
+    fn given_auth_no_priv_variant_when_constructed_then_holds_user_and_store() {
+        // Verifies: REQ-0076, REQ-0077, REQ-0129
+        use crate::usm::boots::{EngineBootsStore, StoredBootsState};
+
+        struct NullStore;
+        impl EngineBootsStore for NullStore {
+            fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> {
+                Ok(None)
+            }
+            fn save(&mut self, _: &[u8], _: u32) -> Result<(), std::io::Error> {
+                Ok(())
+            }
+        }
+
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::user::UserName;
+
+        let key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+        let user = AuthNoPrivUser::new(
+            UserName::new("alice").unwrap(),
+            AuthProtocol::HmacSha256,
+            key,
+        )
+        .unwrap();
+        let config = SecurityConfig::AuthNoPriv {
+            user,
+            boots_store: Box::new(NullStore),
+        };
+        let SecurityConfig::AuthNoPriv { user, .. } = config else {
+            panic!("expected AuthNoPriv variant");
+        };
+        assert_eq!(user.name().as_str(), "alice");
+    }
+
+    #[test]
+    fn given_auth_priv_variant_when_constructed_then_holds_user_and_store() {
+        // Verifies: REQ-0077, REQ-0129
+        use crate::usm::boots::{EngineBootsStore, StoredBootsState};
+
+        struct NullStore;
+        impl EngineBootsStore for NullStore {
+            fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> {
+                Ok(None)
+            }
+            fn save(&mut self, _: &[u8], _: u32) -> Result<(), std::io::Error> {
+                Ok(())
+            }
+        }
+
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::privacy::PrivProtocol;
+        use crate::usm::user::UserName;
+
+        let key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+        let user = AuthPrivUser::new(
+            UserName::new("bob").unwrap(),
+            AuthProtocol::HmacSha256,
+            key,
+            PrivProtocol::Aes128,
+        )
+        .unwrap();
+        let config = SecurityConfig::AuthPriv {
+            user,
+            boots_store: Box::new(NullStore),
+        };
+        let SecurityConfig::AuthPriv { user, .. } = config else {
+            panic!("expected AuthPriv variant");
+        };
+        assert_eq!(user.name().as_str(), "bob");
     }
 }

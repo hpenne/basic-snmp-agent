@@ -2,7 +2,7 @@
 //! and the key material required for that level.
 //!
 //! # Requirements
-//! Implements: REQ-0075, REQ-0076, REQ-0077, REQ-0079, REQ-0084, REQ-0090, REQ-0091, REQ-0092
+//! Implements: REQ-0075, REQ-0076, REQ-0077, REQ-0079, REQ-0083, REQ-0084, REQ-0090, REQ-0091, REQ-0092
 
 use std::fmt;
 
@@ -414,6 +414,322 @@ enum UserCredentials {
     },
 }
 
+// ── InvalidKeyLength ──────────────────────────────────────────────────────────
+
+/// Error returned when a key supplied to [`AuthNoPrivUser`] or [`AuthPrivUser`]
+/// has the wrong length for the chosen authentication protocol.
+///
+/// # Requirements
+/// Implements: REQ-0083
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidKeyLength {
+    // Fields are `pub` so callers can pattern-match the expected and actual lengths
+    // in tests and error-handling code without requiring accessor methods.
+    /// The length the protocol requires.
+    pub expected: usize,
+    /// The length of the supplied key.
+    pub actual: usize,
+}
+
+impl fmt::Display for InvalidKeyLength {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid key length: expected {} bytes, got {}",
+            self.expected, self.actual,
+        )
+    }
+}
+
+impl std::error::Error for InvalidKeyLength {}
+
+// ── Key validation helper ─────────────────────────────────────────────────────
+
+// Implements: REQ-0083
+fn validate_auth_key_length(
+    auth_protocol: AuthProtocol,
+    auth_key: &SecretKey,
+) -> Result<(), InvalidKeyLength> {
+    let expected = auth_protocol.key_len();
+    if auth_key.len() != expected {
+        return Err(InvalidKeyLength {
+            expected,
+            actual: auth_key.len(),
+        });
+    }
+    Ok(())
+}
+
+// ── AuthNoPrivUser ────────────────────────────────────────────────────────────
+
+/// A USM user configured for authentication without privacy (`authNoPriv`).
+///
+/// The constructor validates that the supplied key matches the required length
+/// for the chosen authentication protocol (REQ-0083: 32 bytes for
+/// HMAC-SHA-256, 64 bytes for HMAC-SHA-512).
+///
+/// Use [`From<AuthNoPrivUser> for UsmUser`] to convert into the type accepted
+/// by [`AgentBuilder`][crate::AgentBuilder].
+///
+/// # Requirements
+/// Implements: REQ-0083, REQ-0090, REQ-0091, REQ-0092
+///
+/// # Examples
+///
+/// ```
+/// use basic_snmp_agent::usm::user::{AuthNoPrivUser, UserName};
+/// use basic_snmp_agent::usm::auth::AuthProtocol;
+/// use basic_snmp_agent::usm::keys::SecretKey;
+///
+/// let name = UserName::new("alice").unwrap();
+/// let auth_key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+/// let user = AuthNoPrivUser::new(name, AuthProtocol::HmacSha256, auth_key).unwrap();
+/// assert_eq!(user.name().as_str(), "alice");
+/// ```
+pub struct AuthNoPrivUser {
+    name: UserName,
+    auth_protocol: AuthProtocol,
+    auth_key: SecretKey,
+}
+
+impl AuthNoPrivUser {
+    /// Create an `AuthNoPrivUser`, validating the key length against the protocol.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidKeyLength`] when `auth_key.len() != auth_protocol.key_len()`.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0083, REQ-0090, REQ-0091, REQ-0092
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use basic_snmp_agent::usm::user::{AuthNoPrivUser, UserName, InvalidKeyLength};
+    /// use basic_snmp_agent::usm::auth::AuthProtocol;
+    /// use basic_snmp_agent::usm::keys::SecretKey;
+    ///
+    /// // Valid: SHA-256 requires 32 bytes.
+    /// let key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+    /// let user = AuthNoPrivUser::new(UserName::new("alice").unwrap(), AuthProtocol::HmacSha256, key).unwrap();
+    /// assert_eq!(user.name().as_str(), "alice");
+    ///
+    /// // Invalid: 16 bytes is too short for SHA-256.
+    /// let short_key = SecretKey::new_from_exposed_slice(&[0_u8; 16]);
+    /// let err = AuthNoPrivUser::new(UserName::new("alice").unwrap(), AuthProtocol::HmacSha256, short_key).unwrap_err();
+    /// assert_eq!(err, InvalidKeyLength { expected: 32, actual: 16 });
+    /// ```
+    pub fn new(
+        name: UserName,
+        auth_protocol: AuthProtocol,
+        auth_key: SecretKey,
+    ) -> Result<Self, InvalidKeyLength> {
+        validate_auth_key_length(auth_protocol, &auth_key)?;
+        Ok(Self {
+            name,
+            auth_protocol,
+            auth_key,
+        })
+    }
+
+    /// Return the user name.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0091
+    #[must_use]
+    pub fn name(&self) -> &UserName {
+        &self.name
+    }
+
+    /// Return the authentication protocol.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0092
+    #[must_use]
+    pub fn auth_protocol(&self) -> AuthProtocol {
+        self.auth_protocol
+    }
+
+    /// Return a reference to the authentication key.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0092
+    #[must_use]
+    pub fn auth_key(&self) -> &SecretKey {
+        &self.auth_key
+    }
+}
+
+// Implements: REQ-0090
+impl From<AuthNoPrivUser> for UsmUser {
+    fn from(user: AuthNoPrivUser) -> Self {
+        Self::auth_no_priv(user.name, user.auth_protocol, user.auth_key)
+    }
+}
+
+impl fmt::Display for AuthNoPrivUser {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+impl fmt::Debug for AuthNoPrivUser {
+    // The auth key is intentionally omitted to prevent accidental leakage.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuthNoPrivUser")
+            .field("name", &self.name)
+            .field("auth_protocol", &self.auth_protocol)
+            .field("auth_key", &"[REDACTED]")
+            .finish()
+    }
+}
+
+// ── AuthPrivUser ──────────────────────────────────────────────────────────────
+
+/// A USM user configured for authentication with privacy (`authPriv`).
+///
+/// The constructor validates that the supplied key matches the required length
+/// for the chosen authentication protocol (REQ-0083: 32 bytes for
+/// HMAC-SHA-256, 64 bytes for HMAC-SHA-512). The privacy key is derived
+/// internally from the leading bytes of the authentication key when the user
+/// is converted into a [`UsmUser`] (REQ-0084).
+///
+/// Use [`From<AuthPrivUser> for UsmUser`] to convert into the type accepted
+/// by [`AgentBuilder`][crate::AgentBuilder].
+///
+/// # Requirements
+/// Implements: REQ-0083, REQ-0084, REQ-0090, REQ-0091, REQ-0092
+///
+/// # Examples
+///
+/// ```
+/// use basic_snmp_agent::usm::user::{AuthPrivUser, UserName};
+/// use basic_snmp_agent::usm::auth::AuthProtocol;
+/// use basic_snmp_agent::usm::keys::SecretKey;
+/// use basic_snmp_agent::usm::privacy::PrivProtocol;
+///
+/// let name = UserName::new("bob").unwrap();
+/// let auth_key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+/// let user = AuthPrivUser::new(name, AuthProtocol::HmacSha256, auth_key, PrivProtocol::Aes128).unwrap();
+/// assert_eq!(user.name().as_str(), "bob");
+/// ```
+pub struct AuthPrivUser {
+    name: UserName,
+    auth_protocol: AuthProtocol,
+    auth_key: SecretKey,
+    priv_protocol: PrivProtocol,
+}
+
+impl AuthPrivUser {
+    /// Create an `AuthPrivUser`, validating the key length against the protocol.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidKeyLength`] when `auth_key.len() != auth_protocol.key_len()`.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0083, REQ-0084, REQ-0090, REQ-0091, REQ-0092
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use basic_snmp_agent::usm::user::{AuthPrivUser, UserName, InvalidKeyLength};
+    /// use basic_snmp_agent::usm::auth::AuthProtocol;
+    /// use basic_snmp_agent::usm::keys::SecretKey;
+    /// use basic_snmp_agent::usm::privacy::PrivProtocol;
+    ///
+    /// // Valid: SHA-256 requires 32 bytes.
+    /// let key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+    /// let user = AuthPrivUser::new(UserName::new("bob").unwrap(), AuthProtocol::HmacSha256, key, PrivProtocol::Aes128).unwrap();
+    /// assert_eq!(user.name().as_str(), "bob");
+    ///
+    /// // Invalid: 16 bytes is too short for SHA-256.
+    /// let short_key = SecretKey::new_from_exposed_slice(&[0_u8; 16]);
+    /// let err = AuthPrivUser::new(UserName::new("bob").unwrap(), AuthProtocol::HmacSha256, short_key, PrivProtocol::Aes128).unwrap_err();
+    /// assert_eq!(err, InvalidKeyLength { expected: 32, actual: 16 });
+    /// ```
+    pub fn new(
+        name: UserName,
+        auth_protocol: AuthProtocol,
+        auth_key: SecretKey,
+        priv_protocol: PrivProtocol,
+    ) -> Result<Self, InvalidKeyLength> {
+        validate_auth_key_length(auth_protocol, &auth_key)?;
+        Ok(Self {
+            name,
+            auth_protocol,
+            auth_key,
+            priv_protocol,
+        })
+    }
+
+    /// Return the user name.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0091
+    #[must_use]
+    pub fn name(&self) -> &UserName {
+        &self.name
+    }
+
+    /// Return the authentication protocol.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0092
+    #[must_use]
+    pub fn auth_protocol(&self) -> AuthProtocol {
+        self.auth_protocol
+    }
+
+    /// Return a reference to the authentication key.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0092
+    #[must_use]
+    pub fn auth_key(&self) -> &SecretKey {
+        &self.auth_key
+    }
+
+    /// Return the privacy protocol.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0092
+    #[must_use]
+    pub fn priv_protocol(&self) -> PrivProtocol {
+        self.priv_protocol
+    }
+}
+
+// Implements: REQ-0084, REQ-0090
+impl From<AuthPrivUser> for UsmUser {
+    fn from(user: AuthPrivUser) -> Self {
+        Self::auth_priv(
+            user.name,
+            user.auth_protocol,
+            user.auth_key,
+            user.priv_protocol,
+        )
+    }
+}
+
+impl fmt::Display for AuthPrivUser {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+impl fmt::Debug for AuthPrivUser {
+    // The auth key is intentionally omitted to prevent accidental leakage.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuthPrivUser")
+            .field("name", &self.name)
+            .field("auth_protocol", &self.auth_protocol)
+            .field("auth_key", &"[REDACTED]")
+            .field("priv_protocol", &self.priv_protocol)
+            .finish()
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -731,5 +1047,278 @@ mod tests {
         // Exercises UsmUser::fmt, which delegates to the user name's Display impl.
         let user = UsmUser::no_auth_no_priv(user_name("test"));
         assert_eq!(user.to_string(), "test");
+    }
+
+    // ── InvalidKeyLength ──────────────────────────────────────────────────────
+
+    #[test]
+    fn given_invalid_key_length_when_display_then_includes_expected_and_actual() {
+        // Verifies: REQ-0083
+        let err = InvalidKeyLength {
+            expected: 32,
+            actual: 16,
+        };
+        assert_eq!(
+            err.to_string(),
+            "invalid key length: expected 32 bytes, got 16"
+        );
+    }
+
+    #[test]
+    fn given_invalid_key_length_when_std_error_then_implements_trait() {
+        // Verifies: REQ-0083
+        let err = InvalidKeyLength {
+            expected: 64,
+            actual: 32,
+        };
+        let err_ref: &dyn std::error::Error = &err;
+        assert!(err_ref.source().is_none());
+    }
+
+    // ── AuthNoPrivUser ────────────────────────────────────────────────────────
+
+    #[test]
+    fn given_valid_key_length_when_new_auth_no_priv_user_then_ok() {
+        // Verifies: REQ-0083, REQ-0090, REQ-0091, REQ-0092
+        let key = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
+        let user = AuthNoPrivUser::new(user_name("alice"), AuthProtocol::HmacSha256, key).unwrap();
+        assert_eq!(user.name().as_str(), "alice");
+        assert_eq!(user.auth_protocol(), AuthProtocol::HmacSha256);
+        assert_eq!(user.auth_key().as_bytes(), &[0xAA_u8; 32]);
+    }
+
+    #[test]
+    fn given_wrong_key_length_when_new_auth_no_priv_user_then_error() {
+        // Verifies: REQ-0083
+        let short_key = SecretKey::new_from_exposed_slice(&[0_u8; 16]);
+        let err = AuthNoPrivUser::new(user_name("alice"), AuthProtocol::HmacSha256, short_key)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            InvalidKeyLength {
+                expected: 32,
+                actual: 16
+            }
+        );
+    }
+
+    #[test]
+    fn given_sha512_valid_key_when_new_auth_no_priv_user_then_ok() {
+        // Verifies: REQ-0083, REQ-0090
+        let key = SecretKey::new_from_exposed_slice(&[0xBB_u8; 64]);
+        let user = AuthNoPrivUser::new(user_name("alice"), AuthProtocol::HmacSha512, key).unwrap();
+        assert_eq!(user.name().as_str(), "alice");
+        assert_eq!(user.auth_protocol(), AuthProtocol::HmacSha512);
+        assert_eq!(user.auth_key().as_bytes(), &[0xBB_u8; 64]);
+    }
+
+    #[test]
+    fn given_sha512_wrong_key_when_new_auth_no_priv_user_then_error() {
+        // Verifies: REQ-0083
+        let short_key = SecretKey::new_from_exposed_slice(&[0_u8; 32]); // 32 bytes, not 64
+        let err = AuthNoPrivUser::new(user_name("alice"), AuthProtocol::HmacSha512, short_key)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            InvalidKeyLength {
+                expected: 64,
+                actual: 32
+            }
+        );
+    }
+
+    #[test]
+    fn given_auth_no_priv_user_when_into_usm_user_then_correct_security_level() {
+        // Verifies: REQ-0090, REQ-0091, REQ-0092
+        let key = SecretKey::new_from_exposed_slice(&[0xCC_u8; 32]);
+        let auth_no_priv_user =
+            AuthNoPrivUser::new(user_name("alice"), AuthProtocol::HmacSha256, key).unwrap();
+        let usm_user: UsmUser = auth_no_priv_user.into();
+        assert_eq!(usm_user.security_level(), SecurityLevel::AuthNoPriv);
+        assert_eq!(usm_user.name().as_str(), "alice");
+        assert_eq!(usm_user.auth_protocol(), Some(AuthProtocol::HmacSha256));
+        assert_eq!(usm_user.auth_key().unwrap().as_bytes(), &[0xCC_u8; 32]);
+    }
+
+    #[test]
+    fn given_auth_no_priv_user_when_accessors_then_correct_values() {
+        // Verifies: REQ-0091, REQ-0092
+        let key = SecretKey::new_from_exposed_slice(&[0xDD_u8; 32]);
+        let user = AuthNoPrivUser::new(user_name("alice"), AuthProtocol::HmacSha256, key).unwrap();
+        assert_eq!(user.name().as_str(), "alice");
+        assert_eq!(user.auth_protocol(), AuthProtocol::HmacSha256);
+        assert_eq!(user.auth_key().as_bytes(), &[0xDD_u8; 32]);
+    }
+
+    #[test]
+    fn given_auth_no_priv_user_when_displayed_then_shows_user_name() {
+        // Verifies: REQ-0091
+        let key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+        let user = AuthNoPrivUser::new(user_name("alice"), AuthProtocol::HmacSha256, key).unwrap();
+        assert_eq!(user.to_string(), "alice");
+    }
+
+    // ── AuthPrivUser ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn given_valid_key_length_when_new_auth_priv_user_then_ok() {
+        // Verifies: REQ-0083, REQ-0090, REQ-0091, REQ-0092
+        let key = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
+        let user = AuthPrivUser::new(
+            user_name("bob"),
+            AuthProtocol::HmacSha256,
+            key,
+            PrivProtocol::Aes128,
+        )
+        .unwrap();
+        assert_eq!(user.name().as_str(), "bob");
+        assert_eq!(user.auth_protocol(), AuthProtocol::HmacSha256);
+        assert_eq!(user.auth_key().as_bytes(), &[0xAA_u8; 32]);
+        assert_eq!(user.priv_protocol(), PrivProtocol::Aes128);
+    }
+
+    #[test]
+    fn given_wrong_key_length_when_new_auth_priv_user_then_error() {
+        // Verifies: REQ-0083
+        let short_key = SecretKey::new_from_exposed_slice(&[0_u8; 16]);
+        let err = AuthPrivUser::new(
+            user_name("bob"),
+            AuthProtocol::HmacSha256,
+            short_key,
+            PrivProtocol::Aes128,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            InvalidKeyLength {
+                expected: 32,
+                actual: 16
+            }
+        );
+    }
+
+    #[test]
+    fn given_sha512_valid_key_when_new_auth_priv_user_then_ok() {
+        // Verifies: REQ-0083, REQ-0090
+        let key = SecretKey::new_from_exposed_slice(&[0xCC_u8; 64]);
+        let user = AuthPrivUser::new(
+            user_name("bob"),
+            AuthProtocol::HmacSha512,
+            key,
+            PrivProtocol::Aes256,
+        )
+        .unwrap();
+        assert_eq!(user.name().as_str(), "bob");
+        assert_eq!(user.auth_protocol(), AuthProtocol::HmacSha512);
+        assert_eq!(user.auth_key().as_bytes(), &[0xCC_u8; 64]);
+        assert_eq!(user.priv_protocol(), PrivProtocol::Aes256);
+    }
+
+    #[test]
+    fn given_sha512_wrong_key_when_new_auth_priv_user_then_error() {
+        // Verifies: REQ-0083
+        let short_key = SecretKey::new_from_exposed_slice(&[0_u8; 32]); // 32 bytes, not 64
+        let err = AuthPrivUser::new(
+            user_name("bob"),
+            AuthProtocol::HmacSha512,
+            short_key,
+            PrivProtocol::Aes256,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            InvalidKeyLength {
+                expected: 64,
+                actual: 32
+            }
+        );
+    }
+
+    #[test]
+    fn given_auth_priv_user_when_into_usm_user_then_correct_security_level() {
+        // Verifies: REQ-0090, REQ-0091
+        let key = SecretKey::new_from_exposed_slice(&[0xBB_u8; 32]);
+        let auth_priv_user = AuthPrivUser::new(
+            user_name("bob"),
+            AuthProtocol::HmacSha256,
+            key,
+            PrivProtocol::Aes128,
+        )
+        .unwrap();
+        let usm_user: UsmUser = auth_priv_user.into();
+        assert_eq!(usm_user.security_level(), SecurityLevel::AuthPriv);
+        assert_eq!(usm_user.name().as_str(), "bob");
+    }
+
+    #[test]
+    fn given_auth_priv_user_aes256_when_into_usm_user_then_correct_values() {
+        // Verifies: REQ-0084, REQ-0090, REQ-0091, REQ-0092
+        let key = SecretKey::new_from_exposed_slice(&[0xDD_u8; 64]);
+        let auth_priv_user = AuthPrivUser::new(
+            user_name("carol"),
+            AuthProtocol::HmacSha512,
+            key,
+            PrivProtocol::Aes256,
+        )
+        .unwrap();
+        let usm_user: UsmUser = auth_priv_user.into();
+        assert_eq!(usm_user.security_level(), SecurityLevel::AuthPriv);
+        assert_eq!(usm_user.name().as_str(), "carol");
+        assert_eq!(usm_user.auth_protocol(), Some(AuthProtocol::HmacSha512));
+        // REQ-0084: priv_key is the first 32 bytes of auth_key for AES-256
+        assert_eq!(usm_user.priv_key().unwrap().as_bytes(), &[0xDD_u8; 32]);
+        assert_eq!(usm_user.priv_protocol(), Some(PrivProtocol::Aes256));
+    }
+
+    #[test]
+    fn given_auth_priv_user_when_into_usm_user_then_priv_key_derived() {
+        // Verifies: REQ-0084
+        // The privacy key must be the leading priv_protocol.key_len() bytes of auth_key.
+        let key_bytes: Vec<u8> = (0..32_u8).collect();
+        let key = SecretKey::new_from_exposed_slice(&key_bytes);
+        let auth_priv_user = AuthPrivUser::new(
+            user_name("bob"),
+            AuthProtocol::HmacSha256,
+            key,
+            PrivProtocol::Aes128,
+        )
+        .unwrap();
+        let usm_user: UsmUser = auth_priv_user.into();
+        let expected_priv_key: Vec<u8> = (0..16_u8).collect();
+        assert_eq!(
+            usm_user.priv_key().unwrap().as_bytes(),
+            expected_priv_key.as_slice()
+        );
+    }
+
+    #[test]
+    fn given_auth_priv_user_when_accessors_then_correct_values() {
+        // Verifies: REQ-0091, REQ-0092
+        let key = SecretKey::new_from_exposed_slice(&[0xEE_u8; 32]);
+        let user = AuthPrivUser::new(
+            user_name("bob"),
+            AuthProtocol::HmacSha256,
+            key,
+            PrivProtocol::Aes128,
+        )
+        .unwrap();
+        assert_eq!(user.name().as_str(), "bob");
+        assert_eq!(user.auth_protocol(), AuthProtocol::HmacSha256);
+        assert_eq!(user.auth_key().as_bytes(), &[0xEE_u8; 32]);
+        assert_eq!(user.priv_protocol(), PrivProtocol::Aes128);
+    }
+
+    #[test]
+    fn given_auth_priv_user_when_displayed_then_shows_user_name() {
+        // Verifies: REQ-0091
+        let key = SecretKey::new_from_exposed_slice(&[0_u8; 32]);
+        let user = AuthPrivUser::new(
+            user_name("bob"),
+            AuthProtocol::HmacSha256,
+            key,
+            PrivProtocol::Aes128,
+        )
+        .unwrap();
+        assert_eq!(user.to_string(), "bob");
     }
 }
