@@ -46,7 +46,7 @@ Messages at or above the floor are accepted if the user's credentials can satisf
 - [x] Refactor AgentBuilder to take SecurityConfig in new()
 - [ ] Convert internal UsmUser to capabilities-based model
 - [ ] Update dispatch logic for floor-based acceptance
-- [x] Update all tests and test-agent binaries
+- [ ] Update all tests and test-agent binaries
 - [ ] Update README examples"""
 
 [[content.acceptance_criteria]]
