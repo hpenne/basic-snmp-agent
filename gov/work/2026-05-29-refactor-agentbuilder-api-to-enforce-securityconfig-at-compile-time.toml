@@ -1,0 +1,104 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-05-29-002"
+title = "Refactor AgentBuilder API to enforce SecurityConfig at compile time"
+status = "active"
+created = "2026-05-29"
+started = "2026-05-29"
+refs = [
+    "RFC-0007",
+    "ADR-0023",
+    "ADR-0024",
+]
+
+[content]
+description = """
+Refactor the AgentBuilder public API so that required security parameters are enforced at compile time rather than silently defaulting to insecure values.
+
+## Motivation
+
+The current API allows constructing an authenticated agent (authNoPriv or authPriv) without providing an EngineBootsStore.
+This silently defaults to boots=1, which breaks timeliness validation (RFC 3414 §3.2) and risks AES IV reuse (RFC 3826 §3.1) across restarts.
+
+Additionally, the current UsmUser type bakes the security level into the user, but per RFC 3414 §5 the security level is a per-message property — the user table only stores credentials (capabilities).
+The current exact-match security-level enforcement (REQ-0079) also prevents accepting messages at a higher security level than the configured minimum, which is unnecessarily restrictive.
+
+## Design
+
+- **RFC-0007 amendment:** Replace exact security-level match (REQ-0079) with minimum-floor semantics.
+Refactor C-USM-MODEL and C-USM-USERS to separate user credentials (capabilities) from agent security policy (minimum floor).
+- **External API types:** `AuthNoPrivUser` (name + auth protocol + auth key) and `AuthPrivUser` (name + auth protocol + auth key + priv protocol) provide compile-time proof of credential availability.
+- **SecurityConfig enum:** `NoAuthNoPriv`, `AuthNoPriv { user, boots_store }`, `AuthPriv { user, boots_store }` — bundles the required parameters so illegal states are unrepresentable.
+- **AgentBuilder::new(SecurityConfig):** The mandatory parameter moves to the constructor; optional parameters (listen address, max connections, timeout config, engine ID) stay as builder methods with defaults.
+- **Internal UsmUser:** Capabilities-based (name + optional auth + optional priv).
+`From<AuthNoPrivUser>` and `From<AuthPrivUser>` convert at construction time.
+- **Message acceptance:** The SecurityConfig variant sets a minimum floor.
+Messages at or above the floor are accepted if the user's credentials can satisfy the requested level.
+
+## Implementation plan
+
+- [ ] Amend RFC-0007 clauses for floor-based acceptance and capabilities-based user model
+- [ ] Create AuthNoPrivUser and AuthPrivUser public types
+- [ ] Create SecurityConfig enum
+- [ ] Refactor AgentBuilder to take SecurityConfig in new()
+- [ ] Convert internal UsmUser to capabilities-based model
+- [ ] Implement From conversions
+- [ ] Update dispatch logic for floor-based acceptance
+- [ ] Update all tests and test-agent binaries
+- [ ] Update README examples"""
+
+[[content.acceptance_criteria]]
+text = "AgentBuilder::new takes SecurityConfig as mandatory parameter; optional params stay as builder methods"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "Code compiles without EngineBootsStore only for NoAuthNoPriv; AuthNoPriv and AuthPriv require it"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "README examples updated to use new API"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Amend RFC-0007 C-USM-MODEL and C-USM-USERS to replace exact security-level match with minimum-floor semantics and capabilities-based user model"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "AuthNoPrivUser and AuthPrivUser public types for compile-time credential enforcement"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "SecurityConfig enum (NoAuthNoPriv, AuthNoPriv, AuthPriv) that bundles user + boots store"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "UsmUser::auth_no_priv() and UsmUser::auth_priv() constructors removed from public API"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "Internal UsmUser converted to capabilities-based model with From<AuthNoPrivUser> and From<AuthPrivUser>"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Dispatch accepts messages at or above SecurityConfig minimum floor if user credentials can satisfy the level"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "All test-agent binaries under tests/ compile and pass with the new SecurityConfig API"
+status = "pending"
+category = "chore"
