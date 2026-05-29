@@ -117,6 +117,7 @@ mio, hmac, sha2, aes, cfb-mode, getrandom, log. No other external crates without
 - Do *NOT* add external dependencies without permission.
 - Follow strict RFC compliance when implementing SNMP. Do not assume behavior — verify against the relevant RFC text. Wait for user confirmation before deviating from RFC specifications.
 - Use red/green TDD
+- Do not use "is_ok()", "is_some()" or similar to check values in unit tests. Verify the contained value as well.
 
 ### Gherkin / BDD
 
