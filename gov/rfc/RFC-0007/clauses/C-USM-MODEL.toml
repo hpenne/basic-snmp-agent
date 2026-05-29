@@ -15,18 +15,28 @@ text = """
 
 [REQ-0076] The agent MUST be configured with exactly one USM user at construction time. Support for more than one concurrently configured user is explicit future work and is out of scope for this RFC.
 
-[REQ-0077] The configured user's security level MUST be fixed at `Agent` construction time and MUST NOT be modifiable by any SNMP protocol operation.
+[REQ-0077] The agent's minimum acceptable security level MUST be fixed at construction time and MUST NOT be modifiable by any SNMP protocol operation.
 
 [REQ-0078] The agent MUST reject any inbound USM message whose `msgUserName` field does not match the configured user's name, and MUST respond with a Report PDU carrying the `usmStatsUnknownUserNames` counter as specified in RFC 3414 §3.2.
 
-[REQ-0079] The agent MUST reject any inbound USM message whose `msgFlags` security level does not exactly equal the configured user's security level, and MUST respond with a Report PDU carrying the `usmStatsUnsupportedSecLevels` counter as specified in RFC 3414 §3.2.
+[REQ-0079] The agent MUST reject any inbound USM message whose `msgFlags` security level is below the configured minimum, and MUST respond with a Report PDU carrying the `usmStatsUnsupportedSecLevels` counter as specified in RFC 3414 §3.2.
 
-[REQ-0080] The agent MUST process engine-ID discovery exchanges per RFC 3414 §4 regardless of the configured user's security level. Discovery probes carrying an empty `msgAuthoritativeEngineID` MUST be handled before user-name and security-level enforcement apply.
+[REQ-0130] The agent MUST reject any inbound USM message whose `msgFlags` security level is above the security capabilities of the user identified by the message's `msgUserName` field, and MUST respond with a Report PDU carrying the `usmStatsUnsupportedSecLevels` counter as specified in RFC 3414 §3.2.
+
+[REQ-0080] The agent MUST process engine-ID discovery exchanges per RFC 3414 §4 regardless of the configured minimum security level. Discovery probes carrying an empty `msgAuthoritativeEngineID` MUST be handled before user-name and security-level enforcement apply.
 
 **Rationale:**
 
-RFC 3414's default processing treats the user's configured security level as a minimum requirement: a manager that names a user but asserts `noAuthNoPriv` in `msgFlags` is processed without authentication, which allows anyone who has observed a user name (trivial — it is in plaintext in every USM header) to bypass authentication. Requiring an exact match between the incoming and configured level closes this downgrade path without introducing a full VACM layer. Deployments that need multiple access profiles will need multi-user support, which is called out as future work.
+The minimum security level is an agent-level policy that sets a floor for inbound messages.
+Per RFC 3414 §5, the security level is a per-message property determined by `msgFlags`, not a per-user attribute — each user entry in the USM user table stores only credentials (authentication and privacy protocols and keys), not a security level.
+Enforcing a minimum floor rather than an exact match allows the agent to accept messages at a higher security level than the configured minimum, provided the identified user has the credentials to satisfy the requested level.
+This is both RFC-compliant and future-proof for multi-user deployments where different users may have different credential sets.
 
-A single configured user is the minimum viable USM deployment and keeps the public construction API small. When multi-user support lands, the public API is expected to change in a breaking way so that user-name selection, per-user context, and trap-user selection can all be revisited together.
+The downgrade-attack concern that motivated the original exact-match design (v0.1.0) is addressed by the floor (REQ-0079): a `noAuthNoPriv` message is still rejected when the minimum is `authNoPriv` or higher.
+The ceiling check (REQ-0130) prevents a message from requesting a security level that the identified user cannot satisfy — for example, requesting `authPriv` when the user only has authentication keys.
+Without this check, the agent would attempt cryptographic operations with missing key material.
+
+A single configured user is the minimum viable USM deployment and keeps the public construction API small.
+When multi-user support lands, the public API is expected to change in a breaking way so that user-name selection, per-user context, and trap-user selection can all be revisited together.
 
 Engine-ID discovery must remain available at all configured levels because it is a protocol-level prerequisite to authenticated exchanges: a manager cannot localise keys or construct authenticated messages until it knows the authoritative engine ID, so the discovery exchange cannot itself require authentication."""

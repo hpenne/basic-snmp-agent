@@ -9,10 +9,15 @@ since = "0.1.0"
 
 [content]
 text = """
-[REQ-0105] Outbound trap PDUs MUST be authenticated and, if applicable, encrypted using the single configured USM user's credentials at that user's configured security level.
+[REQ-0105] Outbound trap PDUs MUST be secured at the agent's configured minimum security level, using the configured user's credentials.
 
-[REQ-0106] If the configured user's security level is `noAuthNoPriv`, outbound traps MUST be sent without authentication or encryption.
+[REQ-0106] If the configured minimum security level is `noAuthNoPriv`, outbound traps MUST be sent without authentication or encryption.
 
 **Rationale:**
 
-With a single configured user, there is no ambiguity about which credentials to use for outbound traps: the trap sender uses the same user entry as inbound request processing. The security level applied to traps matches the user's configured level, so an agent configured for `authPriv` sends authenticated and encrypted traps, and an agent configured for `noAuthNoPriv` sends cleartext traps. This keeps the outbound and inbound security stories consistent under one configuration."""
+With a single configured user, there is no ambiguity about which credentials to use for outbound traps: the trap sender uses the same user entry as inbound request processing.
+The security level applied to traps matches the agent's configured minimum, so an agent configured for `authPriv` sends authenticated and encrypted traps, and an agent configured for `noAuthNoPriv` sends cleartext traps.
+This keeps the outbound and inbound security stories consistent under one configuration.
+
+Note that inbound messages may be accepted at a level higher than the configured minimum (see C-USM-MODEL REQ-0079 and REQ-0130), but outbound traps are always sent at the minimum.
+This is deliberate: the agent has no way to know what security level each trap receiver expects, so it uses the configured policy level."""

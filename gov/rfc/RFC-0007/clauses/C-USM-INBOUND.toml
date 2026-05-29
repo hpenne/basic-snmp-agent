@@ -13,9 +13,9 @@ text = """
 
 [REQ-0101] For inbound messages at `authPriv` security level, the agent MUST decrypt the `encryptedPDU` field using the privacy key derived per C-USM-KEYS REQ-0084 and the privacy protocol specified by the user entry. If decryption fails, the agent MUST discard the message and MUST respond with a Report PDU carrying the `usmStatsDecryptionErrors` counter.
 
-[REQ-0102] The agent MUST process USM security parameters in the order specified by RFC 3414 §3.2: user-name lookup, then security-level enforcement, then authentication verification (if applicable), then time-window validation (if authenticated), then decryption (if applicable).
+[REQ-0102] The agent MUST process USM security parameters in the order specified by RFC 3414 §3.2: user-name lookup, then security-level enforcement, then authentication verification (if applicable), then time-window validation (if authenticated), then decryption (if applicable). Security-model validation (REQ-0115) precedes this sequence.
 
-[REQ-0103] For inbound messages at `noAuthNoPriv` security level, the agent MUST NOT perform authentication or decryption. The message MUST be processed using only the user-name and security-level checks specified in C-USM-MODEL (REQ-0078 and REQ-0079).
+[REQ-0103] For inbound messages at `noAuthNoPriv` security level that pass the security-level floor check (C-USM-MODEL REQ-0079), the agent MUST NOT perform authentication or decryption. The message MUST be processed using only the user-name check specified in C-USM-MODEL REQ-0078.
 
 [REQ-0104] On `contextEngineID` mismatch — where the scoped PDU's `contextEngineID` does not match the agent's configured `snmpEngineID` — the agent MUST respond with a Report PDU carrying the `snmpUnknownEngineIDs` counter per RFC 3412 §7.2.3, rather than silently discarding. This requirement supersedes RFC-0005:C-ENGINE REQ-0057, which is retired.
 
@@ -27,8 +27,16 @@ text = """
 
 The processing order in REQ-0102 mirrors RFC 3414 §3.2 and is security-critical: checking the user name and security level before attempting cryptographic operations avoids wasting CPU on messages that will be rejected, and ensures that Report PDUs for user-name or level mismatches are sent without requiring valid keys.
 
-REQ-0104 replaces RFC-0005 REQ-0057's silent-discard behaviour with the RFC 3412-compliant Report PDU response. Silent discard is simpler but leaves the manager unable to distinguish a `contextEngineID` mismatch from packet loss, making misconfiguration harder to diagnose.
+REQ-0103 specifies that `noAuthNoPriv` messages that survive the floor check bypass cryptographic processing entirely.
+Under floor-based acceptance (C-USM-MODEL REQ-0079), a `noAuthNoPriv` message only reaches this point if the agent's configured minimum is `noAuthNoPriv`.
 
-REQ-0107 is stated explicitly because the response security level is not implied by any other requirement. REQ-0079 enforces that inbound requests match the user's level, and the dispatch code uses the user's credentials for response encoding, so correct behaviour follows — but the absence of an explicit requirement previously allowed an implementation that sent cleartext responses to authenticated requests to pass all checks.
+REQ-0104 replaces RFC-0005 REQ-0057's silent-discard behaviour with the RFC 3412-compliant Report PDU response.
+Silent discard is simpler but leaves the manager unable to distinguish a `contextEngineID` mismatch from packet loss, making misconfiguration harder to diagnose.
 
-Security-model validation (REQ-0115) is the outermost dispatch gate: RFC 3412 §7.2 step 4 requires the message processor to verify that the security model indicated in the message is one that the engine supports before invoking any security-model-specific processing. An agent that implements only USM must reject any other value. Without this check, a crafted message with an unsupported `msgSecurityModel` could bypass USM processing entirely, reaching the PDU handler unauthenticated."""
+REQ-0107 is stated explicitly because the response security level is not implied by any other requirement.
+Under floor-based acceptance, the request's security level may differ from the agent's configured minimum (e.g., an `authPriv` request to an `authNoPriv` agent).
+The response must match the request's level, not the minimum — an `authPriv` request always receives an `authPriv` response.
+
+Security-model validation (REQ-0115) is the outermost dispatch gate: RFC 3412 §7.2 step 4 requires the message processor to verify that the security model indicated in the message is one that the engine supports before invoking any security-model-specific processing.
+An agent that implements only USM must reject any other value.
+Without this check, a crafted message with an unsupported `msgSecurityModel` could bypass USM processing entirely, reaching the PDU handler unauthenticated."""

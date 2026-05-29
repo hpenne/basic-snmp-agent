@@ -13,22 +13,32 @@ text = """
 
 [REQ-0091] The agent MUST accept a single USM user entry at `Agent` construction time. The user entry MUST comprise:
 - A user name (non-empty UTF-8 string).
-- A security level (`noAuthNoPriv`, `authNoPriv`, or `authPriv`).
-- For `authNoPriv` and `authPriv`: an authentication protocol (HMAC-SHA-256 or HMAC-SHA-512) and a localised authentication key of the length required by C-USM-KEYS.
-- For `authPriv`: additionally a privacy protocol (AES-128-CFB or AES-256-CFB). The privacy key is derived from the authentication key per C-USM-KEYS.
-- For `noAuthNoPriv`: no key material.
+- For users with authentication capability: an authentication protocol (HMAC-SHA-256 or HMAC-SHA-512) and a localised authentication key of the length required by C-USM-KEYS.
+- For users with privacy capability: additionally a privacy protocol (AES-128-CFB or AES-256-CFB). The privacy key is derived from the authentication key per C-USM-KEYS.
+- A user with privacy capability MUST also have authentication capability.
 
-[REQ-0092] The type representing a user entry MUST enforce the following constraints at compile time:
-- A `noAuthNoPriv` user carries no authentication or privacy fields.
-- An `authNoPriv` user carries authentication fields but no privacy fields.
-- An `authPriv` user carries both authentication and privacy fields.
-- The localised authentication key length MUST be determined by the authentication protocol variant, not by a runtime parameter.
-It MUST be impossible to construct a user entry that pairs `noAuthNoPriv` with key material, or `authNoPriv` with a privacy protocol, or an authentication key of the wrong length for its protocol.
+[REQ-0092] The configuration API MUST make it impossible at compile time to:
+- Construct a user with privacy capability but without authentication capability.
+- Configure an agent that requires authentication without also providing an engine-boots persistence store.
+- Supply an authentication key of the wrong length for its protocol.
 
 [REQ-0116] The agent MUST reject at construction time any user entry whose user name is empty (zero-length).
 
+[REQ-0129] The agent's minimum acceptable security level MUST be configured together with the user entry and engine-boots persistence store as a single configuration unit, so that the dependencies between these values are enforced at compile time rather than at runtime.
+
 **Rationale:**
 
-Encoding security-level and key-length constraints into the type system means misconfiguration (e.g., claiming authPriv without providing a privacy protocol, attaching key material to a noAuthNoPriv user, or supplying a 32-byte key for HMAC-SHA-512) is caught at compile time rather than surfacing as a runtime panic or silent misbehaviour. This follows Rust's "make illegal states unrepresentable" idiom and eliminates an entire class of configuration-validation code paths and their associated tests.
+Encoding credential and configuration constraints into the type system means misconfiguration (e.g., claiming privacy capability without providing an authentication protocol, or configuring authenticated operation without an engine-boots persistence store) is caught at compile time rather than surfacing as a runtime panic or silent misbehaviour.
+This follows Rust's "make illegal states unrepresentable" idiom and eliminates an entire class of configuration-validation code paths and their associated tests.
 
-Rejecting empty user names at construction (REQ-0116) makes the "non-empty" constraint in REQ-0091 a hard error rather than a documentation-only statement. An empty user name is never valid in USM: RFC 3414 §2.1 defines the user name as the identity under which authentication credentials are selected, and an empty identity would match no legitimate user entry in any conforming manager. Catching this at the configuration boundary prevents the agent from entering a state where the user-name matching logic in REQ-0078 behaves in undefined or surprising ways."""
+Per RFC 3414 §5, each user entry in the USM user table stores authentication and privacy credentials (protocols and keys) — not a security level.
+The security level is a per-message property determined by `msgFlags`.
+The user's credentials determine the highest security level the user can satisfy, while the agent's minimum security level (see C-USM-MODEL REQ-0077) determines the lowest level the agent will accept.
+Separating user credentials from agent security policy aligns with the RFC model and prepares for multi-user support, where different users may have different credential sets under the same agent-level security policy.
+
+Bundling the minimum security level, user entry, and engine-boots store into a single configuration unit (REQ-0129) ensures that the engine-boots store is always present when authentication is configured.
+Without this coupling, an authenticated agent could silently default to a non-persistent boots counter, breaking timeliness validation (RFC 3414 §3.2 step 7b) and risking AES IV reuse (RFC 3826 §3.1.2) across restarts.
+
+Rejecting empty user names at construction (REQ-0116) makes the "non-empty" constraint in REQ-0091 a hard error rather than a documentation-only statement.
+An empty user name is never valid in USM: RFC 3414 §2.1 defines the user name as the identity under which authentication credentials are selected, and an empty identity would match no legitimate user entry in any conforming manager.
+Catching this at the configuration boundary prevents the agent from entering a state where the user-name matching logic in REQ-0078 behaves in undefined or surprising ways."""

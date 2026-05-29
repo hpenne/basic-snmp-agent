@@ -17,5 +17,6 @@ SNMPv1, SNMPv2c, community-string authentication, HMAC-MD5, HMAC-SHA-1, DES, VAC
 **Rationale:** USM is the security model that the SNMP ecosystem actually deploys; extending the agent from noAuthNoPriv to authNoPriv and authPriv is a prerequisite for production use.
 A single configured user is the minimum viable USM deployment and avoids the complexity of user-name selection, per-user access control (VACM), and runtime user management.
 Pre-derived localised keys at the configuration boundary keep password handling out of the library; a separate derivation helper covers the common case.
-Strict security-level matching (incoming level must equal the configured user's level) closes the msgFlags downgrade path without introducing VACM.
+The agent enforces a minimum security-level floor: inbound messages below the configured minimum are rejected, while messages at or above the minimum are accepted if the identified user's credentials can satisfy the requested level.
+This closes the msgFlags downgrade path without introducing VACM, while remaining compatible with future multi-user support.
 Boots-counter persistence is delegated to an application-provided storage trait so the library imposes no filesystem policy on embedders."""

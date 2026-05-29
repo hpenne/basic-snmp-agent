@@ -3,12 +3,13 @@
 [govctl]
 id = "RFC-0007"
 title = "SNMP USM Authentication and Privacy"
-version = "0.1.0"
+version = "0.2.0"
 status = "normative"
 phase = "stable"
 owners = ["@hpenne"]
 created = "2026-04-15"
-updated = "2026-04-28"
+updated = "2026-05-29"
+signature = "1c89a8dc50dcd1da865224c7505e3d814b0b23b50c490adadcd432a4ebea7a6e"
 
 [[sections]]
 title = "Summary"
@@ -26,6 +27,11 @@ clauses = [
     "clauses/C-USM-INBOUND.toml",
     "clauses/C-USM-TRAPS.toml",
 ]
+
+[[changelog]]
+version = "0.2.0"
+date = "2026-05-29"
+notes = "Replace exact security-level match with minimum-floor semantics; separate user credentials from agent security policy; require engine-boots store when authentication is configured"
 
 [[changelog]]
 version = "0.1.0"
