@@ -186,7 +186,9 @@ pub enum Command {
 /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
 /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
 /// let (event_loop, _bound_addr, sender) =
-///     EventLoop::new(addr, engine_id, 1, None, DEFAULT_MAX_CONNECTIONS,
+///     EventLoop::new(addr, engine_id, 1, None,
+///                    basic_snmp_agent::usm::user::SecurityLevel::NoAuthNoPriv,
+///                    DEFAULT_MAX_CONNECTIONS,
 ///                    ConnectionTimeoutConfig::default()).unwrap();
 /// sender.send(Command::Shutdown).unwrap();
 /// ```
@@ -299,7 +301,9 @@ struct ConnectionState {
 /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
 /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
 /// let (event_loop, bound_addr, sender) =
-///     EventLoop::new(addr, engine_id, 1, None, DEFAULT_MAX_CONNECTIONS,
+///     EventLoop::new(addr, engine_id, 1, None,
+///                    basic_snmp_agent::usm::user::SecurityLevel::NoAuthNoPriv,
+///                    DEFAULT_MAX_CONNECTIONS,
 ///                    ConnectionTimeoutConfig::default()).unwrap();
 ///
 /// let handle = std::thread::spawn(move || event_loop.run());
@@ -356,6 +360,9 @@ pub struct EventLoop {
     /// Configured USM user; `None` when no USM user is configured.
     // Implements: REQ-0076
     usm_user: Option<std::sync::Arc<crate::usm::user::UsmUser>>,
+    /// The agent's configured minimum acceptable security level.
+    // Implements: REQ-0077
+    minimum_security_level: crate::usm::user::SecurityLevel,
 }
 
 impl EventLoop {
@@ -379,7 +386,7 @@ impl EventLoop {
     /// [`EventLoopError::Registration`] if mio token registration fails.
     ///
     /// # Requirements
-    /// Implements: REQ-0048, REQ-0050, REQ-0055, REQ-0068, REQ-0069, REQ-0072
+    /// Implements: REQ-0048, REQ-0050, REQ-0055, REQ-0068, REQ-0069, REQ-0072, REQ-0077
     ///
     /// # Examples
     ///
@@ -392,7 +399,9 @@ impl EventLoop {
     /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
     /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
     /// let (event_loop, bound_addr, sender) =
-    ///     EventLoop::new(addr, engine_id, 1, None, DEFAULT_MAX_CONNECTIONS,
+    ///     EventLoop::new(addr, engine_id, 1, None,
+    ///                    basic_snmp_agent::usm::user::SecurityLevel::NoAuthNoPriv,
+    ///                    DEFAULT_MAX_CONNECTIONS,
     ///                    ConnectionTimeoutConfig::default()).unwrap();
     /// println!("listening on {bound_addr}");
     /// ```
@@ -401,6 +410,7 @@ impl EventLoop {
         engine_id: Vec<u8>,
         engine_boots: u32,
         usm_user: Option<std::sync::Arc<crate::usm::user::UsmUser>>,
+        minimum_security_level: crate::usm::user::SecurityLevel,
         max_connections: usize,
         timeout_config: ConnectionTimeoutConfig,
     ) -> Result<(Self, SocketAddr, CommandSender), EventLoopError> {
@@ -445,6 +455,7 @@ impl EventLoop {
             decryption_errors_counter: 0,
             unknown_security_models_counter: 0,
             usm_user,
+            minimum_security_level,
         };
         let sender = CommandSender { tx, waker };
 
@@ -700,6 +711,7 @@ impl EventLoop {
                     decryption_errors_counter: &mut self.decryption_errors_counter,
                     unknown_security_models_counter: &mut self.unknown_security_models_counter,
                     usm_user: self.usm_user.as_deref(),
+                    minimum_security_level: self.minimum_security_level,
                 },
                 &self.store,
             ) else {
@@ -859,6 +871,7 @@ mod tests {
             test_engine_id(),
             1,
             None,
+            crate::usm::user::SecurityLevel::NoAuthNoPriv,
             max_connections,
             ConnectionTimeoutConfig::default(),
         )
@@ -1091,6 +1104,7 @@ mod tests {
             decryption_errors_counter: 0,
             unknown_security_models_counter: 0,
             usm_user: None,
+            minimum_security_level: crate::usm::user::SecurityLevel::NoAuthNoPriv,
         };
 
         // Connect to the std listener so the TcpStream is valid. mio's
@@ -1800,6 +1814,7 @@ mod tests {
             test_engine_id(),
             1,
             None,
+            crate::usm::user::SecurityLevel::NoAuthNoPriv,
             DEFAULT_MAX_CONNECTIONS,
             short_timeout,
         )
@@ -1850,6 +1865,7 @@ mod tests {
             test_engine_id(),
             1,
             None,
+            crate::usm::user::SecurityLevel::NoAuthNoPriv,
             max_conns,
             pressure_config,
         )
@@ -1905,6 +1921,7 @@ mod tests {
             test_engine_id(),
             1,
             None,
+            crate::usm::user::SecurityLevel::NoAuthNoPriv,
             DEFAULT_MAX_CONNECTIONS,
             config,
         )
@@ -1973,6 +1990,7 @@ mod tests {
             test_engine_id(),
             1,
             None,
+            crate::usm::user::SecurityLevel::NoAuthNoPriv,
             3, // max_connections: 1 connection + headroom(2) = 3 >= 3 -> pressure
             config,
         )

@@ -45,7 +45,7 @@ Messages at or above the floor are accepted if the user's credentials can satisf
 - [x] Implement From conversions
 - [x] Refactor AgentBuilder to take SecurityConfig in new()
 - [x] Convert internal UsmUser to capabilities-based model
-- [ ] Update dispatch logic for floor-based acceptance
+- [x] Update dispatch logic for floor-based acceptance
 - [ ] Update all tests and test-agent binaries
 - [ ] Update README examples"""
 
@@ -96,7 +96,7 @@ category = "chore"
 
 [[content.acceptance_criteria]]
 text = "Dispatch accepts messages at or above SecurityConfig minimum floor if user credentials can satisfy the level"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]

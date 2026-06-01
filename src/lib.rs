@@ -418,7 +418,7 @@ impl AgentBuilder {
     /// the UDP socket for outbound traps, and spawns the event loop thread.
     ///
     /// # Requirements
-    /// Implements: REQ-0037, REQ-0048, REQ-0050, REQ-0051, REQ-0052, REQ-0053, REQ-0054, REQ-0055
+    /// Implements: REQ-0037, REQ-0048, REQ-0050, REQ-0051, REQ-0052, REQ-0053, REQ-0054, REQ-0055, REQ-0077
     ///
     /// # Errors
     ///
@@ -436,6 +436,13 @@ impl AgentBuilder {
         if self.engine_id.len() < 5 || self.engine_id.len() > 32 {
             return Err(AgentError::InvalidEngineId);
         }
+
+        // Implements: REQ-0077
+        let minimum_security_level = match &self.security {
+            SecurityConfig::NoAuthNoPriv => crate::usm::user::SecurityLevel::NoAuthNoPriv,
+            SecurityConfig::AuthNoPriv { .. } => crate::usm::user::SecurityLevel::AuthNoPriv,
+            SecurityConfig::AuthPriv { .. } => crate::usm::user::SecurityLevel::AuthPriv,
+        };
 
         let (usm_user, mut boots_store) = match self.security {
             SecurityConfig::NoAuthNoPriv => (None, None),
@@ -469,6 +476,7 @@ impl AgentBuilder {
             self.engine_id,
             engine_boots,
             usm_user.clone(),
+            minimum_security_level,
             self.max_connections,
             self.timeout_config,
         )

@@ -87,6 +87,7 @@ impl DispatchCounters {
     fn context<'a>(
         &'a mut self,
         usm_user: Option<&'a basic_snmp_agent::usm::user::UsmUser>,
+        minimum_security_level: basic_snmp_agent::usm::user::SecurityLevel,
     ) -> DispatchContext<'a> {
         DispatchContext {
             engine_id: ENGINE_ID,
@@ -100,6 +101,7 @@ impl DispatchCounters {
             decryption_errors_counter: &mut self.decryption_errors,
             unknown_security_models_counter: &mut self.unknown_security_models,
             usm_user,
+            minimum_security_level,
         }
     }
 }
@@ -151,7 +153,10 @@ fn write_snmpv3_request_seeds(corpus: &Path) {
     for (name, encoded) in seeds {
         // Verify the seed actually reaches the dispatch path before writing.
         let mut counters = DispatchCounters::new();
-        let mut ctx = counters.context(None);
+        let mut ctx = counters.context(
+            None,
+            basic_snmp_agent::usm::user::SecurityLevel::NoAuthNoPriv,
+        );
         let response = basic_snmp_agent::process_snmpv3_request(encoded, &mut ctx, &empty_mib());
         assert!(
             response.is_some(),
@@ -297,7 +302,10 @@ fn write_auth_seeds(auth_corpus: &Path) {
         // Verify the seed exercises the dispatch path (may produce a response or None,
         // but must not panic). Seeds with a valid HMAC must produce an actual response.
         let mut counters = DispatchCounters::new();
-        let mut ctx = counters.context(Some(&auth_user));
+        let mut ctx = counters.context(
+            Some(&auth_user),
+            basic_snmp_agent::usm::user::SecurityLevel::AuthNoPriv,
+        );
         let response = basic_snmp_agent::process_snmpv3_request(encoded, &mut ctx, &empty_mib());
         if *expect_response {
             assert!(

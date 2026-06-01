@@ -74,7 +74,7 @@ const REPORTABLE_FLAG: u8 = 0x04;
 /// Engine state and statistics passed to each inbound frame dispatch.
 ///
 /// # Requirements
-/// Implements: REQ-0078, REQ-0079, REQ-0093, REQ-0094, REQ-0098, REQ-0100, REQ-0101, REQ-0104, REQ-0115
+/// Implements: REQ-0077, REQ-0078, REQ-0079, REQ-0093, REQ-0094, REQ-0098, REQ-0100, REQ-0101, REQ-0104, REQ-0115, REQ-0130
 pub struct DispatchContext<'a> {
     /// The agent's authoritative engine ID.
     pub engine_id: &'a [u8],
@@ -105,6 +105,10 @@ pub struct DispatchContext<'a> {
     /// Optional configured USM user; `None` when no USM user is configured (REQ-0078, REQ-0079).
     // Implements: REQ-0078, REQ-0079
     pub usm_user: Option<&'a crate::usm::user::UsmUser>,
+    /// The agent's configured minimum acceptable security level (REQ-0077, REQ-0079).
+    /// Messages with a security level below this floor are rejected.
+    // Implements: REQ-0077, REQ-0079
+    pub minimum_security_level: crate::usm::user::SecurityLevel,
 }
 
 /// Return a copy of `raw_message` with the `msgAuthenticationParameters` bytes zeroed.
@@ -236,7 +240,7 @@ fn emit_unknown_security_model_response(
 /// the flag set are silently discarded per RFC 3412 §7.1.3a.
 ///
 /// # Requirements
-/// Implements: REQ-0056, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0102, REQ-0103, REQ-0104, REQ-0107, REQ-0109, REQ-0115
+/// Implements: REQ-0056, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0077, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0102, REQ-0103, REQ-0104, REQ-0107, REQ-0109, REQ-0115, REQ-0130
 ///
 /// # Examples
 ///
@@ -265,6 +269,7 @@ fn emit_unknown_security_model_response(
 ///     decryption_errors_counter: &mut decryption_errors,
 ///     unknown_security_models_counter: &mut unknown_security_models,
 ///     usm_user: None,
+///     minimum_security_level: basic_snmp_agent::usm::user::SecurityLevel::NoAuthNoPriv,
 /// };
 /// // Garbage bytes produce no response (silently discarded).
 /// let result = process_snmpv3_request(b"\x00\x01\x02", &mut ctx, &mib);
@@ -352,33 +357,42 @@ pub fn process_snmpv3_request(
         .ok();
     }
 
-    // REQ-0079, REQ-0103: security-level enforcement — runs after user-name lookup.
-    // If a USM user is configured, derive the security level from msgFlags and compare
-    // against the configured user's level. The invalid combination (privFlag without
-    // authFlag) is treated as a mismatch. For noAuthNoPriv messages that pass this
-    // check, authentication and decryption are skipped naturally (REQ-0103).
-    if let Some(user) = ctx.usm_user {
-        let msg_level = crate::usm::user::SecurityLevel::try_from(v3_msg.usm.security_flags);
-        if msg_level.ok() != Some(user.security_level()) {
-            *ctx.unsupported_sec_levels_counter =
-                ctx.unsupported_sec_levels_counter.saturating_add(1);
-            if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
-                trace!("unsupported security level with reportableFlag unset, discarding silently");
-                return None;
-            }
-            return crate::codec::encode_v3_report(
-                v3_msg.msg_id,
-                ctx.engine_id,
-                ctx.engine_boots,
-                ctx.engine_time,
-                &UNSUPPORTED_SEC_LEVELS_OID,
-                *ctx.unsupported_sec_levels_counter,
-            )
-            .inspect_err(|encode_error| {
-                debug!("failed to encode unsupported-sec-level report: {encode_error}");
-            })
-            .ok();
+    // REQ-0079, REQ-0103, REQ-0130: security-level enforcement — runs after user-name lookup.
+    // Two checks:
+    // 1. Floor: reject if msg_level < minimum_security_level (REQ-0079)
+    // 2. Ceiling: reject if msg_level > user's capabilities (REQ-0130)
+    // The invalid combination (privFlag without authFlag) is treated as a rejection.
+    // For noAuthNoPriv messages that pass both checks, authentication and decryption
+    // are skipped naturally (REQ-0103).
+    let msg_level = crate::usm::user::SecurityLevel::try_from(v3_msg.usm.security_flags);
+    let reject = match msg_level {
+        Ok(level) => {
+            // REQ-0079: below the configured floor
+            level < ctx.minimum_security_level
+            // REQ-0130: above what the user can satisfy (if a user is configured)
+            || ctx.usm_user.is_some_and(|user| level > user.security_level())
         }
+        // Invalid flags (e.g. privFlag without authFlag)
+        Err(_) => true,
+    };
+    if reject {
+        *ctx.unsupported_sec_levels_counter = ctx.unsupported_sec_levels_counter.saturating_add(1);
+        if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
+            trace!("unsupported security level with reportableFlag unset, discarding silently");
+            return None;
+        }
+        return crate::codec::encode_v3_report(
+            v3_msg.msg_id,
+            ctx.engine_id,
+            ctx.engine_boots,
+            ctx.engine_time,
+            &UNSUPPORTED_SEC_LEVELS_OID,
+            *ctx.unsupported_sec_levels_counter,
+        )
+        .inspect_err(|encode_error| {
+            debug!("failed to encode unsupported-sec-level report: {encode_error}");
+        })
+        .ok();
     }
 
     // REQ-0100, REQ-0102: HMAC verification for authenticated messages.
@@ -586,6 +600,7 @@ mod tests {
         unknown_security_models: u32,
         engine_boots: u32,
         engine_time: u32,
+        minimum_security_level: crate::usm::user::SecurityLevel,
     }
 
     impl TestCtx {
@@ -600,6 +615,7 @@ mod tests {
                 unknown_security_models: 0,
                 engine_boots: 1,
                 engine_time: 0,
+                minimum_security_level: crate::usm::user::SecurityLevel::NoAuthNoPriv,
             }
         }
 
@@ -644,6 +660,11 @@ mod tests {
             self
         }
 
+        fn with_minimum_security_level(mut self, level: crate::usm::user::SecurityLevel) -> Self {
+            self.minimum_security_level = level;
+            self
+        }
+
         fn ctx<'a>(
             &'a mut self,
             usm_user: Option<&'a crate::usm::user::UsmUser>,
@@ -660,6 +681,7 @@ mod tests {
                 decryption_errors_counter: &mut self.decryption_errors,
                 unknown_security_models_counter: &mut self.unknown_security_models,
                 usm_user,
+                minimum_security_level: self.minimum_security_level,
             }
         }
     }
@@ -1104,7 +1126,7 @@ mod tests {
         assert_eq!(tc.unknown_user_names, u32::MAX, "counter must not overflow");
     }
 
-    // ── Security-level enforcement (REQ-0079, REQ-0103) ──────────────────────
+    // ── Security-level enforcement (REQ-0077, REQ-0079, REQ-0103, REQ-0130) ───
 
     #[test]
     fn given_matching_security_level_when_process_then_proceeds() {
@@ -1148,8 +1170,8 @@ mod tests {
     }
 
     #[test]
-    fn given_mismatched_security_level_when_process_then_returns_report_and_increments_counter() {
-        // Verifies: REQ-0079
+    fn given_ceiling_violation_when_process_then_returns_report_and_increments_counter() {
+        // Verifies: REQ-0130
         let mib = crate::mib::Store::new();
         let alice = crate::usm::user::UsmUser::no_auth_no_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
@@ -1171,11 +1193,11 @@ mod tests {
         };
         assert!(
             result.is_some(),
-            "security-level mismatch must produce a Report response"
+            "ceiling violation must produce a Report response"
         );
         assert_eq!(
             tc.unsupported_sec_levels, 1,
-            "counter must be incremented on mismatch"
+            "counter must be incremented on ceiling violation"
         );
         let response_bytes = result.unwrap();
         let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
@@ -1233,9 +1255,9 @@ mod tests {
     }
 
     #[test]
-    fn given_mismatched_security_level_without_reportable_flag_when_process_then_discarded_but_counter_incremented()
+    fn given_ceiling_violation_without_reportable_flag_when_process_then_discarded_but_counter_incremented()
      {
-        // Verifies: REQ-0079
+        // Verifies: REQ-0130
         let mib = crate::mib::Store::new();
         let alice = crate::usm::user::UsmUser::no_auth_no_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
@@ -1257,7 +1279,7 @@ mod tests {
         };
         assert!(
             result.is_none(),
-            "security-level mismatch without reportableFlag must be silently discarded"
+            "ceiling violation without reportableFlag must be silently discarded"
         );
         assert_eq!(
             tc.unsupported_sec_levels, 1,
@@ -1266,10 +1288,12 @@ mod tests {
     }
 
     #[test]
-    fn given_no_usm_user_when_process_then_security_level_check_skipped() {
-        // Verifies: REQ-0079 (None user → backward-compat skip)
+    fn given_no_usm_user_when_auth_no_priv_msg_then_floor_passes_and_ceiling_skipped() {
+        // Verifies: REQ-0079
+        // Defence-in-depth: this configuration (no user, authNoPriv message) cannot
+        // occur via AgentBuilder, but direct DispatchContext consumers must behave
+        // correctly — the floor check passes and the ceiling check is skipped.
         let mib = crate::mib::Store::new();
-        // authNoPriv flags, but no configured user → no check
         let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
             test_engine_id(),
             b"",
@@ -1284,19 +1308,26 @@ mod tests {
             let mut ctx = tc.ctx(None);
             process_snmpv3_request(&frame, &mut ctx, &mib)
         };
-        assert!(
-            result.is_some(),
-            "request must pass through when no USM user is configured"
-        );
+        let response_bytes =
+            result.expect("request must pass through when no USM user is configured");
         assert_eq!(
             tc.unsupported_sec_levels, 0,
             "counter must not be incremented"
         );
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
+            .expect("response must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("response must contain a cleartext ScopedPDU");
+        };
+        assert!(
+            matches!(scoped_pdu.data, rasn_snmp::v2::Pdus::Response(_)),
+            "response must be a GetResponse, not a Report"
+        );
     }
 
     #[test]
-    fn given_counter_at_max_when_mismatched_security_level_then_counter_does_not_overflow() {
-        // Verifies: REQ-0079 — saturating_add prevents overflow
+    fn given_counter_at_max_when_ceiling_violation_then_counter_does_not_overflow() {
+        // Verifies: REQ-0130 — saturating_add prevents overflow
         let mib = crate::mib::Store::new();
         let alice = crate::usm::user::UsmUser::no_auth_no_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
@@ -1325,7 +1356,7 @@ mod tests {
     #[test]
     fn given_invalid_priv_without_auth_flags_when_process_then_returns_report_and_increments_counter()
      {
-        // Verifies: REQ-0079 — privFlag=1, authFlag=0 (0x06) is invalid and treated as a mismatch
+        // Verifies: REQ-0079, REQ-0130 — privFlag=1, authFlag=0 (0x06) is invalid; rejected regardless of floor/ceiling
         let mib = crate::mib::Store::new();
         let alice = crate::usm::user::UsmUser::no_auth_no_priv(
             crate::usm::user::UserName::new("alice").unwrap(),
@@ -1345,13 +1376,240 @@ mod tests {
             let mut ctx = tc.ctx(Some(&alice));
             process_snmpv3_request(&frame, &mut ctx, &mib)
         };
-        assert!(
-            result.is_some(),
-            "invalid msgFlags combination must produce a Report response"
-        );
+        let response_bytes =
+            result.expect("invalid msgFlags combination must produce a Report response");
         assert_eq!(
             tc.unsupported_sec_levels, 1,
             "counter must be incremented for invalid msgFlags"
+        );
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
+            .expect("response must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("Report response must contain a cleartext ScopedPDU");
+        };
+        let rasn_snmp::v2::Pdus::Report(report_pdu) = scoped_pdu.data else {
+            panic!("response must be a Report PDU, not a GetResponse");
+        };
+        let varbind = &report_pdu.0.variable_bindings[0];
+        let expected_oid: crate::codec::Oid =
+            crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS
+                .parse()
+                .unwrap();
+        assert_eq!(
+            varbind.name.as_ref(),
+            expected_oid.as_slice(),
+            "Report varbind OID must be usmStatsUnsupportedSecLevels"
+        );
+    }
+
+    #[test]
+    fn given_auth_no_priv_floor_when_no_auth_msg_then_rejects() {
+        // Verifies: REQ-0079
+        let mib = crate::mib::Store::new();
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthNoPrivUser::new(
+            crate::usm::user::UserName::new("alice").unwrap(),
+            crate::usm::auth::AuthProtocol::HmacSha256,
+            crate::usm::keys::SecretKey::new_from_exposed_slice(&[0x42_u8; 32]),
+        )
+        .unwrap()
+        .into();
+        // noAuthNoPriv message (flags 0x04 = reportable only) but floor is AuthNoPriv
+        let frame = snmpv3_frames::encode_get_request_with_user(
+            test_engine_id(),
+            b"alice",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+        );
+        let mut tc =
+            TestCtx::new().with_minimum_security_level(crate::usm::user::SecurityLevel::AuthNoPriv);
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_some(),
+            "below-floor message must produce a Report response"
+        );
+        assert_eq!(
+            tc.unsupported_sec_levels, 1,
+            "counter must be incremented for below-floor message"
+        );
+        // Verify Report carries usmStatsUnsupportedSecLevels
+        let response_bytes = result.unwrap();
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
+            .expect("response must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("Report response must contain a cleartext ScopedPDU");
+        };
+        let rasn_snmp::v2::Pdus::Report(report_pdu) = scoped_pdu.data else {
+            panic!("response must be a Report PDU, not a GetResponse");
+        };
+        let varbind = &report_pdu.0.variable_bindings[0];
+        let expected_oid: crate::codec::Oid =
+            crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS
+                .parse()
+                .unwrap();
+        assert_eq!(
+            varbind.name.as_ref(),
+            expected_oid.as_slice(),
+            "Report varbind OID must be usmStatsUnsupportedSecLevels"
+        );
+    }
+
+    #[test]
+    fn given_auth_priv_floor_when_auth_no_priv_msg_then_rejects() {
+        // Verifies: REQ-0079
+        let mib = crate::mib::Store::new();
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthPrivUser::new(
+            crate::usm::user::UserName::new("alice").unwrap(),
+            crate::usm::auth::AuthProtocol::HmacSha256,
+            crate::usm::keys::SecretKey::new_from_exposed_slice(&[0x42_u8; 32]),
+            crate::usm::privacy::PrivProtocol::Aes128,
+        )
+        .unwrap()
+        .into();
+        // authNoPriv message (flags 0x05) but floor is AuthPriv — rejected at floor check
+        // before HMAC verification
+        let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
+            test_engine_id(),
+            b"alice",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+            0x05,
+        );
+        let mut tc =
+            TestCtx::new().with_minimum_security_level(crate::usm::user::SecurityLevel::AuthPriv);
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        let response_bytes =
+            result.expect("below-floor authNoPriv message must produce a Report response");
+        assert_eq!(
+            tc.unsupported_sec_levels, 1,
+            "counter must be incremented for below-floor message"
+        );
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
+            .expect("response must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("Report response must contain a cleartext ScopedPDU");
+        };
+        let rasn_snmp::v2::Pdus::Report(report_pdu) = scoped_pdu.data else {
+            panic!("response must be a Report PDU, not a GetResponse");
+        };
+        let varbind = &report_pdu.0.variable_bindings[0];
+        let expected_oid: crate::codec::Oid =
+            crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS
+                .parse()
+                .unwrap();
+        assert_eq!(
+            varbind.name.as_ref(),
+            expected_oid.as_slice(),
+            "Report varbind OID must be usmStatsUnsupportedSecLevels"
+        );
+    }
+
+    #[test]
+    fn given_auth_priv_user_when_auth_no_priv_msg_above_floor_then_accepts() {
+        // Verifies: REQ-0079, REQ-0130
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let mib = crate::mib::Store::new();
+        let auth_key_bytes = [0x42_u8; 32];
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthPrivUser::new(
+            crate::usm::user::UserName::new("alice").unwrap(),
+            AuthProtocol::HmacSha256,
+            SecretKey::new_from_exposed_slice(&auth_key_bytes),
+            crate::usm::privacy::PrivProtocol::Aes128,
+        )
+        .unwrap()
+        .into();
+        // Floor=AuthNoPriv, user=AuthPriv, msg=authNoPriv (flags 0x05)
+        // level >= floor (authNoPriv >= authNoPriv) and level <= user capabilities (authNoPriv <= authPriv)
+        let frame = build_authenticated_frame(&auth_key_bytes);
+        let mut tc =
+            TestCtx::new().with_minimum_security_level(crate::usm::user::SecurityLevel::AuthNoPriv);
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        let response_bytes = result.expect(
+            "authNoPriv message must be accepted when user has authPriv capabilities and floor is authNoPriv"
+        );
+        assert_eq!(
+            tc.unsupported_sec_levels, 0,
+            "counter must not be incremented when message passes both floor and ceiling checks"
+        );
+        // Verify the response is not a cleartext Report PDU (which would indicate a
+        // security-level rejection). An AuthPriv user responding to any authenticated
+        // request will produce an authPriv-encrypted response per REQ-0107, so the
+        // ScopedPduData will be EncryptedPdu.
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
+            .expect("response must be a valid SNMPv3 message");
+        assert!(
+            matches!(
+                v3_response.scoped_data,
+                rasn_snmp::v3::ScopedPduData::EncryptedPdu(_)
+            ),
+            "authPriv user must produce an encrypted response, not a cleartext Report"
+        );
+    }
+
+    #[test]
+    fn given_auth_no_priv_floor_when_auth_priv_msg_with_no_priv_user_then_rejects_ceiling() {
+        // Verifies: REQ-0130
+        let mib = crate::mib::Store::new();
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthNoPrivUser::new(
+            crate::usm::user::UserName::new("alice").unwrap(),
+            crate::usm::auth::AuthProtocol::HmacSha256,
+            crate::usm::keys::SecretKey::new_from_exposed_slice(&[0x42_u8; 32]),
+        )
+        .unwrap()
+        .into();
+        // authPriv message (flags 0x07) but user only has authNoPriv capabilities
+        // Passes floor (authPriv >= authNoPriv) but fails ceiling (authPriv > authNoPriv)
+        let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
+            test_engine_id(),
+            b"alice",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+            0x07,
+        );
+        let mut tc =
+            TestCtx::new().with_minimum_security_level(crate::usm::user::SecurityLevel::AuthNoPriv);
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        let response_bytes = result.expect("ceiling violation must produce a Report response");
+        assert_eq!(
+            tc.unsupported_sec_levels, 1,
+            "counter must be incremented for ceiling violation"
+        );
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
+            .expect("response must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("Report response must contain a cleartext ScopedPDU");
+        };
+        let rasn_snmp::v2::Pdus::Report(report_pdu) = scoped_pdu.data else {
+            panic!("response must be a Report PDU, not a GetResponse");
+        };
+        let varbind = &report_pdu.0.variable_bindings[0];
+        let expected_oid: crate::codec::Oid =
+            crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS
+                .parse()
+                .unwrap();
+        assert_eq!(
+            varbind.name.as_ref(),
+            expected_oid.as_slice(),
+            "Report varbind OID must be usmStatsUnsupportedSecLevels"
         );
     }
 

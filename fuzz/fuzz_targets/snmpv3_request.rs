@@ -30,6 +30,7 @@ fuzz_target!(|request_bytes: &[u8]| {
         decryption_errors_counter: &mut decryption_errors_counter,
         unknown_security_models_counter: &mut unknown_security_models_counter,
         usm_user: None,
+        minimum_security_level: basic_snmp_agent::usm::user::SecurityLevel::NoAuthNoPriv,
     };
     let _ = process_snmpv3_request(request_bytes, &mut ctx, fuzz_support::mib());
 });
