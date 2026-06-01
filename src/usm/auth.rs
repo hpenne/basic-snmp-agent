@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn given_known_key_and_message_when_compute_sha256_mac_then_matches_reference_vector() {
-        // Verifies: REQ-0086
+        // Verifies: REQ-0074, REQ-0086
         // Expected value computed by Python's hmac module (stdlib) with
         // key=[0x0b]*32, msg=b"Hi There". Serves as a regression guard;
         // full interoperability is verified by the Behave system tests.

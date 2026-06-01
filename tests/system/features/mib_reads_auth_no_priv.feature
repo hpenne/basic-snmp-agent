@@ -2,7 +2,7 @@ Feature: SNMP MIB reads with authNoPriv security over plain TCP
 
   Verify that the agent correctly handles SNMPv3 requests from net-snmp CLI tools
   when authenticated with HMAC-SHA-256 (authNoPriv security level), and that it
-  correctly rejects requests with wrong credentials or insufficient security level.
+  correctly rejects requests with wrong credentials or mismatched security level.
 
   Background:
     Given a test-agent-mib-auth instance is running with engine ID "0x80001f8804746573742d6167656e742d61757468"
@@ -41,6 +41,11 @@ Feature: SNMP MIB reads with authNoPriv security over plain TCP
   @REQ-0079
   Scenario: GET at noAuthNoPriv security level is rejected by authNoPriv agent
     When snmpget at noAuthNoPriv with user "authuser" queries OID "1.3.6.1.2.1.1.1.0" from the agent
+    Then the SNMP request times out or returns an error
+
+  @REQ-0130
+  Scenario: GET at authPriv security level is rejected by authNoPriv agent
+    When snmpget at authPriv with user "authuser", auth password "authpassword", and priv password "authpassword" queries OID "1.3.6.1.2.1.1.1.0" from the agent
     Then the SNMP request times out or returns an error
 
   @REQ-0104

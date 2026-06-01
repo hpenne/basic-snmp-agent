@@ -227,3 +227,8 @@ rationale = "Timeout configurability is a builder API property not observable fr
 req     = "REQ-0124"
 missing = ["behave_test"]
 rationale = "Pressure mode (shorter timeout near connection limit) requires filling connection slots and observing timeout changes, which is impractical in system tests. Verified by unit tests with synthetic time advancement."
+
+[[gap]]
+req     = "REQ-0129"
+missing = ["behave_test"]
+rationale = "Compile-time type constraint: the SecurityConfig enum enforces bundling of minimum security level, user credentials, and engine-boots store at construction via Rust's type system. A Behave system test cannot introspect API shape or type relationships."
