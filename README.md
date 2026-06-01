@@ -35,11 +35,11 @@ basic-snmp-agent = { path = "." }
 ### Minimal agent with MIB entries
 
 ```rust,no_run
-use basic_snmp_agent::{AgentBuilder, Oid, Value};
+use basic_snmp_agent::{AgentBuilder, Oid, SecurityConfig, Value};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build and start the agent on the default address (0.0.0.0:10161).
-    let agent = AgentBuilder::new().build()?;
+    let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv).build()?;
 
     // Populate some MIB entries.
     // sysDescr.0
@@ -72,10 +72,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Sending a trap
 
 ```rust,no_run
-use basic_snmp_agent::{AgentBuilder, TrapPdu, Value, Varbind, VarbindValue};
+use basic_snmp_agent::{AgentBuilder, SecurityConfig, TrapPdu, Value, Varbind, VarbindValue};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let agent = AgentBuilder::new().build()?;
+    let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv).build()?;
 
     let trap = TrapPdu {
         request_id: 1,
@@ -108,10 +108,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Authenticated agent (USM authNoPriv)
 
 ```rust,no_run
-use basic_snmp_agent::AgentBuilder;
+use basic_snmp_agent::{AgentBuilder, AuthNoPrivUser, SecurityConfig};
 use basic_snmp_agent::usm::auth::AuthProtocol;
+use basic_snmp_agent::usm::boots::{EngineBootsStore, StoredBootsState};
 use basic_snmp_agent::usm::kdf::password_to_localised_key;
-use basic_snmp_agent::usm::user::{AuthNoPrivUser, UserName, UsmUser};
+use basic_snmp_agent::usm::user::UserName;
+
+// Replace with FileEngineBootsStore or custom persistent storage in production.
+struct NullStore;
+
+impl EngineBootsStore for NullStore {
+    fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> {
+        Ok(None)
+    }
+    fn save(&mut self, _engine_id: &[u8], _boots: u32) -> Result<(), std::io::Error> {
+        Ok(())
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine_id = b"\x80\x00\x1f\x88\x04my-agent";
@@ -123,17 +136,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         AuthProtocol::HmacSha256,
     )?;
 
-    let user: UsmUser = AuthNoPrivUser::new(
+    let user = AuthNoPrivUser::new(
         UserName::new("operator")?,
         AuthProtocol::HmacSha256,
         localised_key,
-    )?
-    .into();
+    )?;
 
-    let agent = AgentBuilder::new()
-        .engine_id(engine_id.to_vec())
-        .usm_user(user)
-        .build()?;
+    let agent = AgentBuilder::new(SecurityConfig::AuthNoPriv {
+        user,
+        boots_store: Box::new(NullStore),
+    })
+    .engine_id(engine_id.to_vec())
+    .build()?;
 
     println!("Authenticated agent listening on {}", agent.local_addr());
     std::thread::park();
@@ -144,11 +158,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Authenticated and encrypted agent (USM authPriv)
 
 ```rust,no_run
-use basic_snmp_agent::AgentBuilder;
+use basic_snmp_agent::{AgentBuilder, AuthPrivUser, SecurityConfig};
 use basic_snmp_agent::usm::auth::AuthProtocol;
+use basic_snmp_agent::usm::boots::{EngineBootsStore, StoredBootsState};
 use basic_snmp_agent::usm::kdf::password_to_localised_key;
 use basic_snmp_agent::usm::privacy::PrivProtocol;
-use basic_snmp_agent::usm::user::{AuthPrivUser, UserName, UsmUser};
+use basic_snmp_agent::usm::user::UserName;
+
+// Replace with FileEngineBootsStore or custom persistent storage in production.
+struct NullStore;
+
+impl EngineBootsStore for NullStore {
+    fn load(&mut self) -> Result<Option<StoredBootsState>, std::io::Error> {
+        Ok(None)
+    }
+    fn save(&mut self, _engine_id: &[u8], _boots: u32) -> Result<(), std::io::Error> {
+        Ok(())
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine_id = b"\x80\x00\x1f\x88\x04my-agent";
@@ -159,19 +186,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         AuthProtocol::HmacSha256,
     )?;
 
-    // No separate privacy key needed — REQ-0084 derives it from localised_key.
-    let user: UsmUser = AuthPrivUser::new(
+    // The privacy key is derived automatically from the authentication key.
+    let user = AuthPrivUser::new(
         UserName::new("secure-operator")?,
         AuthProtocol::HmacSha256,
         localised_key,
         PrivProtocol::Aes128,
-    )?
-    .into();
+    )?;
 
-    let agent = AgentBuilder::new()
-        .engine_id(engine_id.to_vec())
-        .usm_user(user)
-        .build()?;
+    let agent = AgentBuilder::new(SecurityConfig::AuthPriv {
+        user,
+        boots_store: Box::new(NullStore),
+    })
+    .engine_id(engine_id.to_vec())
+    .build()?;
 
     println!("Encrypted agent listening on {}", agent.local_addr());
     std::thread::park();

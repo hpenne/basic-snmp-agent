@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-05-29-002"
 title = "Refactor AgentBuilder API to enforce SecurityConfig at compile time"
-status = "active"
+status = "done"
 created = "2026-05-29"
 started = "2026-05-29"
+completed = "2026-06-01"
 refs = [
     "RFC-0007",
     "ADR-0023",
@@ -46,8 +47,8 @@ Messages at or above the floor are accepted if the user's credentials can satisf
 - [x] Refactor AgentBuilder to take SecurityConfig in new()
 - [x] Convert internal UsmUser to capabilities-based model
 - [x] Update dispatch logic for floor-based acceptance
-- [ ] Update all tests and test-agent binaries
-- [ ] Update README examples"""
+- [x] Update all tests and test-agent binaries
+- [x] Update README examples"""
 
 [[content.acceptance_criteria]]
 text = "AgentBuilder::new takes SecurityConfig as mandatory parameter; optional params stay as builder methods"
@@ -61,17 +62,17 @@ category = "changed"
 
 [[content.acceptance_criteria]]
 text = "README examples updated to use new API"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "govctl check passes"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "Amend RFC-0007 C-USM-MODEL and C-USM-USERS to replace exact security-level match with minimum-floor semantics and capabilities-based user model"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
