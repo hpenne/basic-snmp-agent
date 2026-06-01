@@ -1,0 +1,93 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-06-01-001"
+title = "Security review remediation: USM auth invariant, dispatch hardening, API minimisation (F1-F4)"
+status = "active"
+created = "2026-06-01"
+started = "2026-06-01"
+
+[content]
+description = """
+Remediation of findings from a security review of the SNMPv3/USM agent focused on remote
+authentication/encryption bypass and internal-API misuse.
+
+The USM crypto core (HMAC, AES-CFB IV/salt uniqueness, check ordering, engine-boots
+persistence) was found sound. This item addresses the gaps:
+
+- **F1 (Medium) - fail-open auth bypass.** HMAC and time-window checks are gated on the
+  presence of a USM user, so a low-level caller configuring `minimum_security_level` above
+  noAuthNoPriv with no user (reachable only via the public `process_snmpv3_request` /
+  `DispatchContext` / `EventLoop::new` surface, not via `AgentBuilder`) fails open: forged
+  cleartext is served as if authenticated. Fix: fail closed at construction and in dispatch,
+  make the bad state unconstructible (private fields + validating constructor), and shrink
+  the public surface that exposes it.
+- **F2 (Low) - privFlag vs wire form.** Decryption is chosen by the ScopedPduData wire form,
+  never cross-checked against the msgFlags privFlag (RFC 3414 section 3.2).
+- **F3 (Medium) - GETBULK amplification.** Responses are capped at 100 repetitions but never
+  bounded against msgMaxSize, allowing multi-megabyte responses (RFC 3416 section 4.2.3).
+- **F4 (Low) - 32-bit length overflow.** parse_ber_length total-size arithmetic can wrap on
+  32-bit targets.
+- **F5 (Low/Informational) - key overlap.** SHA-256 + AES-256 derives a privacy key
+  identical to the localised auth key (inherent to USM derivation; the mandatory
+  SHA-256+AES-128 profile is unaffected). Resolution: documentation only - no algorithm
+  rejected, interop preserved.
+
+Governance: no new ADRs (treated as implementation detail). New requirements, if useful,
+are authored during implementation alongside the code to keep requirements and
+implementation in sync - not created up front."""
+
+[[content.acceptance_criteria]]
+text = "reject inbound messages claiming a security level above noAuthNoPriv when no USM user is configured (dispatch fail-closed guard)"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "enforce at construction that a minimum security level above noAuthNoPriv requires a configured USM user (fail closed, not fail open)"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "make DispatchContext fields private behind a validating constructor that upholds the no-user-implies-noAuthNoPriv invariant; update fuzz targets to use it"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "demote EventLoop, CommandSender, Command, and TrapSender to pub(crate) where no external consumer exists; convert affected doctests to unit tests"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "stop advertising process_snmpv3_request as crate-root public API (drop re-export and/or doc(hidden)); keep reachable for the fuzz crate"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "reject messages where the msgFlags privFlag and the ScopedPduData wire form disagree (privFlag set if and only if payload is encrypted) per RFC 3414 section 3.2"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "bound the GETBULK response to the negotiated msgMaxSize/MAX_FRAME_SIZE, truncating repetitions per RFC 3416 section 4.2.3 instead of emitting an unbounded response"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "use checked arithmetic for the total frame size in parse_ber_length so a 4-octet length cannot overflow usize on 32-bit targets"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "add red/green regression tests covering each of F1-F4"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "cargo test, cargo clippy, cargo fmt, and govctl check all pass"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "document that SHA-256 + AES-256 derives a privacy key identical to the localised auth key (overlap inherent to USM derivation); recommend SHA-512 + AES-256 where AES-256 is desired. No algorithm rejected, interop unchanged"
+status = "pending"
+category = "chore"
