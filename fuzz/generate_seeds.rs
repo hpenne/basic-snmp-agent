@@ -35,7 +35,7 @@ use std::fs;
 use std::path::Path;
 
 use arbitrary::Unstructured;
-use basic_snmp_agent::transport::dispatch::DispatchContext;
+use basic_snmp_agent::transport::dispatch::{DispatchContext, DispatchInputs};
 
 #[path = "arbitrary_snmpv3.rs"]
 mod arbitrary_snmpv3;
@@ -91,20 +91,20 @@ impl DispatchCounters {
     ) -> DispatchContext<'a> {
         // usm_user=None with NoAuthNoPriv floor and usm_user=Some with any floor are
         // always valid combinations; unwrap is sound for all seed call sites.
-        DispatchContext::new(
-            ENGINE_ID,
-            1,
-            0,
-            &mut self.unknown_engine_ids,
-            &mut self.unknown_user_names,
-            &mut self.unsupported_sec_levels,
-            &mut self.wrong_digests,
-            &mut self.not_in_time_windows,
-            &mut self.decryption_errors,
-            &mut self.unknown_security_models,
+        DispatchContext::new(DispatchInputs {
+            engine_id: ENGINE_ID,
+            engine_boots: 1,
+            engine_time: 0,
+            unknown_engine_ids_counter: &mut self.unknown_engine_ids,
+            unknown_user_names_counter: &mut self.unknown_user_names,
+            unsupported_sec_levels_counter: &mut self.unsupported_sec_levels,
+            wrong_digests_counter: &mut self.wrong_digests,
+            not_in_time_windows_counter: &mut self.not_in_time_windows,
+            decryption_errors_counter: &mut self.decryption_errors,
+            unknown_security_models_counter: &mut self.unknown_security_models,
             usm_user,
             minimum_security_level,
-        )
+        })
         .unwrap()
     }
 }

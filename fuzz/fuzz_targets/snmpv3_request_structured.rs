@@ -7,7 +7,7 @@ mod arbitrary_snmpv3;
 mod fuzz_support;
 
 use arbitrary_snmpv3::FuzzSnmpv3;
-use basic_snmp_agent::transport::dispatch::DispatchContext;
+use basic_snmp_agent::transport::dispatch::{DispatchContext, DispatchInputs};
 use basic_snmp_agent::transport::process_snmpv3_request;
 use libfuzzer_sys::fuzz_target;
 
@@ -24,20 +24,20 @@ fuzz_target!(|input: FuzzSnmpv3| {
     let mut decryption_errors_counter = 0u32;
     let mut unknown_security_models_counter = 0u32;
     // usm_user=None with NoAuthNoPriv floor is always valid; unwrap is sound.
-    let mut ctx = DispatchContext::new(
+    let mut ctx = DispatchContext::new(DispatchInputs {
         engine_id,
-        1,
-        0,
-        &mut unknown_engine_ids_counter,
-        &mut unknown_user_names_counter,
-        &mut unsupported_sec_levels_counter,
-        &mut wrong_digests_counter,
-        &mut not_in_time_windows_counter,
-        &mut decryption_errors_counter,
-        &mut unknown_security_models_counter,
-        None,
-        basic_snmp_agent::usm::user::SecurityLevel::NoAuthNoPriv,
-    )
+        engine_boots: 1,
+        engine_time: 0,
+        unknown_engine_ids_counter: &mut unknown_engine_ids_counter,
+        unknown_user_names_counter: &mut unknown_user_names_counter,
+        unsupported_sec_levels_counter: &mut unsupported_sec_levels_counter,
+        wrong_digests_counter: &mut wrong_digests_counter,
+        not_in_time_windows_counter: &mut not_in_time_windows_counter,
+        decryption_errors_counter: &mut decryption_errors_counter,
+        unknown_security_models_counter: &mut unknown_security_models_counter,
+        usm_user: None,
+        minimum_security_level: basic_snmp_agent::usm::user::SecurityLevel::NoAuthNoPriv,
+    })
     .unwrap();
     let _ = process_snmpv3_request(&encoded, &mut ctx, fuzz_support::mib());
 });

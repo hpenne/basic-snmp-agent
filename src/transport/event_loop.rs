@@ -666,18 +666,20 @@ impl EventLoop {
             // EventLoop::new already enforced the no-user/security-level invariant,
             // so the unchecked variant is safe here and carries no Result or panic site.
             let mut dispatch_ctx = crate::transport::dispatch::DispatchContext::new_unchecked(
-                &self.engine_id,
-                engine_boots,
-                engine_time,
-                &mut self.unknown_engine_ids_counter,
-                &mut self.unknown_user_names_counter,
-                &mut self.unsupported_sec_levels_counter,
-                &mut self.wrong_digests_counter,
-                &mut self.not_in_time_windows_counter,
-                &mut self.decryption_errors_counter,
-                &mut self.unknown_security_models_counter,
-                self.usm_user.as_deref(),
-                self.minimum_security_level,
+                crate::transport::dispatch::DispatchInputs {
+                    engine_id: &self.engine_id,
+                    engine_boots,
+                    engine_time,
+                    unknown_engine_ids_counter: &mut self.unknown_engine_ids_counter,
+                    unknown_user_names_counter: &mut self.unknown_user_names_counter,
+                    unsupported_sec_levels_counter: &mut self.unsupported_sec_levels_counter,
+                    wrong_digests_counter: &mut self.wrong_digests_counter,
+                    not_in_time_windows_counter: &mut self.not_in_time_windows_counter,
+                    decryption_errors_counter: &mut self.decryption_errors_counter,
+                    unknown_security_models_counter: &mut self.unknown_security_models_counter,
+                    usm_user: self.usm_user.as_deref(),
+                    minimum_security_level: self.minimum_security_level,
+                },
             );
             let Some(encoded_response) =
                 Self::dispatch_snmpv3_frame(&ber_frame, &mut dispatch_ctx, &self.store)
