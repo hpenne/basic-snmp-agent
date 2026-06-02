@@ -27,7 +27,11 @@ pub enum Value {
     Integer32(i32),
     /// An SNMP Object Identifier.
     ObjectIdentifier(Oid),
-    /// An IPv4 address as four octets in network order.
+    /// An IPv4 address as four octets in network order (RFC 2578 §7.1.5).
+    ///
+    /// This type only represents IPv4. For IPv6 addresses, use [`OctetString`](Self::OctetString)
+    /// with the RFC 4001 `InetAddress` textual convention, encoded as 16 octets in network order,
+    /// paired with a separate `InetAddressType` integer (value 2 for IPv6).
     IpAddress([u8; 4]),
     /// An arbitrary byte string (`OCTET STRING`).
     OctetString(Vec<u8>),
