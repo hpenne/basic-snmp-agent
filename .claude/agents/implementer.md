@@ -2,7 +2,7 @@
 name: implementer
 description: Writes code and tests for new features and bug fixes. Use for all implementation tasks.
 model: sonnet
-tools: Read, Write, Bash, Glob, Grep
+tools: Read, Edit, Write, Bash, Glob, Grep
 permissionMode: acceptEdits
 ---
 
