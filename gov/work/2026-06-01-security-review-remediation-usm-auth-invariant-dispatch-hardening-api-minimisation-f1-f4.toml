@@ -39,27 +39,27 @@ implementation in sync - not created up front."""
 
 [[content.acceptance_criteria]]
 text = "reject inbound messages claiming a security level above noAuthNoPriv when no USM user is configured (dispatch fail-closed guard)"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "enforce at construction that a minimum security level above noAuthNoPriv requires a configured USM user (fail closed, not fail open)"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "make DispatchContext fields private behind a validating constructor that upholds the no-user-implies-noAuthNoPriv invariant; update fuzz targets to use it"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "demote EventLoop, CommandSender, Command, and TrapSender to pub(crate) where no external consumer exists; convert affected doctests to unit tests"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "stop advertising process_snmpv3_request as crate-root public API (drop re-export and/or doc(hidden)); keep reachable for the fuzz crate"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]

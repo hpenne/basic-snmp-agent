@@ -73,42 +73,168 @@ const REPORTABLE_FLAG: u8 = 0x04;
 
 /// Engine state and statistics passed to each inbound frame dispatch.
 ///
+/// Kept `pub` only so the out-of-workspace `fuzz` crate can construct a context directly;
+/// `#[doc(hidden)]` on `new` keeps it off the advertised API. Not a supported public entry
+/// point — do not widen.
+///
 /// # Requirements
 /// Implements: REQ-0077, REQ-0078, REQ-0079, REQ-0093, REQ-0094, REQ-0098, REQ-0100, REQ-0101, REQ-0104, REQ-0115, REQ-0130
 pub struct DispatchContext<'a> {
     /// The agent's authoritative engine ID.
-    pub engine_id: &'a [u8],
+    engine_id: &'a [u8],
     /// Current `snmpEngineBoots` value.
-    pub engine_boots: u32,
+    engine_boots: u32,
     /// Current `snmpEngineTime` in seconds.
-    pub engine_time: u32,
+    engine_time: u32,
     /// Counter for `usmStatsUnknownEngineIDs` (REQ-0093).
-    pub unknown_engine_ids_counter: &'a mut u32,
+    unknown_engine_ids_counter: &'a mut u32,
     /// Counter for `usmStatsUnknownUserNames` (REQ-0078).
     // Implements: REQ-0078
-    pub unknown_user_names_counter: &'a mut u32,
+    unknown_user_names_counter: &'a mut u32,
     /// Counter for `usmStatsUnsupportedSecLevels` (REQ-0079).
     // Implements: REQ-0079
-    pub unsupported_sec_levels_counter: &'a mut u32,
+    unsupported_sec_levels_counter: &'a mut u32,
     /// Counter for `usmStatsWrongDigests` (REQ-0100).
     // Implements: REQ-0100
-    pub wrong_digests_counter: &'a mut u32,
+    wrong_digests_counter: &'a mut u32,
     /// Counter for `usmStatsNotInTimeWindows` (REQ-0098).
     // Implements: REQ-0098
-    pub not_in_time_windows_counter: &'a mut u32,
+    not_in_time_windows_counter: &'a mut u32,
     /// Counter for `usmStatsDecryptionErrors` (REQ-0101).
     // Implements: REQ-0101
-    pub decryption_errors_counter: &'a mut u32,
+    decryption_errors_counter: &'a mut u32,
     /// Counter for `snmpUnknownSecurityModels` (RFC 3412 §7.1).
     // Implements: REQ-0115
-    pub unknown_security_models_counter: &'a mut u32,
+    unknown_security_models_counter: &'a mut u32,
     /// Optional configured USM user; `None` when no USM user is configured (REQ-0078, REQ-0079).
     // Implements: REQ-0078, REQ-0079
-    pub usm_user: Option<&'a crate::usm::user::UsmUser>,
+    usm_user: Option<&'a crate::usm::user::UsmUser>,
     /// The agent's configured minimum acceptable security level (REQ-0077, REQ-0079).
     /// Messages with a security level below this floor are rejected.
     // Implements: REQ-0077, REQ-0079
-    pub minimum_security_level: crate::usm::user::SecurityLevel,
+    minimum_security_level: crate::usm::user::SecurityLevel,
+}
+
+/// Error returned when a [`DispatchContext`] is constructed with a minimum security
+/// level above `noAuthNoPriv` but no configured USM user.
+///
+/// Without a USM user the agent has no credentials and cannot authenticate or
+/// decrypt inbound messages. Configuring a security-level floor above
+/// `noAuthNoPriv` in that state would be silently unsatisfiable and is rejected
+/// at construction time so the bad state is never observable at dispatch time.
+///
+/// # Requirements
+/// Implements: REQ-0079
+#[derive(Debug, PartialEq, Eq)]
+pub struct NoUserSecurityLevelError;
+
+impl std::fmt::Display for NoUserSecurityLevelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(crate::usm::user::SECURITY_LEVEL_REQUIRES_USER_MESSAGE)
+    }
+}
+
+impl std::error::Error for NoUserSecurityLevelError {}
+
+impl<'a> DispatchContext<'a> {
+    /// Construct a [`DispatchContext`], validating the no-user security-level invariant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NoUserSecurityLevelError`] when `usm_user` is `None` and
+    /// `minimum_security_level` is above `noAuthNoPriv`. Without a USM user the
+    /// agent cannot authenticate or decrypt messages, so a floor above
+    /// `noAuthNoPriv` would be silently unsatisfiable and must be rejected
+    /// at construction time (fail-closed, REQ-0079).
+    ///
+    /// # Requirements
+    /// Implements: REQ-0079
+    #[doc(hidden)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "all counter fields are mandatory mutable refs; a struct wrapper would be public API noise"
+    )]
+    pub fn new(
+        engine_id: &'a [u8],
+        engine_boots: u32,
+        engine_time: u32,
+        unknown_engine_ids_counter: &'a mut u32,
+        unknown_user_names_counter: &'a mut u32,
+        unsupported_sec_levels_counter: &'a mut u32,
+        wrong_digests_counter: &'a mut u32,
+        not_in_time_windows_counter: &'a mut u32,
+        decryption_errors_counter: &'a mut u32,
+        unknown_security_models_counter: &'a mut u32,
+        usm_user: Option<&'a crate::usm::user::UsmUser>,
+        minimum_security_level: crate::usm::user::SecurityLevel,
+    ) -> Result<Self, NoUserSecurityLevelError> {
+        // F1: without a configured user the agent has no credentials and cannot
+        // serve any security level above noAuthNoPriv. Reject at construction
+        // time so the invalid state is never observable downstream.
+        if crate::usm::user::security_level_requires_user(usm_user, minimum_security_level) {
+            return Err(NoUserSecurityLevelError);
+        }
+        Ok(Self::new_unchecked(
+            engine_id,
+            engine_boots,
+            engine_time,
+            unknown_engine_ids_counter,
+            unknown_user_names_counter,
+            unsupported_sec_levels_counter,
+            wrong_digests_counter,
+            not_in_time_windows_counter,
+            decryption_errors_counter,
+            unknown_security_models_counter,
+            usm_user,
+            minimum_security_level,
+        ))
+    }
+
+    /// Construct a [`DispatchContext`] without validating the no-user security-level invariant.
+    ///
+    /// The caller MUST have already enforced the invariant (e.g. via [`EventLoop::new`]) before
+    /// calling this. It exists so the validated per-frame dispatch hot path carries no `Result`
+    /// or panic site.
+    ///
+    /// Kept `pub` only so the out-of-workspace `fuzz` crate can construct contexts directly
+    /// after performing its own validation. Not a supported public entry point — do not widen.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0077
+    #[doc(hidden)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "all counter fields are mandatory mutable refs; a struct wrapper would be public API noise"
+    )]
+    pub fn new_unchecked(
+        engine_id: &'a [u8],
+        engine_boots: u32,
+        engine_time: u32,
+        unknown_engine_ids_counter: &'a mut u32,
+        unknown_user_names_counter: &'a mut u32,
+        unsupported_sec_levels_counter: &'a mut u32,
+        wrong_digests_counter: &'a mut u32,
+        not_in_time_windows_counter: &'a mut u32,
+        decryption_errors_counter: &'a mut u32,
+        unknown_security_models_counter: &'a mut u32,
+        usm_user: Option<&'a crate::usm::user::UsmUser>,
+        minimum_security_level: crate::usm::user::SecurityLevel,
+    ) -> Self {
+        Self {
+            engine_id,
+            engine_boots,
+            engine_time,
+            unknown_engine_ids_counter,
+            unknown_user_names_counter,
+            unsupported_sec_levels_counter,
+            wrong_digests_counter,
+            not_in_time_windows_counter,
+            decryption_errors_counter,
+            unknown_security_models_counter,
+            usm_user,
+            minimum_security_level,
+        }
+    }
 }
 
 /// Return a copy of `raw_message` with the `msgAuthenticationParameters` bytes zeroed.
@@ -239,42 +365,12 @@ fn emit_unknown_security_model_response(
 /// provided the `reportableFlag` ([`REPORTABLE_FLAG`]) is set in `msgFlags`. Probes without
 /// the flag set are silently discarded per RFC 3412 §7.1.3a.
 ///
+/// Kept `pub` only so the out-of-workspace `fuzz` crate can drive dispatch directly;
+/// `#[doc(hidden)]` keeps it off the advertised API. Not a supported public entry point — do not widen.
+///
 /// # Requirements
 /// Implements: REQ-0056, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0077, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0102, REQ-0103, REQ-0104, REQ-0107, REQ-0109, REQ-0115, REQ-0130
-///
-/// # Examples
-///
-/// ```
-/// use basic_snmp_agent::{mib::Store, process_snmpv3_request};
-/// use basic_snmp_agent::transport::dispatch::DispatchContext;
-///
-/// let mib = Store::new();
-/// let engine_id = b"\x80\x00\x1f\x88\x80test";
-/// let mut counter = 0_u32;
-/// let mut unknown_user_names = 0_u32;
-/// let mut unsupported_sec_levels = 0_u32;
-/// let mut wrong_digests = 0_u32;
-/// let mut not_in_time_windows = 0_u32;
-/// let mut decryption_errors = 0_u32;
-/// let mut unknown_security_models = 0_u32;
-/// let mut ctx = DispatchContext {
-///     engine_id,
-///     engine_boots: 1,
-///     engine_time: 0,
-///     unknown_engine_ids_counter: &mut counter,
-///     unknown_user_names_counter: &mut unknown_user_names,
-///     unsupported_sec_levels_counter: &mut unsupported_sec_levels,
-///     wrong_digests_counter: &mut wrong_digests,
-///     not_in_time_windows_counter: &mut not_in_time_windows,
-///     decryption_errors_counter: &mut decryption_errors,
-///     unknown_security_models_counter: &mut unknown_security_models,
-///     usm_user: None,
-///     minimum_security_level: basic_snmp_agent::usm::user::SecurityLevel::NoAuthNoPriv,
-/// };
-/// // Garbage bytes produce no response (silently discarded).
-/// let result = process_snmpv3_request(b"\x00\x01\x02", &mut ctx, &mib);
-/// assert!(result.is_none());
-/// ```
+#[doc(hidden)]
 #[must_use]
 #[expect(
     clippy::too_many_lines,
@@ -358,9 +454,11 @@ pub fn process_snmpv3_request(
     }
 
     // REQ-0079, REQ-0103, REQ-0130: security-level enforcement — runs after user-name lookup.
-    // Two checks:
+    // Three checks:
     // 1. Floor: reject if msg_level < minimum_security_level (REQ-0079)
     // 2. Ceiling: reject if msg_level > user's capabilities (REQ-0130)
+    // 3. F1 fail-closed: without a user the agent has no credentials; reject any
+    //    message claiming a level above noAuthNoPriv (REQ-0079).
     // The invalid combination (privFlag without authFlag) is treated as a rejection.
     // For noAuthNoPriv messages that pass both checks, authentication and decryption
     // are skipped naturally (REQ-0103).
@@ -371,6 +469,11 @@ pub fn process_snmpv3_request(
             level < ctx.minimum_security_level
             // REQ-0130: above what the user can satisfy (if a user is configured)
             || ctx.usm_user.is_some_and(|user| level > user.security_level())
+            // F1: with no configured user the agent has no credentials, so it can
+            // only serve noAuthNoPriv. A message claiming auth/priv must be rejected
+            // rather than served as if authenticated (fail closed). Implements: REQ-0079
+            || (ctx.usm_user.is_none()
+                && level > crate::usm::user::SecurityLevel::NoAuthNoPriv)
         }
         // Invalid flags (e.g. privFlag without authFlag)
         Err(_) => true,
@@ -669,20 +772,21 @@ mod tests {
             &'a mut self,
             usm_user: Option<&'a crate::usm::user::UsmUser>,
         ) -> DispatchContext<'a> {
-            DispatchContext {
-                engine_id: test_engine_id(),
-                engine_boots: self.engine_boots,
-                engine_time: self.engine_time,
-                unknown_engine_ids_counter: &mut self.unknown_engine_ids,
-                unknown_user_names_counter: &mut self.unknown_user_names,
-                unsupported_sec_levels_counter: &mut self.unsupported_sec_levels,
-                wrong_digests_counter: &mut self.wrong_digests,
-                not_in_time_windows_counter: &mut self.not_in_time_windows,
-                decryption_errors_counter: &mut self.decryption_errors,
-                unknown_security_models_counter: &mut self.unknown_security_models,
+            DispatchContext::new(
+                test_engine_id(),
+                self.engine_boots,
+                self.engine_time,
+                &mut self.unknown_engine_ids,
+                &mut self.unknown_user_names,
+                &mut self.unsupported_sec_levels,
+                &mut self.wrong_digests,
+                &mut self.not_in_time_windows,
+                &mut self.decryption_errors,
+                &mut self.unknown_security_models,
                 usm_user,
-                minimum_security_level: self.minimum_security_level,
-            }
+                self.minimum_security_level,
+            )
+            .expect("test configuration upholds the no-user invariant")
         }
     }
 
@@ -1288,11 +1392,12 @@ mod tests {
     }
 
     #[test]
-    fn given_no_usm_user_when_auth_no_priv_msg_then_floor_passes_and_ceiling_skipped() {
+    fn given_no_usm_user_when_auth_no_priv_msg_then_rejected_with_report() {
         // Verifies: REQ-0079
-        // Defence-in-depth: this configuration (no user, authNoPriv message) cannot
-        // occur via AgentBuilder, but direct DispatchContext consumers must behave
-        // correctly — the floor check passes and the ceiling check is skipped.
+        // F1 fail-closed: when no USM user is configured, the agent has no credentials
+        // and cannot authenticate messages. A forged cleartext message claiming authNoPriv
+        // (flags 0x05 has reportableFlag set) must be rejected with a Report PDU carrying
+        // usmStatsUnsupportedSecLevels rather than being served as if authenticated.
         let mib = crate::mib::Store::new();
         let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
             test_engine_id(),
@@ -1308,20 +1413,29 @@ mod tests {
             let mut ctx = tc.ctx(None);
             process_snmpv3_request(&frame, &mut ctx, &mib)
         };
-        let response_bytes =
-            result.expect("request must pass through when no USM user is configured");
         assert_eq!(
-            tc.unsupported_sec_levels, 0,
-            "counter must not be incremented"
+            tc.unsupported_sec_levels, 1,
+            "counter must be incremented for no-user auth/priv message (fail-closed)"
         );
+        let response_bytes = result
+            .expect("authNoPriv message with reportableFlag set must produce a Report response");
         let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
             .expect("response must be a valid SNMPv3 message");
         let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
-            panic!("response must contain a cleartext ScopedPDU");
+            panic!("Report response must contain a cleartext ScopedPDU");
         };
-        assert!(
-            matches!(scoped_pdu.data, rasn_snmp::v2::Pdus::Response(_)),
-            "response must be a GetResponse, not a Report"
+        let rasn_snmp::v2::Pdus::Report(report_pdu) = scoped_pdu.data else {
+            panic!("response must be a Report PDU, not a GetResponse");
+        };
+        let varbind = &report_pdu.0.variable_bindings[0];
+        let expected_oid: crate::codec::Oid =
+            crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS
+                .parse()
+                .unwrap();
+        assert_eq!(
+            varbind.name.as_ref(),
+            expected_oid.as_slice(),
+            "Report varbind OID must be usmStatsUnsupportedSecLevels"
         );
     }
 
@@ -1611,6 +1725,169 @@ mod tests {
             expected_oid.as_slice(),
             "Report varbind OID must be usmStatsUnsupportedSecLevels"
         );
+    }
+
+    // ── DispatchContext::new (REQ-0079) ─────────────────────────────────────────
+
+    #[test]
+    fn given_no_user_and_auth_no_priv_floor_when_new_then_err() {
+        // Verifies: REQ-0079 — construction must fail when no user and floor > noAuthNoPriv
+        let mut unknown_engine_ids = 0_u32;
+        let mut unknown_user_names = 0_u32;
+        let mut unsupported_sec_levels = 0_u32;
+        let mut wrong_digests = 0_u32;
+        let mut not_in_time_windows = 0_u32;
+        let mut decryption_errors = 0_u32;
+        let mut unknown_security_models = 0_u32;
+        let result = DispatchContext::new(
+            test_engine_id(),
+            1,
+            0,
+            &mut unknown_engine_ids,
+            &mut unknown_user_names,
+            &mut unsupported_sec_levels,
+            &mut wrong_digests,
+            &mut not_in_time_windows,
+            &mut decryption_errors,
+            &mut unknown_security_models,
+            None,
+            crate::usm::user::SecurityLevel::AuthNoPriv,
+        );
+        assert!(
+            matches!(result, Err(NoUserSecurityLevelError)),
+            "expected Err(NoUserSecurityLevelError)"
+        );
+    }
+
+    #[test]
+    fn given_no_user_and_auth_priv_floor_when_new_then_err() {
+        // Verifies: REQ-0079 — construction must fail for AuthPriv floor with no user
+        let mut unknown_engine_ids = 0_u32;
+        let mut unknown_user_names = 0_u32;
+        let mut unsupported_sec_levels = 0_u32;
+        let mut wrong_digests = 0_u32;
+        let mut not_in_time_windows = 0_u32;
+        let mut decryption_errors = 0_u32;
+        let mut unknown_security_models = 0_u32;
+        let result = DispatchContext::new(
+            test_engine_id(),
+            1,
+            0,
+            &mut unknown_engine_ids,
+            &mut unknown_user_names,
+            &mut unsupported_sec_levels,
+            &mut wrong_digests,
+            &mut not_in_time_windows,
+            &mut decryption_errors,
+            &mut unknown_security_models,
+            None,
+            crate::usm::user::SecurityLevel::AuthPriv,
+        );
+        assert!(
+            matches!(result, Err(NoUserSecurityLevelError)),
+            "expected Err(NoUserSecurityLevelError)"
+        );
+    }
+
+    #[test]
+    fn given_no_user_and_no_auth_no_priv_floor_when_new_then_ok() {
+        // Verifies: REQ-0079 — no-user with noAuthNoPriv floor is valid
+        let mib = crate::mib::Store::new();
+        let mut unknown_engine_ids = 0_u32;
+        let mut unknown_user_names = 0_u32;
+        let mut unsupported_sec_levels = 0_u32;
+        let mut wrong_digests = 0_u32;
+        let mut not_in_time_windows = 0_u32;
+        let mut decryption_errors = 0_u32;
+        let mut unknown_security_models = 0_u32;
+        let result = DispatchContext::new(
+            test_engine_id(),
+            1,
+            0,
+            &mut unknown_engine_ids,
+            &mut unknown_user_names,
+            &mut unsupported_sec_levels,
+            &mut wrong_digests,
+            &mut not_in_time_windows,
+            &mut decryption_errors,
+            &mut unknown_security_models,
+            None,
+            crate::usm::user::SecurityLevel::NoAuthNoPriv,
+        );
+        let mut ctx = result.expect("no-user with noAuthNoPriv floor is a valid configuration");
+        // Dispatch garbage bytes to prove the constructed context is functional.
+        assert!(process_snmpv3_request(b"\x00\x01\x02", &mut ctx, &mib).is_none());
+    }
+
+    #[test]
+    fn given_user_and_auth_priv_floor_when_new_then_ok() {
+        // Verifies: REQ-0079 — a configured user with AuthPriv floor is valid
+        let mib = crate::mib::Store::new();
+        let alice: crate::usm::user::UsmUser = crate::usm::user::AuthPrivUser::new(
+            crate::usm::user::UserName::new("alice").unwrap(),
+            crate::usm::auth::AuthProtocol::HmacSha256,
+            crate::usm::keys::SecretKey::new_from_exposed_slice(&[0x42_u8; 32]),
+            crate::usm::privacy::PrivProtocol::Aes128,
+        )
+        .unwrap()
+        .into();
+        let mut unknown_engine_ids = 0_u32;
+        let mut unknown_user_names = 0_u32;
+        let mut unsupported_sec_levels = 0_u32;
+        let mut wrong_digests = 0_u32;
+        let mut not_in_time_windows = 0_u32;
+        let mut decryption_errors = 0_u32;
+        let mut unknown_security_models = 0_u32;
+        let result = DispatchContext::new(
+            test_engine_id(),
+            1,
+            0,
+            &mut unknown_engine_ids,
+            &mut unknown_user_names,
+            &mut unsupported_sec_levels,
+            &mut wrong_digests,
+            &mut not_in_time_windows,
+            &mut decryption_errors,
+            &mut unknown_security_models,
+            Some(&alice),
+            crate::usm::user::SecurityLevel::AuthPriv,
+        );
+        let mut ctx =
+            result.expect("a configured user with AuthPriv floor is a valid configuration");
+        // Dispatch garbage bytes to prove the constructed context is functional.
+        assert!(process_snmpv3_request(b"\x00\x01\x02", &mut ctx, &mib).is_none());
+    }
+
+    #[test]
+    fn given_garbage_bytes_when_process_snmpv3_request_then_returns_none() {
+        // Verifies: REQ-0073 — garbage bytes are silently discarded
+        // This is the unit-test equivalent of the (removed) doctest.
+        let mib = crate::mib::Store::new();
+        let engine_id = b"\x80\x00\x1f\x88\x80test";
+        let mut unknown_engine_ids = 0_u32;
+        let mut unknown_user_names = 0_u32;
+        let mut unsupported_sec_levels = 0_u32;
+        let mut wrong_digests = 0_u32;
+        let mut not_in_time_windows = 0_u32;
+        let mut decryption_errors = 0_u32;
+        let mut unknown_security_models = 0_u32;
+        let mut ctx = DispatchContext::new(
+            engine_id,
+            1,
+            0,
+            &mut unknown_engine_ids,
+            &mut unknown_user_names,
+            &mut unsupported_sec_levels,
+            &mut wrong_digests,
+            &mut not_in_time_windows,
+            &mut decryption_errors,
+            &mut unknown_security_models,
+            None,
+            crate::usm::user::SecurityLevel::NoAuthNoPriv,
+        )
+        .expect("test configuration upholds the no-user invariant");
+        let result = process_snmpv3_request(b"\x00\x01\x02", &mut ctx, &mib);
+        assert!(result.is_none());
     }
 
     // ── HMAC verification (REQ-0100, REQ-0102) ───────────────────────────────
@@ -2211,11 +2488,14 @@ mod tests {
     // ── Encrypted PDU path (REQ-0101) ─────────────────────────────────────────
 
     #[test]
-    fn given_encrypted_v3_message_when_process_then_silently_dropped() {
-        // Verifies: REQ-0101
-        // An authPriv message with usm_user: None reaches the Encrypted arm with no
-        // configured user — without privacy credentials, decryption cannot proceed
-        // and the message is silently discarded (REQ-0101).
+    fn given_encrypted_v3_message_with_no_user_when_process_then_rejected_with_report() {
+        // Verifies: REQ-0079
+        // F1 fail-closed: an authPriv message (flags 0x07) with no configured user is now
+        // rejected at the security-level check before it ever reaches the Encrypted arm.
+        // The agent has no credentials, so any message claiming auth or priv is rejected
+        // with a Report PDU carrying usmStatsUnsupportedSecLevels. Previously this message
+        // reached the Encrypted arm and was silently discarded; the fail-closed fix changes
+        // the outcome to a Report response (flags 0x07 includes reportableFlag).
         use rasn_snmp::v3::{
             HeaderData, Message as V3Message, ScopedPduData, USMSecurityParameters,
         };
@@ -2223,9 +2503,6 @@ mod tests {
         let mib = crate::mib::Store::new();
         let fake_ciphertext = b"fake-ciphertext-bytes".to_vec();
 
-        // Build an authPriv V3 message addressed to test_engine_id(). With usm_user: None,
-        // the HMAC-verification block is skipped entirely (gated on usm_user.is_some()),
-        // so the message reaches the Encrypted arm which returns None.
         let usm_params = USMSecurityParameters {
             authoritative_engine_id: test_engine_id().to_vec().into(),
             authoritative_engine_boots: 1.into(),
@@ -2257,12 +2534,31 @@ mod tests {
             process_snmpv3_request(&encoded_frame, &mut ctx, &mib)
         };
 
-        // No configured user means the user-name and security-level checks are skipped.
-        // The empty auth_params with no user also means HMAC verification is skipped.
-        // The Encrypted arm is reached but decryption cannot proceed without credentials.
-        assert!(
-            result.is_none(),
-            "encrypted PDU with no configured user must be silently discarded"
+        // F1: with no configured user the F1 guard fires at the security-level check,
+        // incrementing the counter and returning a Report PDU (reportableFlag is set).
+        assert_eq!(
+            tc.unsupported_sec_levels, 1,
+            "counter must be incremented for no-user authPriv message (fail-closed)"
+        );
+        let response_bytes =
+            result.expect("authPriv message with reportableFlag and no user must produce a Report");
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
+            .expect("response must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data else {
+            panic!("Report response must contain a cleartext ScopedPDU");
+        };
+        let rasn_snmp::v2::Pdus::Report(report_pdu) = scoped_pdu.data else {
+            panic!("response must be a Report PDU, not a GetResponse");
+        };
+        let varbind = &report_pdu.0.variable_bindings[0];
+        let expected_oid: crate::codec::Oid =
+            crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS
+                .parse()
+                .unwrap();
+        assert_eq!(
+            varbind.name.as_ref(),
+            expected_oid.as_slice(),
+            "Report varbind OID must be usmStatsUnsupportedSecLevels"
         );
     }
 

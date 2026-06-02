@@ -92,6 +92,12 @@ pub enum EventLoopError {
     Waker(io::Error),
     /// mio token registration for the listener or waker failed.
     Registration(io::Error),
+    /// A minimum security level above `noAuthNoPriv` was requested without a
+    /// configured USM user. Without credentials the agent cannot authenticate
+    /// or decrypt messages; this combination is rejected at construction time
+    /// (fail-closed, REQ-0077).
+    // Implements: REQ-0077
+    SecurityLevelRequiresUser,
 }
 
 impl fmt::Display for EventLoopError {
@@ -102,6 +108,9 @@ impl fmt::Display for EventLoopError {
             }
             Self::Waker(e) => write!(f, "waker creation failed: {e}"),
             Self::Registration(e) => write!(f, "mio token registration failed: {e}"),
+            Self::SecurityLevelRequiresUser => {
+                f.write_str(crate::usm::user::SECURITY_LEVEL_REQUIRES_USER_MESSAGE)
+            }
         }
     }
 }
@@ -111,6 +120,7 @@ impl std::error::Error for EventLoopError {
         match self {
             Self::Bind { source, .. } => Some(source),
             Self::Waker(e) | Self::Registration(e) => Some(e),
+            Self::SecurityLevelRequiresUser => None,
         }
     }
 }
@@ -137,7 +147,7 @@ impl std::error::Error for BerLengthError {}
 ///
 /// Send commands via [`CommandSender::send`], which also wakes the poll loop.
 #[derive(Debug)]
-pub enum Command {
+pub(crate) enum Command {
     /// Upsert a single OID in the MIB store.
     SetValue {
         oid: crate::codec::Oid,
@@ -174,26 +184,8 @@ pub enum Command {
 ///
 /// The `Arc<mio::Waker>` reference count is decremented on drop. The Waker
 /// itself is released when the last reference is dropped.
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::net::SocketAddr;
-/// use basic_snmp_agent::transport::event_loop::{
-///     Command, ConnectionTimeoutConfig, DEFAULT_MAX_CONNECTIONS, EventLoop,
-/// };
-///
-/// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-/// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
-/// let (event_loop, _bound_addr, sender) =
-///     EventLoop::new(addr, engine_id, 1, None,
-///                    basic_snmp_agent::usm::user::SecurityLevel::NoAuthNoPriv,
-///                    DEFAULT_MAX_CONNECTIONS,
-///                    ConnectionTimeoutConfig::default()).unwrap();
-/// sender.send(Command::Shutdown).unwrap();
-/// ```
 #[derive(Clone)]
-pub struct CommandSender {
+pub(crate) struct CommandSender {
     tx: Sender<Command>,
     /// Waker shared with the event loop; waking it causes the poll call to return.
     waker: Arc<mio::Waker>,
@@ -215,7 +207,7 @@ impl CommandSender {
     ///
     /// Returns an error if the event loop thread has exited (broken channel)
     /// or if waking the poll loop fails.
-    pub fn send(&self, cmd: Command) -> io::Result<()> {
+    pub(crate) fn send(&self, cmd: Command) -> io::Result<()> {
         self.tx
             .send(cmd)
             .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "event loop has exited"))?;
@@ -289,28 +281,7 @@ struct ConnectionState {
 ///
 /// # Requirements
 /// Implements: REQ-0048, REQ-0050, REQ-0051, REQ-0052, REQ-0053, REQ-0054
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::net::SocketAddr;
-/// use basic_snmp_agent::transport::event_loop::{
-///     ConnectionTimeoutConfig, DEFAULT_MAX_CONNECTIONS, EventLoop,
-/// };
-///
-/// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-/// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
-/// let (event_loop, bound_addr, sender) =
-///     EventLoop::new(addr, engine_id, 1, None,
-///                    basic_snmp_agent::usm::user::SecurityLevel::NoAuthNoPriv,
-///                    DEFAULT_MAX_CONNECTIONS,
-///                    ConnectionTimeoutConfig::default()).unwrap();
-///
-/// let handle = std::thread::spawn(move || event_loop.run());
-/// sender.send(basic_snmp_agent::transport::event_loop::Command::Shutdown).unwrap();
-/// handle.join().unwrap().unwrap();
-/// ```
-pub struct EventLoop {
+pub(crate) struct EventLoop {
     poll: Poll,
     listener: mio::net::TcpListener,
     /// Keeps the Waker alive for the lifetime of the event loop.
@@ -388,24 +359,7 @@ impl EventLoop {
     /// # Requirements
     /// Implements: REQ-0048, REQ-0050, REQ-0055, REQ-0068, REQ-0069, REQ-0072, REQ-0077
     ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use std::net::SocketAddr;
-    /// use basic_snmp_agent::transport::event_loop::{
-    ///     ConnectionTimeoutConfig, DEFAULT_MAX_CONNECTIONS, EventLoop,
-    /// };
-    ///
-    /// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-    /// let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
-    /// let (event_loop, bound_addr, sender) =
-    ///     EventLoop::new(addr, engine_id, 1, None,
-    ///                    basic_snmp_agent::usm::user::SecurityLevel::NoAuthNoPriv,
-    ///                    DEFAULT_MAX_CONNECTIONS,
-    ///                    ConnectionTimeoutConfig::default()).unwrap();
-    /// println!("listening on {bound_addr}");
-    /// ```
-    pub fn new(
+    pub(crate) fn new(
         addr: SocketAddr,
         engine_id: Vec<u8>,
         engine_boots: u32,
@@ -414,6 +368,18 @@ impl EventLoop {
         max_connections: usize,
         timeout_config: ConnectionTimeoutConfig,
     ) -> Result<(Self, SocketAddr, CommandSender), EventLoopError> {
+        // F1: fail-closed at construction time — without a configured user the agent has
+        // no credentials and cannot authenticate or decrypt messages. A minimum security
+        // level above noAuthNoPriv in that state would be silently unsatisfiable;
+        // reject here so the invalid configuration is never observable at dispatch time.
+        // Implements: REQ-0077
+        if crate::usm::user::security_level_requires_user(
+            usm_user.as_deref(),
+            minimum_security_level,
+        ) {
+            return Err(EventLoopError::SecurityLevelRequiresUser);
+        }
+
         let poll = Poll::new().map_err(EventLoopError::Registration)?;
         let registry = poll.registry();
 
@@ -481,7 +447,7 @@ impl EventLoop {
     /// # Errors
     ///
     /// Returns an error if `mio::Poll::poll` fails unrecoverably.
-    pub fn run(mut self) -> io::Result<()> {
+    pub(crate) fn run(mut self) -> io::Result<()> {
         info!("event loop started");
         let mut events = Events::with_capacity(128);
 
@@ -697,24 +663,25 @@ impl EventLoop {
             let ber_frame: Vec<u8> = frame_bytes.to_vec();
             conn.read_buf.drain(..total_frame_bytes);
 
-            let Some(encoded_response) = Self::dispatch_snmpv3_frame(
-                &ber_frame,
-                &mut crate::transport::dispatch::DispatchContext {
-                    engine_id: &self.engine_id,
-                    engine_boots,
-                    engine_time,
-                    unknown_engine_ids_counter: &mut self.unknown_engine_ids_counter,
-                    unknown_user_names_counter: &mut self.unknown_user_names_counter,
-                    unsupported_sec_levels_counter: &mut self.unsupported_sec_levels_counter,
-                    wrong_digests_counter: &mut self.wrong_digests_counter,
-                    not_in_time_windows_counter: &mut self.not_in_time_windows_counter,
-                    decryption_errors_counter: &mut self.decryption_errors_counter,
-                    unknown_security_models_counter: &mut self.unknown_security_models_counter,
-                    usm_user: self.usm_user.as_deref(),
-                    minimum_security_level: self.minimum_security_level,
-                },
-                &self.store,
-            ) else {
+            // EventLoop::new already enforced the no-user/security-level invariant,
+            // so the unchecked variant is safe here and carries no Result or panic site.
+            let mut dispatch_ctx = crate::transport::dispatch::DispatchContext::new_unchecked(
+                &self.engine_id,
+                engine_boots,
+                engine_time,
+                &mut self.unknown_engine_ids_counter,
+                &mut self.unknown_user_names_counter,
+                &mut self.unsupported_sec_levels_counter,
+                &mut self.wrong_digests_counter,
+                &mut self.not_in_time_windows_counter,
+                &mut self.decryption_errors_counter,
+                &mut self.unknown_security_models_counter,
+                self.usm_user.as_deref(),
+                self.minimum_security_level,
+            );
+            let Some(encoded_response) =
+                Self::dispatch_snmpv3_frame(&ber_frame, &mut dispatch_ctx, &self.store)
+            else {
                 continue;
             };
 
@@ -912,6 +879,25 @@ mod tests {
             .read_exact(&mut received)
             .expect("timed out waiting for response bytes");
         received
+    }
+
+    #[test]
+    fn given_no_user_and_auth_min_level_when_new_then_err() {
+        // Verifies: REQ-0077 — construction must fail when no user and floor > noAuthNoPriv
+        let result = EventLoop::new(
+            any_loopback(),
+            test_engine_id(),
+            1,
+            None,
+            crate::usm::user::SecurityLevel::AuthNoPriv,
+            DEFAULT_MAX_CONNECTIONS,
+            ConnectionTimeoutConfig::default(),
+        );
+        let err = result.map(|_| ()).unwrap_err();
+        assert!(
+            matches!(err, EventLoopError::SecurityLevelRequiresUser),
+            "expected SecurityLevelRequiresUser error, got: {err}"
+        );
     }
 
     #[test]

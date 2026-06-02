@@ -17,7 +17,10 @@ pub mod event_loop;
 pub mod request;
 pub mod trap;
 
+// Kept `pub` only so the out-of-workspace `fuzz` crate can drive dispatch directly;
+// `#[doc(hidden)]` keeps it off the advertised API. Not a supported public entry point — do not widen.
+#[doc(hidden)]
 pub use dispatch::process_snmpv3_request;
 pub use event_loop::{BerLengthError, EventLoopError, parse_ber_length};
 pub use request::TrapPdu;
-pub use trap::{TrapResult, TrapSender};
+pub use trap::TrapResult;

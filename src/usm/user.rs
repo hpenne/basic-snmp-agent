@@ -138,6 +138,26 @@ impl fmt::Display for InvalidMsgFlags {
 
 impl std::error::Error for InvalidMsgFlags {}
 
+/// Shared error message for the no-user / security-level invariant, used by all three
+/// error-type Display impls so the message text stays consistent across layers.
+// Implements: REQ-0077, REQ-0079
+pub(crate) const SECURITY_LEVEL_REQUIRES_USER_MESSAGE: &str =
+    "minimum security level above noAuthNoPriv requires a configured USM user";
+
+/// Return `true` when the combination of no configured USM user with a minimum security
+/// level above `noAuthNoPriv` is requested — a state the agent cannot satisfy.
+///
+/// This predicate is the single authoritative source for the no-user / security-level
+/// invariant checked in both [`crate::transport::dispatch::DispatchContext::new`] and
+/// [`crate::transport::event_loop::EventLoop::new`].
+// Implements: REQ-0077, REQ-0079
+pub(crate) fn security_level_requires_user(
+    usm_user: Option<&UsmUser>,
+    minimum_security_level: SecurityLevel,
+) -> bool {
+    usm_user.is_none() && minimum_security_level > SecurityLevel::NoAuthNoPriv
+}
+
 /// Derive the security level from the `msgFlags` byte (RFC 3412 §7.2.4).
 ///
 /// # Requirements
@@ -649,6 +669,37 @@ impl fmt::Debug for AuthPrivUser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn security_level_requires_user_predicate() {
+        // Verifies: REQ-0077, REQ-0079
+        let auth_priv_user: UsmUser = AuthPrivUser::new(
+            UserName::new("alice").unwrap(),
+            crate::usm::auth::AuthProtocol::HmacSha256,
+            crate::usm::keys::SecretKey::new_from_exposed_slice(&[0x42_u8; 32]),
+            crate::usm::privacy::PrivProtocol::Aes128,
+        )
+        .unwrap()
+        .into();
+
+        // (None, NoAuthNoPriv) → false: no user is valid at the lowest floor
+        assert!(!security_level_requires_user(
+            None,
+            SecurityLevel::NoAuthNoPriv
+        ));
+        // (None, AuthNoPriv) → true: no user cannot satisfy an auth floor
+        assert!(security_level_requires_user(
+            None,
+            SecurityLevel::AuthNoPriv
+        ));
+        // (None, AuthPriv) → true: no user cannot satisfy an authPriv floor
+        assert!(security_level_requires_user(None, SecurityLevel::AuthPriv));
+        // (Some(user), AuthPriv) → false: a configured user can satisfy any floor
+        assert!(!security_level_requires_user(
+            Some(&auth_priv_user),
+            SecurityLevel::AuthPriv
+        ));
+    }
 
     fn user_name(s: &str) -> UserName {
         UserName::new(s).unwrap()

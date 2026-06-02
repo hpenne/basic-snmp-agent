@@ -24,6 +24,14 @@ pub enum AgentError {
     /// # Requirements
     /// Implements: REQ-0094, REQ-0095, REQ-0097
     EngineBoots(crate::usm::boots::InitBootsError),
+    /// A minimum security level above `noAuthNoPriv` was requested without a configured USM
+    /// user. This variant is defence-in-depth: `AgentBuilder` always derives the minimum
+    /// security level from the `SecurityConfig`, so the combination (no user, floor above
+    /// `noAuthNoPriv`) is unreachable via the public builder API.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0077
+    SecurityLevelRequiresUser,
 }
 
 impl fmt::Display for AgentError {
@@ -40,6 +48,9 @@ impl fmt::Display for AgentError {
                 "engine ID length is invalid: must be between 5 and 32 octets (RFC 3411 \u{a7}5)"
             ),
             Self::EngineBoots(e) => write!(f, "engine-boots initialisation failed: {e}"),
+            Self::SecurityLevelRequiresUser => {
+                f.write_str(crate::usm::user::SECURITY_LEVEL_REQUIRES_USER_MESSAGE)
+            }
         }
     }
 }
@@ -49,7 +60,7 @@ impl std::error::Error for AgentError {
         match self {
             Self::Bind { source, .. } => Some(source),
             Self::Socket(e) | Self::UdpSocket(e) | Self::Spawn(e) => Some(e),
-            Self::InvalidEngineId => None,
+            Self::InvalidEngineId | Self::SecurityLevelRequiresUser => None,
             Self::EngineBoots(e) => Some(e),
         }
     }
@@ -168,6 +179,24 @@ mod tests {
             source.to_string().contains("engine-boots store error"),
             "source should be the inner InitBootsError, got: {source}"
         );
+    }
+
+    #[test]
+    fn agent_error_security_level_requires_user_display_mentions_user() {
+        // Verifies: REQ-0077
+        let e = AgentError::SecurityLevelRequiresUser;
+        let msg = e.to_string();
+        assert!(
+            msg.contains("noAuthNoPriv") && msg.contains("USM user"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn agent_error_security_level_requires_user_source_returns_none() {
+        // Verifies: REQ-0077
+        let e = AgentError::SecurityLevelRequiresUser;
+        assert!(e.source().is_none());
     }
 
     // ── AgentError source ────────────────────────────────────────────────

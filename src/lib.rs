@@ -48,7 +48,6 @@ use std::time::Instant;
 
 pub use crate::codec::{Oid, Value, Varbind, VarbindValue};
 pub use crate::transport::event_loop::ConnectionTimeoutConfig;
-pub use crate::transport::process_snmpv3_request;
 pub use crate::transport::{TrapPdu, TrapResult};
 pub use crate::usm::user::{AuthNoPrivUser, AuthPrivUser};
 pub use error::{AgentError, SetError, TrapError};
@@ -485,6 +484,12 @@ impl AgentBuilder {
             EventLoopError::Waker(source) | EventLoopError::Registration(source) => {
                 AgentError::Socket(source)
             }
+            // SecurityLevelRequiresUser is unreachable via AgentBuilder::build because
+            // the minimum_security_level is always derived consistently from the
+            // SecurityConfig variant (NoAuthNoPriv -> NoAuthNoPriv floor, AuthNoPriv ->
+            // AuthNoPriv floor + user, AuthPriv -> AuthPriv floor + user). The arm is
+            // included for exhaustiveness and as defence-in-depth. Implements: REQ-0077
+            EventLoopError::SecurityLevelRequiresUser => AgentError::SecurityLevelRequiresUser,
         })?;
 
         let trap_sender = TrapSender::new(Instant::now(), trap_engine_id, engine_boots, usm_user)
