@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Reviews code for quality, correctness, security, and test coverage. Invoke after implementation is complete.
-model: claude-opus-4-6  
+model: claude-opus-4-8
 tools: Read, Glob, Grep
 permissionMode: default
 ---

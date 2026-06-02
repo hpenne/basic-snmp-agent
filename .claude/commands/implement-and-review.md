@@ -1,6 +1,6 @@
 Review and iterate on the implementation of: $ARGUMENTS
 
-These instructions take precedence over any general coding guidelines.
+This workflow takes precedence over general implementation approach guidelines.
 
 Follow this loop (max 3 iterations):
 1. Use the **implementer** subagent to write the code and tests. **Capture its agent ID** — you will resume it in later steps instead of launching a new instance.

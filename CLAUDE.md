@@ -9,37 +9,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Common Commands
 
 ```bash
-# Build
-cargo build
-
-# Build release
-cargo build --release
-
-# Run
-cargo run
-
-# Run tests
-cargo test
-
-# Run a single test
-cargo test <test_name>
-
-# Lint
-cargo clippy
-
-# Format
-cargo fmt
-
-# Check without building
-cargo check
+make test          # clippy + Rust unit/doc tests + Python + Behave
+make pre-commit    # test + python-lint + fuzz + traceability + format check
+make clippy        # clippy --workspace --all-targets -D warnings
+cargo test <name>  # run a single test
+cargo fmt          # format code
 ```
 
 ## Integrity
 
-Take **NO** shortcuts.
-Do **NOT** use judgement calls to avoid extra work.
-Do **NOT** try to interpret rules liberally.
-When something is slow or seems unlikely to matter, do it anyway.
+Take **NO** shortcuts. Do not use judgement calls or liberal rule interpretations to avoid work — when something is slow or seems unlikely to matter, do it anyway.
 If something genuinely cannot be done, say so explicitly and upfront rather than quietly omitting it.
 Never substitute a cheaper version of work and report it as the full thing.
 
@@ -111,13 +90,11 @@ mio, hmac, sha2, aes, cfb-mode, getrandom, log. No other external crates without
 
 - Use the "/implement-and-review" command for **ALL** coding. **STRICTLY NO EXCEPTIONS OR JUDGEMENT CALLS**.
 - Language: Oxford English
-- Write clean and neat code to be proud of. Always prefer simple and elegant solutions.
+- Always prefer simple and elegant solutions.
 - Names should be descriptive and allow for local reasoning (code should be self-documenting through naming). Avoid generic names such as `bytes`, `buf`, `data`, `result`, `n`, or single letters — name variables after what they represent in the domain (e.g., `encoded_pdu`, `recv_buf`, `bytes_received`).
 - Code comments should focus on rationale (the "why", not the "how").
-- Do *NOT* add external dependencies without permission.
 - Follow strict RFC compliance when implementing SNMP. Do not assume behavior — verify against the relevant RFC text. Wait for user confirmation before deviating from RFC specifications.
 - Use red/green TDD
-- Do not use "is_ok()", "is_some()" or similar to check values in unit tests. Verify the contained value as well.
 
 ### Gherkin / BDD
 
@@ -162,8 +139,6 @@ Use `grep -r 'Implements: REQ-'` to find all implementation sites, `grep -r 'Ver
 ### Rust
 
 - No compiler warnings: Code must compile without warnings. Do not suppress warnings with `#[expect(...)]` unless there is a compelling reason; prefer fixing the underlying issue instead.
-- Write idiomatic Rust code.
-- Use Rust's type system to enforce correctness and avoid common errors.
 - Use newtypes to wrap more basic types when this can have benefits
 - Document crate and module public APIs with clear and concise (but not too verbose)documentation. Add examples to external APIs.
 - Use "given-when-then" naming and structure for tests (except for simple tests that do not set up any state)
@@ -171,11 +146,13 @@ Use `grep -r 'Implements: REQ-'` to find all implementation sites, `grep -r 'Ver
 - Implement `std::error::Error` for all error types (including internal "kind" enums).
 - Place "impl" blocks immediately after the struct definition.
 - Keep trait implementations close to the data structure but after the "impl" block.
-- Order code so that a reader starting from the top understands the high-level intent, with details filled in below.
-- Keep Related Things Together: Group related structs, enums, and trait implementations, rather than splitting them arbitrarily across the file.
+- Order code top-down: callers above callees, so a reader encounters high-level intent before implementation details.
 - Avoid using "cfg" to write code that is only used for test support. Test using the existing public APIs instead.
 - Do not use "as" for conversion between integer types unless truncation is intended. Use "from" or "try_from" instead.
 - Do NOT use unwrap in production code, and avoid expect unless it is provable that it cannot be triggered (state why in a code comment).
+- Do NOT use unsafe without explicit user approval.
+- Minimise visibility: prefer private over `pub(crate)` over `pub`. Only make items as visible as they need to be.
+- Prefer guard clauses and early returns over deeply nested if/else chains.
 - Tests should not use "is_ok" or "is_some" for verification (check the value properly)
 
 ## Tool preferences
