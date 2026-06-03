@@ -24,6 +24,8 @@ text = """
 
 [REQ-0116] The agent MUST reject at construction time any user entry whose user name is empty (zero-length).
 
+[REQ-0131] The agent MUST reject at construction time any user entry whose user name exceeds 32 octets, per the `usmUserName` `SnmpAdminString (SIZE(1..32))` constraint in RFC 3414.
+
 [REQ-0129] The agent's minimum acceptable security level MUST be configured together with the user entry and engine-boots persistence store as a single configuration unit, so that the dependencies between these values are enforced at compile time rather than at runtime.
 
 **Rationale:**
@@ -41,4 +43,9 @@ Without this coupling, an authenticated agent could silently default to a non-pe
 
 Rejecting empty user names at construction (REQ-0116) makes the "non-empty" constraint in REQ-0091 a hard error rather than a documentation-only statement.
 An empty user name is never valid in USM: RFC 3414 §2.1 defines the user name as the identity under which authentication credentials are selected, and an empty identity would match no legitimate user entry in any conforming manager.
-Catching this at the configuration boundary prevents the agent from entering a state where the user-name matching logic in REQ-0078 behaves in undefined or surprising ways."""
+Catching this at the configuration boundary prevents the agent from entering a state where the user-name matching logic in REQ-0078 behaves in undefined or surprising ways.
+
+Rejecting over-length user names at construction (REQ-0131) enforces the `SnmpAdminString (SIZE(1..32))` constraint from the USM MIB's `usmUserName` column.
+A user name exceeding 32 octets cannot match any valid `msgUserName` on the wire (which is constrained to `OCTET STRING (SIZE(0..32))` per RFC 3414 §2.4), so accepting it at configuration time would create a user that can never be addressed by any conforming manager.
+
+*Since: v0.1.0*"""

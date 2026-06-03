@@ -6,6 +6,7 @@ title = "Enforce RFC 3414 upper bound (32 octets) on USM user name"
 status = "active"
 created = "2026-06-03"
 started = "2026-06-03"
+refs = ["RFC-0007"]
 
 [content]
 description = """
