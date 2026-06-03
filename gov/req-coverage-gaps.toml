@@ -242,3 +242,13 @@ rationale = "User name length rejection is a configuration-time constraint enfor
 req     = "REQ-0132"
 missing = ["behave_test"]
 rationale = "Oversized msgUserName rejection requires crafting a packet with a user name field exceeding 32 octets, which net-snmp CLI tools cannot produce. Verified by unit tests with hand-crafted BER frames."
+
+[[gap]]
+req     = "REQ-0133"
+missing = ["behave_test"]
+rationale = "GETBULK response size bounding requires sending a request with a specific small msgMaxSize in the HeaderData field, which net-snmp CLI tools do not expose. Verified by unit tests and a dispatch integration test with hand-crafted frames."
+
+[[gap]]
+req     = "REQ-0134"
+missing = ["behave_test"]
+rationale = "Row-boundary truncation of GETBULK repeating sections requires the same msgMaxSize control as REQ-0133. Verified by unit tests that assert exact varbind counts at row boundaries."
