@@ -4,6 +4,9 @@
 //! dispatch path can be exercised by fuzz targets and unit tests without
 //! requiring a running event loop.
 
+mod dispatch_context;
+pub use dispatch_context::{DispatchContext, DispatchInputs, NoUserSecurityLevelError};
+
 use crate::transport::event_loop::{MAX_BULK_REPETITIONS, MAX_FRAME_SIZE};
 use crate::transport::request;
 // Implements: [[RFC-0009:C-FACADE]]
@@ -71,133 +74,571 @@ static UNKNOWN_SECURITY_MODELS_OID: std::sync::LazyLock<crate::codec::Oid> =
 /// Bit mask for the `reportableFlag` in `msgFlags` (RFC 3412 §7.1.3a).
 const REPORTABLE_FLAG: u8 = 0x04;
 
-/// Named inputs for constructing a [`DispatchContext`].
+/// Decode, validate, and dispatch a single RFC 3430 BER frame, returning
+/// the encoded response bytes on success.
 ///
-/// Bundles the per-frame engine state, USM statistics counters, configured user,
-/// and security-level floor so the validating constructor takes a single struct
-/// (named fields at the call site) instead of many positional arguments.
+/// `frame` is the complete BER bytes (SEQUENCE tag + length + content).
+/// Returns `Some(encoded_response)` when the frame produces a response, or
+/// `None` when it should be silently discarded (invalid encoding, or
+/// unsupported context name).
 ///
-/// Kept `pub` only so the out-of-workspace `fuzz` crate can build inputs directly;
-/// `#[doc(hidden)]` keeps it off the advertised API. Not a supported public type.
+/// Engine-ID discovery probes (empty `msgAuthoritativeEngineID`) always produce
+/// a Report PDU response and increment `ctx.inputs.unknown_engine_ids_counter` (REQ-0093),
+/// provided the `reportableFlag` ([`REPORTABLE_FLAG`]) is set in `msgFlags`. Probes without
+/// the flag set are silently discarded per RFC 3412 §7.1.3a.
+///
+/// Kept `pub` only so the out-of-workspace `fuzz` crate can drive dispatch directly;
+/// `#[doc(hidden)]` keeps it off the advertised API. Not a supported public entry point — do not widen.
 ///
 /// # Requirements
-/// Implements: REQ-0077, REQ-0078, REQ-0079, REQ-0093, REQ-0094, REQ-0098, REQ-0100, REQ-0101, REQ-0104, REQ-0115, REQ-0130
+/// Implements: REQ-0056, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0077, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0102, REQ-0103, REQ-0104, REQ-0107, REQ-0109, REQ-0115, REQ-0130
 #[doc(hidden)]
-pub struct DispatchInputs<'a> {
-    /// The agent's authoritative engine ID.
-    pub engine_id: &'a [u8],
-    /// Current `snmpEngineBoots` value.
-    pub engine_boots: u32,
-    /// Current `snmpEngineTime` in seconds.
-    pub engine_time: u32,
-    /// Counter for `usmStatsUnknownEngineIDs` (REQ-0093).
-    pub unknown_engine_ids_counter: &'a mut u32,
-    /// Counter for `usmStatsUnknownUserNames` (REQ-0078).
-    // Implements: REQ-0078
-    pub unknown_user_names_counter: &'a mut u32,
-    /// Counter for `usmStatsUnsupportedSecLevels` (REQ-0079).
-    // Implements: REQ-0079
-    pub unsupported_sec_levels_counter: &'a mut u32,
-    /// Counter for `usmStatsWrongDigests` (REQ-0100).
-    // Implements: REQ-0100
-    pub wrong_digests_counter: &'a mut u32,
-    /// Counter for `usmStatsNotInTimeWindows` (REQ-0098).
-    // Implements: REQ-0098
-    pub not_in_time_windows_counter: &'a mut u32,
-    /// Counter for `usmStatsDecryptionErrors` (REQ-0101).
-    // Implements: REQ-0101
-    pub decryption_errors_counter: &'a mut u32,
-    /// Counter for `snmpUnknownSecurityModels` (RFC 3412 §7.1).
+#[must_use]
+pub fn process_snmpv3_request(
+    frame: &[u8],
+    ctx: &mut DispatchContext<'_>,
+    mib: &crate::mib::Store,
+) -> Option<Vec<u8>> {
+    // Decode as an SNMPv3 message. Non-v3 messages are silently discarded
+    // per REQ-0073.
+    let v3_msg = crate::codec::decode_v3_message(frame)
+        .inspect_err(|decode_error| debug!("failed to decode SNMPv3 message: {decode_error}"))
+        .ok()?;
+
+    // RFC 3412 §7.2 step 2: reject messages with unsupported security models.
     // Implements: REQ-0115
-    pub unknown_security_models_counter: &'a mut u32,
-    /// Optional configured USM user; `None` when no USM user is configured (REQ-0078, REQ-0079).
-    // Implements: REQ-0078, REQ-0079
-    pub usm_user: Option<&'a crate::usm::user::UsmUser>,
-    /// The agent's configured minimum acceptable security level (REQ-0077, REQ-0079).
-    /// Messages with a security level below this floor are rejected.
-    // Implements: REQ-0077, REQ-0079
-    pub minimum_security_level: crate::usm::user::SecurityLevel,
-}
-
-/// Validated engine state and statistics for inbound frame dispatch.
-///
-/// Construct via [`DispatchContext::new`] (validating) — the no-user-implies-noAuthNoPriv
-/// invariant is upheld so the bad state is never observable at dispatch time.
-///
-/// Kept `pub` only so the out-of-workspace `fuzz` crate can construct a context directly;
-/// `#[doc(hidden)]` on `new` keeps it off the advertised API. Not a supported public entry
-/// point — do not widen.
-///
-/// # Requirements
-/// Implements: REQ-0077, REQ-0079
-pub struct DispatchContext<'a> {
-    inputs: DispatchInputs<'a>,
-}
-
-/// Error returned when a [`DispatchContext`] is constructed with a minimum security
-/// level above `noAuthNoPriv` but no configured USM user.
-///
-/// Without a USM user the agent has no credentials and cannot authenticate or
-/// decrypt inbound messages. Configuring a security-level floor above
-/// `noAuthNoPriv` in that state would be silently unsatisfiable and is rejected
-/// at construction time so the bad state is never observable at dispatch time.
-///
-/// # Requirements
-/// Implements: REQ-0079
-#[derive(Debug, PartialEq, Eq)]
-pub struct NoUserSecurityLevelError;
-
-impl std::fmt::Display for NoUserSecurityLevelError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(crate::usm::user::SECURITY_LEVEL_REQUIRES_USER_MESSAGE)
+    if !v3_msg.security_model.is_usm() {
+        return emit_unknown_security_model_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
     }
-}
 
-impl std::error::Error for NoUserSecurityLevelError {}
+    // REQ-0093: engine-ID discovery probe — the manager sent an empty
+    // msgAuthoritativeEngineID. Respond with a Report PDU carrying the
+    // usmStatsUnknownEngineIDs counter and our authoritative engine state
+    // so the manager can learn our engine ID, boots, and approximate time.
+    if v3_msg.usm.auth_engine_id.is_empty() {
+        return emit_discovery_probe_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
+    }
 
-impl<'a> DispatchContext<'a> {
-    /// Construct a [`DispatchContext`], validating the no-user security-level invariant.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NoUserSecurityLevelError`] when `inputs.usm_user` is `None` and
-    /// `inputs.minimum_security_level` is above `noAuthNoPriv`. Without a USM user the
-    /// agent cannot authenticate or decrypt messages, so a floor above
-    /// `noAuthNoPriv` would be silently unsatisfiable and must be rejected
-    /// at construction time (fail-closed, REQ-0079).
-    ///
-    /// # Requirements
-    /// Implements: REQ-0079
-    #[doc(hidden)]
-    pub fn new(inputs: DispatchInputs<'a>) -> Result<Self, NoUserSecurityLevelError> {
-        // F1: without a configured user the agent has no credentials and cannot
-        // serve any security level above noAuthNoPriv. Reject at construction
-        // time so the invalid state is never observable downstream.
-        if crate::usm::user::security_level_requires_user(
-            inputs.usm_user,
-            inputs.minimum_security_level,
-        ) {
-            return Err(NoUserSecurityLevelError);
+    // REQ-0104: contextEngineID mismatch — the ScopedPDU's contextEngineID does not
+    // match the agent's snmpEngineID. Respond with a Report PDU carrying
+    // usmStatsUnknownEngineIDs.
+    if v3_msg.engine_id != ctx.inputs.engine_id {
+        return emit_unknown_engine_id_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
+    }
+
+    // REQ-0078, REQ-0080: user-name lookup — discovery (above) runs before this check.
+    // If a USM user is configured and the request names a different user, increment the
+    // counter and respond with a Report PDU only if the reportableFlag is set
+    // (RFC 3412 §7.1.3a).
+    // Non-constant-time comparison is acceptable: user names are transmitted in cleartext
+    // on the wire (RFC 3414 §2.4), so they are not secret.
+    if let Some(user) = ctx.inputs.usm_user
+        && v3_msg.user_name != user.name().as_bytes()
+    {
+        return emit_unknown_user_name_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
+    }
+
+    // REQ-0079, REQ-0103, REQ-0130: security-level enforcement — runs after user-name lookup.
+    // The invalid combination (privFlag without authFlag) is treated as a rejection.
+    // For noAuthNoPriv messages that pass both checks, authentication and decryption
+    // are skipped naturally (REQ-0103).
+    let msg_level = crate::usm::user::SecurityLevel::try_from(v3_msg.usm.security_flags);
+    if should_reject_security_level(
+        msg_level,
+        ctx.inputs.minimum_security_level,
+        ctx.inputs.usm_user,
+    ) {
+        return emit_unsupported_sec_level_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
+    }
+
+    // REQ-0100, REQ-0102: HMAC verification for authenticated messages.
+    // Runs after security-level check per REQ-0102 processing order.
+    // For noAuthNoPriv users, auth_protocol() returns None so this block is skipped (REQ-0103).
+    if let Some(user) = ctx.inputs.usm_user
+        && let (Some(auth_protocol), Some(auth_key)) = (user.auth_protocol(), user.auth_key())
+        && !verify_hmac(
+            auth_protocol,
+            auth_key,
+            v3_msg.raw_message,
+            &v3_msg.usm.auth_params,
+            v3_msg.auth_params_offset,
+        )
+    {
+        return emit_wrong_digest_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
+    }
+
+    // REQ-0098: time-window validation for authenticated messages.
+    // Runs after HMAC verification per REQ-0102 processing order.
+    if let Some(user) = ctx.inputs.usm_user
+        && user.auth_protocol().is_some()
+        && !crate::usm::time_window::is_in_time_window(
+            v3_msg.usm.auth_engine_boots,
+            v3_msg.usm.auth_engine_time,
+            ctx.inputs.engine_boots,
+            ctx.inputs.engine_time,
+        )
+    {
+        return emit_not_in_time_windows_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
+    }
+
+    // Only the default (empty) context name is supported per REQ-0058.
+    // For authPriv messages the context_name is inside the encrypted blob and is validated
+    // after decryption below. For cleartext messages it is already decoded.
+    if !v3_msg.context_name.is_empty() {
+        debug!("unsupported context name (plaintext), discarding");
+        return None;
+    }
+
+    // REQ-0101, REQ-0102: decrypt authPriv ScopedPDU ciphertext after HMAC and
+    // time-window validation pass (processing order mandated by REQ-0102).
+    // Returns (inbound_pdu, effective_context_name) so the correct context name
+    // flows to the response encoder regardless of whether it came from the outer
+    // message envelope (cleartext) or the decrypted ScopedPdu (authPriv).
+    let (inbound_pdu, response_context_name) = match v3_msg.scoped_data {
+        crate::codec::V3ScopedData::Plaintext(pdu) => (pdu, v3_msg.context_name),
+        crate::codec::V3ScopedData::Encrypted(ciphertext) => {
+            match decrypt_scoped_pdu(
+                ctx,
+                v3_msg.msg_id,
+                v3_msg.usm.security_flags,
+                &ciphertext,
+                &v3_msg.usm.priv_params,
+                v3_msg.usm.auth_engine_boots,
+                v3_msg.usm.auth_engine_time,
+            ) {
+                Ok(result) => result,
+                Err(response) => return response,
+            }
         }
-        Ok(Self::new_unchecked(inputs))
+    };
+    dispatch_pdu_and_encode_response(
+        ctx,
+        v3_msg.msg_id,
+        v3_msg.max_size,
+        &v3_msg.user_name,
+        mib,
+        inbound_pdu,
+        &response_context_name,
+    )
+}
+
+/// Dispatch a decoded PDU to the appropriate request handler and encode the response.
+///
+/// Called after all security checks pass. Determines the effective `max_size` for GETBULK
+/// from the message header, dispatches to the correct handler, then encodes the `SNMPv3`
+/// response with the security credentials from `ctx`.
+///
+/// # Requirements
+/// Implements: REQ-0056, REQ-0066, REQ-0068, REQ-0107
+fn dispatch_pdu_and_encode_response(
+    ctx: &DispatchContext<'_>,
+    msg_id: i32,
+    max_size: i32,
+    user_name: &[u8],
+    mib: &crate::mib::Store,
+    inbound_pdu: crate::codec::InboundPdu,
+    response_context_name: &[u8],
+) -> Option<Vec<u8>> {
+    let response = match inbound_pdu {
+        crate::codec::InboundPdu::GetRequest(req) => request::handle_get(&req, mib),
+        crate::codec::InboundPdu::GetNextRequest(req) => request::handle_get_next(&req, mib),
+        crate::codec::InboundPdu::GetBulkRequest(req) => {
+            // Bound response by the lesser of the sender's declared max_size and
+            // the agent's own frame limit, then convert to usize for size arithmetic.
+            // max_size is validated >= 484 during decode (RFC 3412 §7.2 step 5), so
+            // it is always positive; unwrap_or(0) is defence-in-depth only.
+            let effective_max_size = usize::try_from(max_size).unwrap_or(0).min(MAX_FRAME_SIZE);
+            request::handle_get_bulk(&req, mib, MAX_BULK_REPETITIONS, effective_max_size)
+        }
+        crate::codec::InboundPdu::SetRequest(req) => request::handle_set(&req),
+    };
+
+    // Implements: REQ-0107 — response security level must match the request.
+    let response_auth = ctx
+        .inputs
+        .usm_user
+        .and_then(|user| user.auth_protocol().zip(user.auth_key()));
+    // Implements: REQ-0101, REQ-0107
+    let response_priv = ctx
+        .inputs
+        .usm_user
+        .and_then(|user| user.priv_protocol().zip(user.priv_key()));
+    crate::codec::encode_v3_response(
+        msg_id,
+        ctx.inputs.engine_id,
+        user_name,
+        response_context_name,
+        ctx.inputs.engine_boots,
+        ctx.inputs.engine_time,
+        response_auth,
+        response_priv,
+        &response,
+    )
+    .inspect_err(|encode_error| debug!("failed to encode SNMPv3 response: {encode_error}"))
+    .ok()
+}
+
+/// Determine whether the message's security level should be rejected.
+///
+/// Three checks in priority order:
+/// 1. Floor: `msg_level < minimum_security_level` (REQ-0079)
+/// 2. Ceiling: `msg_level > user.security_level()` when a user is configured (REQ-0130)
+/// 3. F1 fail-closed: no configured user and `msg_level > noAuthNoPriv` (REQ-0079)
+///
+/// Returns `true` when the message must be rejected.
+///
+/// # Requirements
+/// Implements: REQ-0079, REQ-0103, REQ-0130
+fn should_reject_security_level(
+    msg_level: Result<crate::usm::user::SecurityLevel, crate::usm::user::InvalidMsgFlags>,
+    minimum_security_level: crate::usm::user::SecurityLevel,
+    usm_user: Option<&crate::usm::user::UsmUser>,
+) -> bool {
+    // Invalid flags (e.g. privFlag without authFlag) → always reject.
+    let Ok(level) = msg_level else { return true };
+    // REQ-0079: below the configured floor
+    level < minimum_security_level
+    // REQ-0130: above what the user can satisfy (if a user is configured)
+    || usm_user.is_some_and(|user| level > user.security_level())
+    // F1: with no configured user the agent has no credentials, so it can
+    // only serve noAuthNoPriv. A message claiming auth/priv must be rejected
+    // rather than served as if authenticated (fail closed). Implements: REQ-0079
+    || (usm_user.is_none() && level > crate::usm::user::SecurityLevel::NoAuthNoPriv)
+}
+
+/// Verify the HMAC of an authenticated `SNMPv3` message.
+///
+/// Returns `true` when the MAC is valid, `false` when verification fails or
+/// `auth_params_offset` is absent (which is treated as a MAC failure).
+///
+/// # Requirements
+/// Implements: REQ-0100, REQ-0102
+fn verify_hmac(
+    auth_protocol: crate::usm::auth::AuthProtocol,
+    auth_key: &crate::usm::keys::SecretKey,
+    raw_message: &[u8],
+    auth_params: &[u8],
+    auth_params_offset: Option<usize>,
+) -> bool {
+    let Some(offset) = auth_params_offset else {
+        trace!("auth_params_offset absent, treating as HMAC failure");
+        return false;
+    };
+    let zeroed = zero_auth_params_in_message(raw_message, offset, auth_params.len());
+    auth_protocol
+        .verify_mac(auth_key, &zeroed, auth_params)
+        .is_ok()
+}
+
+/// Decrypt an authPriv `ScopedPDU` ciphertext and decode the plaintext.
+///
+/// Returns `Ok((pdu, context_name))` on success.
+/// Returns `Err(Some(report_bytes))` when a decryption or decode error occurs and a
+/// Report PDU should be sent.
+/// Returns `Err(None)` for a silent discard (no privacy credentials configured).
+///
+/// # Requirements
+/// Implements: REQ-0101, REQ-0102, REQ-0104, REQ-0109
+fn decrypt_scoped_pdu(
+    ctx: &mut DispatchContext<'_>,
+    msg_id: i32,
+    security_flags: u8,
+    ciphertext: &[u8],
+    priv_params: &[u8],
+    auth_engine_boots: u32,
+    auth_engine_time: u32,
+) -> Result<(crate::codec::InboundPdu, Vec<u8>), Option<Vec<u8>>> {
+    // Security-level enforcement (REQ-0079) already verified the configured user
+    // is authPriv, so priv_protocol/priv_key must be Some here.
+    let Some((priv_protocol, priv_key)) = ctx
+        .inputs
+        .usm_user
+        .and_then(|user| user.priv_protocol().zip(user.priv_key()))
+    else {
+        // No configured user or no privacy credentials — can't decrypt, discard.
+        debug!("encrypted message but no privacy credentials configured, discarding");
+        return Err(None);
+    };
+
+    // msgPrivacyParameters must be exactly 8 bytes (the AES salt per RFC 3826 §2.2).
+    if priv_params.len() != 8 {
+        debug!("msgPrivacyParameters length {} != 8", priv_params.len());
+        return Err(emit_decryption_error_response(ctx, msg_id, security_flags));
     }
 
-    /// Construct a [`DispatchContext`] without validating the no-user security-level invariant.
-    ///
-    /// The caller MUST have already enforced the invariant (e.g. via [`EventLoop::new`]) before
-    /// calling this. It exists so the validated per-frame dispatch hot path carries no `Result`
-    /// or panic site.
-    ///
-    /// Kept `pub` only so the out-of-workspace `fuzz` crate can construct contexts directly
-    /// after performing its own validation. Not a supported public entry point — do not widen.
-    ///
-    /// # Requirements
-    /// Implements: REQ-0077
-    #[doc(hidden)]
-    #[must_use]
-    pub fn new_unchecked(inputs: DispatchInputs<'a>) -> Self {
-        Self { inputs }
+    // Implements: REQ-0109
+    // IV = engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes) per RFC 3826 §2.2.
+    let mut aes_iv = [0_u8; 16];
+    aes_iv[0..4].copy_from_slice(&auth_engine_boots.to_be_bytes());
+    aes_iv[4..8].copy_from_slice(&auth_engine_time.to_be_bytes());
+    aes_iv[8..16].copy_from_slice(priv_params);
+
+    let Ok(scoped_pdu_bytes) = priv_protocol.decrypt(priv_key, &aes_iv, ciphertext) else {
+        debug!("AES-CFB128 decryption failed");
+        return Err(emit_decryption_error_response(ctx, msg_id, security_flags));
+    };
+
+    let Ok(decoded) = crate::codec::decode_scoped_pdu(&scoped_pdu_bytes) else {
+        debug!("failed to decode decrypted ScopedPDU");
+        return Err(emit_decryption_error_response(ctx, msg_id, security_flags));
+    };
+
+    // REQ-0104: contextEngineID validation — the decrypted ScopedPDU's contextEngineID
+    // must match the agent's snmpEngineID per RFC 3412 §7.2 step 9d.
+    if decoded.context_engine_id != ctx.inputs.engine_id {
+        return Err(emit_unknown_engine_id_response(ctx, msg_id, security_flags));
     }
+
+    // Context name validated after decryption; only the default (empty) context is supported.
+    if !decoded.context_name.is_empty() {
+        debug!("unsupported context name (decrypted), discarding");
+        return Err(None);
+    }
+
+    Ok((decoded.pdu, decoded.context_name))
+}
+
+/// Engine identity and time parameters, captured independently from the counter
+/// mutable borrow so both can coexist across the `emit_report_response` call.
+struct EngineState<'a> {
+    id: &'a [u8],
+    boots: u32,
+    time: u32,
+}
+
+/// Increment `counter`, and if `reportableFlag` is set in `security_flags`, encode and
+/// return a Report PDU carrying `oid` and the updated counter value; otherwise return
+/// `None` (silent discard per RFC 3412 §7.1.3a).
+fn emit_report_response(
+    counter: &mut u32,
+    oid: &crate::codec::Oid,
+    trace_description: &str,
+    engine: &EngineState<'_>,
+    msg_id: i32,
+    security_flags: u8,
+) -> Option<Vec<u8>> {
+    *counter = counter.saturating_add(1);
+    let counter_value = *counter;
+    if security_flags & REPORTABLE_FLAG == 0 {
+        trace!("{trace_description} with reportableFlag unset, discarding silently");
+        return None;
+    }
+    crate::codec::encode_v3_report(
+        msg_id,
+        engine.id,
+        engine.boots,
+        engine.time,
+        oid,
+        counter_value,
+    )
+    .inspect_err(|encode_error| {
+        debug!("failed to encode {trace_description} report: {encode_error}");
+    })
+    .ok()
+}
+
+/// Increment `decryption_errors_counter` and, if `reportableFlag` is set, return a
+/// `usmStatsDecryptionErrors` Report PDU; otherwise return `None` (silent discard).
+///
+/// # Requirements
+/// Implements: REQ-0101
+fn emit_decryption_error_response(
+    ctx: &mut DispatchContext<'_>,
+    msg_id: i32,
+    security_flags: u8,
+) -> Option<Vec<u8>> {
+    // Extract engine state first to avoid holding a borrow of ctx while also
+    // borrowing the counter field mutably.
+    let engine = EngineState {
+        id: ctx.inputs.engine_id,
+        boots: ctx.inputs.engine_boots,
+        time: ctx.inputs.engine_time,
+    };
+    emit_report_response(
+        ctx.inputs.decryption_errors_counter,
+        &DECRYPTION_ERRORS_OID,
+        "decryption error",
+        &engine,
+        msg_id,
+        security_flags,
+    )
+}
+
+/// Increment `unknown_engine_ids_counter` unconditionally (RFC 3414 §4.2.4) and, if
+/// `reportableFlag` is set, return a `usmStatsUnknownEngineIDs` Report PDU; otherwise
+/// return `None` (silent discard).
+///
+/// # Requirements
+/// Implements: REQ-0104
+fn emit_unknown_engine_id_response(
+    ctx: &mut DispatchContext<'_>,
+    msg_id: i32,
+    security_flags: u8,
+) -> Option<Vec<u8>> {
+    let engine = EngineState {
+        id: ctx.inputs.engine_id,
+        boots: ctx.inputs.engine_boots,
+        time: ctx.inputs.engine_time,
+    };
+    emit_report_response(
+        ctx.inputs.unknown_engine_ids_counter,
+        &UNKNOWN_ENGINE_IDS_OID,
+        "unknown engine ID",
+        &engine,
+        msg_id,
+        security_flags,
+    )
+}
+
+/// Increment `unknown_security_models_counter` and, if `reportableFlag` is set, return a
+/// `snmpUnknownSecurityModels` Report PDU; otherwise return `None` (silent discard).
+///
+/// # Requirements
+/// Implements: REQ-0115
+fn emit_unknown_security_model_response(
+    ctx: &mut DispatchContext<'_>,
+    msg_id: i32,
+    security_flags: u8,
+) -> Option<Vec<u8>> {
+    let engine = EngineState {
+        id: ctx.inputs.engine_id,
+        boots: ctx.inputs.engine_boots,
+        time: ctx.inputs.engine_time,
+    };
+    emit_report_response(
+        ctx.inputs.unknown_security_models_counter,
+        &UNKNOWN_SECURITY_MODELS_OID,
+        "unknown security model",
+        &engine,
+        msg_id,
+        security_flags,
+    )
+}
+
+/// Increment `unknown_engine_ids_counter` and, if `reportableFlag` is set, return a
+/// `usmStatsUnknownEngineIDs` Report PDU for an engine-ID discovery probe; otherwise
+/// return `None` (silent discard).
+///
+/// # Requirements
+/// Implements: REQ-0093
+fn emit_discovery_probe_response(
+    ctx: &mut DispatchContext<'_>,
+    msg_id: i32,
+    security_flags: u8,
+) -> Option<Vec<u8>> {
+    let engine = EngineState {
+        id: ctx.inputs.engine_id,
+        boots: ctx.inputs.engine_boots,
+        time: ctx.inputs.engine_time,
+    };
+    emit_report_response(
+        ctx.inputs.unknown_engine_ids_counter,
+        &UNKNOWN_ENGINE_IDS_OID,
+        "engine-ID discovery probe",
+        &engine,
+        msg_id,
+        security_flags,
+    )
+}
+
+/// Increment `unknown_user_names_counter` and, if `reportableFlag` is set, return a
+/// `usmStatsUnknownUserNames` Report PDU; otherwise return `None` (silent discard).
+///
+/// # Requirements
+/// Implements: REQ-0078, REQ-0080
+fn emit_unknown_user_name_response(
+    ctx: &mut DispatchContext<'_>,
+    msg_id: i32,
+    security_flags: u8,
+) -> Option<Vec<u8>> {
+    let engine = EngineState {
+        id: ctx.inputs.engine_id,
+        boots: ctx.inputs.engine_boots,
+        time: ctx.inputs.engine_time,
+    };
+    emit_report_response(
+        ctx.inputs.unknown_user_names_counter,
+        &UNKNOWN_USER_NAMES_OID,
+        "unknown user name",
+        &engine,
+        msg_id,
+        security_flags,
+    )
+}
+
+/// Increment `unsupported_sec_levels_counter` and, if `reportableFlag` is set, return a
+/// `usmStatsUnsupportedSecLevels` Report PDU; otherwise return `None` (silent discard).
+///
+/// # Requirements
+/// Implements: REQ-0079, REQ-0103, REQ-0130
+fn emit_unsupported_sec_level_response(
+    ctx: &mut DispatchContext<'_>,
+    msg_id: i32,
+    security_flags: u8,
+) -> Option<Vec<u8>> {
+    let engine = EngineState {
+        id: ctx.inputs.engine_id,
+        boots: ctx.inputs.engine_boots,
+        time: ctx.inputs.engine_time,
+    };
+    emit_report_response(
+        ctx.inputs.unsupported_sec_levels_counter,
+        &UNSUPPORTED_SEC_LEVELS_OID,
+        "unsupported security level",
+        &engine,
+        msg_id,
+        security_flags,
+    )
+}
+
+/// Increment `wrong_digests_counter` and, if `reportableFlag` is set, return a
+/// `usmStatsWrongDigests` Report PDU; otherwise return `None` (silent discard).
+///
+/// # Requirements
+/// Implements: REQ-0100, REQ-0102
+fn emit_wrong_digest_response(
+    ctx: &mut DispatchContext<'_>,
+    msg_id: i32,
+    security_flags: u8,
+) -> Option<Vec<u8>> {
+    let engine = EngineState {
+        id: ctx.inputs.engine_id,
+        boots: ctx.inputs.engine_boots,
+        time: ctx.inputs.engine_time,
+    };
+    emit_report_response(
+        ctx.inputs.wrong_digests_counter,
+        &WRONG_DIGESTS_OID,
+        "wrong digest",
+        &engine,
+        msg_id,
+        security_flags,
+    )
+}
+
+/// Increment `not_in_time_windows_counter` and, if `reportableFlag` is set, return a
+/// `usmStatsNotInTimeWindows` Report PDU; otherwise return `None` (silent discard).
+///
+/// # Requirements
+/// Implements: REQ-0098
+fn emit_not_in_time_windows_response(
+    ctx: &mut DispatchContext<'_>,
+    msg_id: i32,
+    security_flags: u8,
+) -> Option<Vec<u8>> {
+    let engine = EngineState {
+        id: ctx.inputs.engine_id,
+        boots: ctx.inputs.engine_boots,
+        time: ctx.inputs.engine_time,
+    };
+    emit_report_response(
+        ctx.inputs.not_in_time_windows_counter,
+        &NOT_IN_TIME_WINDOWS_OID,
+        "not-in-time-window",
+        &engine,
+        msg_id,
+        security_flags,
+    )
 }
 
 /// Return a copy of `raw_message` with the `msgAuthenticationParameters` bytes zeroed.
@@ -229,433 +670,6 @@ fn zero_auth_params_in_message(
         target.fill(0);
     }
     zeroed
-}
-
-/// Increment `decryption_errors_counter` and, if `reportableFlag` is set, return a
-/// `usmStatsDecryptionErrors` Report PDU; otherwise return `None` (silent discard).
-///
-/// # Requirements
-/// Implements: REQ-0101
-fn emit_decryption_error_response(
-    ctx: &mut DispatchContext<'_>,
-    msg_id: i32,
-    security_flags: u8,
-) -> Option<Vec<u8>> {
-    *ctx.inputs.decryption_errors_counter = ctx.inputs.decryption_errors_counter.saturating_add(1);
-    if security_flags & REPORTABLE_FLAG == 0 {
-        trace!("decryption error with reportableFlag unset, discarding silently");
-        return None;
-    }
-    crate::codec::encode_v3_report(
-        msg_id,
-        ctx.inputs.engine_id,
-        ctx.inputs.engine_boots,
-        ctx.inputs.engine_time,
-        &DECRYPTION_ERRORS_OID,
-        *ctx.inputs.decryption_errors_counter,
-    )
-    .inspect_err(|encode_error| debug!("failed to encode decryption-error report: {encode_error}"))
-    .ok()
-}
-
-/// Increment `unknown_engine_ids_counter` unconditionally (RFC 3414 §4.2.4) and, if
-/// `reportableFlag` is set, return a `usmStatsUnknownEngineIDs` Report PDU; otherwise
-/// return `None` (silent discard).
-///
-/// # Requirements
-/// Implements: REQ-0104
-fn emit_unknown_engine_id_response(
-    ctx: &mut DispatchContext<'_>,
-    msg_id: i32,
-    security_flags: u8,
-) -> Option<Vec<u8>> {
-    *ctx.inputs.unknown_engine_ids_counter =
-        ctx.inputs.unknown_engine_ids_counter.saturating_add(1);
-    if security_flags & REPORTABLE_FLAG == 0 {
-        trace!("unknown engine ID with reportableFlag unset, discarding silently");
-        return None;
-    }
-    crate::codec::encode_v3_report(
-        msg_id,
-        ctx.inputs.engine_id,
-        ctx.inputs.engine_boots,
-        ctx.inputs.engine_time,
-        &UNKNOWN_ENGINE_IDS_OID,
-        *ctx.inputs.unknown_engine_ids_counter,
-    )
-    .inspect_err(|encode_error| debug!("failed to encode unknown-engine-id report: {encode_error}"))
-    .ok()
-}
-
-/// Increment `unknown_security_models_counter` and, if `reportableFlag` is set, return a
-/// `snmpUnknownSecurityModels` Report PDU; otherwise return `None` (silent discard).
-///
-/// # Requirements
-/// Implements: REQ-0115
-fn emit_unknown_security_model_response(
-    ctx: &mut DispatchContext<'_>,
-    msg_id: i32,
-    security_flags: u8,
-) -> Option<Vec<u8>> {
-    *ctx.inputs.unknown_security_models_counter =
-        ctx.inputs.unknown_security_models_counter.saturating_add(1);
-    if security_flags & REPORTABLE_FLAG == 0 {
-        trace!("unknown security model with reportableFlag unset, discarding silently");
-        return None;
-    }
-    crate::codec::encode_v3_report(
-        msg_id,
-        ctx.inputs.engine_id,
-        ctx.inputs.engine_boots,
-        ctx.inputs.engine_time,
-        &UNKNOWN_SECURITY_MODELS_OID,
-        *ctx.inputs.unknown_security_models_counter,
-    )
-    .inspect_err(|encode_error| {
-        debug!("failed to encode unknown-security-model report: {encode_error}");
-    })
-    .ok()
-}
-
-/// Decode, validate, and dispatch a single RFC 3430 BER frame, returning
-/// the encoded response bytes on success.
-///
-/// `frame` is the complete BER bytes (SEQUENCE tag + length + content).
-/// Returns `Some(encoded_response)` when the frame produces a response, or
-/// `None` when it should be silently discarded (invalid encoding, or
-/// unsupported context name).
-///
-/// Engine-ID discovery probes (empty `msgAuthoritativeEngineID`) always produce
-/// a Report PDU response and increment `ctx.inputs.unknown_engine_ids_counter` (REQ-0093),
-/// provided the `reportableFlag` ([`REPORTABLE_FLAG`]) is set in `msgFlags`. Probes without
-/// the flag set are silently discarded per RFC 3412 §7.1.3a.
-///
-/// Kept `pub` only so the out-of-workspace `fuzz` crate can drive dispatch directly;
-/// `#[doc(hidden)]` keeps it off the advertised API. Not a supported public entry point — do not widen.
-///
-/// # Requirements
-/// Implements: REQ-0056, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0077, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0102, REQ-0103, REQ-0104, REQ-0107, REQ-0109, REQ-0115, REQ-0130
-#[doc(hidden)]
-#[must_use]
-#[expect(
-    clippy::too_many_lines,
-    reason = "sequential RFC 3414 security checks; splitting would obscure the mandated processing order"
-)]
-pub fn process_snmpv3_request(
-    frame: &[u8],
-    ctx: &mut DispatchContext<'_>,
-    mib: &crate::mib::Store,
-) -> Option<Vec<u8>> {
-    // Decode as an SNMPv3 message. Non-v3 messages are silently discarded
-    // per REQ-0073.
-    let v3_msg = crate::codec::decode_v3_message(frame)
-        .inspect_err(|decode_error| debug!("failed to decode SNMPv3 message: {decode_error}"))
-        .ok()?;
-
-    // RFC 3412 §7.2 step 2: reject messages with unsupported security models.
-    // Implements: REQ-0115
-    if !v3_msg.security_model.is_usm() {
-        return emit_unknown_security_model_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
-    }
-
-    // REQ-0093: engine-ID discovery probe — the manager sent an empty
-    // msgAuthoritativeEngineID. Respond with a Report PDU carrying the
-    // usmStatsUnknownEngineIDs counter and our authoritative engine state
-    // so the manager can learn our engine ID, boots, and approximate time.
-    if v3_msg.usm.auth_engine_id.is_empty() {
-        *ctx.inputs.unknown_engine_ids_counter =
-            ctx.inputs.unknown_engine_ids_counter.saturating_add(1);
-        // RFC 3412 §7.1.3a: if the reportableFlag is not set, discard without response.
-        if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
-            trace!("engine-ID discovery probe with reportableFlag unset, discarding silently");
-            return None;
-        }
-        return crate::codec::encode_v3_report(
-            v3_msg.msg_id,
-            ctx.inputs.engine_id,
-            ctx.inputs.engine_boots,
-            ctx.inputs.engine_time,
-            &UNKNOWN_ENGINE_IDS_OID,
-            *ctx.inputs.unknown_engine_ids_counter,
-        )
-        .inspect_err(|encode_error| {
-            debug!("failed to encode engine-id discovery report: {encode_error}");
-        })
-        .ok();
-    }
-
-    // REQ-0104: contextEngineID mismatch — the ScopedPDU's contextEngineID does not
-    // match the agent's snmpEngineID. Respond with a Report PDU carrying
-    // usmStatsUnknownEngineIDs.
-    if v3_msg.engine_id != ctx.inputs.engine_id {
-        return emit_unknown_engine_id_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
-    }
-
-    // REQ-0078, REQ-0080: user-name lookup — discovery (above) runs before this check.
-    // If a USM user is configured and the request names a different user, increment the
-    // counter and respond with a Report PDU only if the reportableFlag is set
-    // (RFC 3412 §7.1.3a).
-    // Non-constant-time comparison is acceptable: user names are transmitted in cleartext
-    // on the wire (RFC 3414 §2.4), so they are not secret.
-    if let Some(user) = ctx.inputs.usm_user
-        && v3_msg.user_name != user.name().as_bytes()
-    {
-        *ctx.inputs.unknown_user_names_counter =
-            ctx.inputs.unknown_user_names_counter.saturating_add(1);
-        if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
-            trace!("unknown user name with reportableFlag unset, discarding silently");
-            return None;
-        }
-        return crate::codec::encode_v3_report(
-            v3_msg.msg_id,
-            ctx.inputs.engine_id,
-            ctx.inputs.engine_boots,
-            ctx.inputs.engine_time,
-            &UNKNOWN_USER_NAMES_OID,
-            *ctx.inputs.unknown_user_names_counter,
-        )
-        .inspect_err(|encode_error| {
-            debug!("failed to encode unknown-user-name report: {encode_error}");
-        })
-        .ok();
-    }
-
-    // REQ-0079, REQ-0103, REQ-0130: security-level enforcement — runs after user-name lookup.
-    // Three checks:
-    // 1. Floor: reject if msg_level < minimum_security_level (REQ-0079)
-    // 2. Ceiling: reject if msg_level > user's capabilities (REQ-0130)
-    // 3. F1 fail-closed: without a user the agent has no credentials; reject any
-    //    message claiming a level above noAuthNoPriv (REQ-0079).
-    // The invalid combination (privFlag without authFlag) is treated as a rejection.
-    // For noAuthNoPriv messages that pass both checks, authentication and decryption
-    // are skipped naturally (REQ-0103).
-    let msg_level = crate::usm::user::SecurityLevel::try_from(v3_msg.usm.security_flags);
-    let reject = match msg_level {
-        Ok(level) => {
-            // REQ-0079: below the configured floor
-            level < ctx.inputs.minimum_security_level
-            // REQ-0130: above what the user can satisfy (if a user is configured)
-            || ctx.inputs.usm_user.is_some_and(|user| level > user.security_level())
-            // F1: with no configured user the agent has no credentials, so it can
-            // only serve noAuthNoPriv. A message claiming auth/priv must be rejected
-            // rather than served as if authenticated (fail closed). Implements: REQ-0079
-            || (ctx.inputs.usm_user.is_none()
-                && level > crate::usm::user::SecurityLevel::NoAuthNoPriv)
-        }
-        // Invalid flags (e.g. privFlag without authFlag)
-        Err(_) => true,
-    };
-    if reject {
-        *ctx.inputs.unsupported_sec_levels_counter =
-            ctx.inputs.unsupported_sec_levels_counter.saturating_add(1);
-        if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
-            trace!("unsupported security level with reportableFlag unset, discarding silently");
-            return None;
-        }
-        return crate::codec::encode_v3_report(
-            v3_msg.msg_id,
-            ctx.inputs.engine_id,
-            ctx.inputs.engine_boots,
-            ctx.inputs.engine_time,
-            &UNSUPPORTED_SEC_LEVELS_OID,
-            *ctx.inputs.unsupported_sec_levels_counter,
-        )
-        .inspect_err(|encode_error| {
-            debug!("failed to encode unsupported-sec-level report: {encode_error}");
-        })
-        .ok();
-    }
-
-    // REQ-0100, REQ-0102: HMAC verification for authenticated messages.
-    // Runs after security-level check per REQ-0102 processing order.
-    // For noAuthNoPriv users, auth_protocol() returns None so this block is skipped (REQ-0103).
-    if let Some(user) = ctx.inputs.usm_user
-        && let (Some(auth_protocol), Some(auth_key)) = (user.auth_protocol(), user.auth_key())
-    {
-        let auth_params = &v3_msg.usm.auth_params;
-        let hmac_ok = if let Some(offset) = v3_msg.auth_params_offset {
-            let zeroed = zero_auth_params_in_message(v3_msg.raw_message, offset, auth_params.len());
-            auth_protocol
-                .verify_mac(auth_key, &zeroed, auth_params)
-                .is_ok()
-        } else {
-            trace!("auth_params_offset absent, treating as HMAC failure");
-            false
-        };
-        if !hmac_ok {
-            *ctx.inputs.wrong_digests_counter = ctx.inputs.wrong_digests_counter.saturating_add(1);
-            if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
-                trace!("wrong digest with reportableFlag unset, discarding silently");
-                return None;
-            }
-            return crate::codec::encode_v3_report(
-                v3_msg.msg_id,
-                ctx.inputs.engine_id,
-                ctx.inputs.engine_boots,
-                ctx.inputs.engine_time,
-                &WRONG_DIGESTS_OID,
-                *ctx.inputs.wrong_digests_counter,
-            )
-            .inspect_err(|encode_error| {
-                debug!("failed to encode wrong-digest report: {encode_error}");
-            })
-            .ok();
-        }
-    }
-
-    // REQ-0098: time-window validation for authenticated messages.
-    // Runs after HMAC verification per REQ-0102 processing order.
-    if let Some(user) = ctx.inputs.usm_user
-        && user.auth_protocol().is_some()
-        && !crate::usm::time_window::is_in_time_window(
-            v3_msg.usm.auth_engine_boots,
-            v3_msg.usm.auth_engine_time,
-            ctx.inputs.engine_boots,
-            ctx.inputs.engine_time,
-        )
-    {
-        *ctx.inputs.not_in_time_windows_counter =
-            ctx.inputs.not_in_time_windows_counter.saturating_add(1);
-        if v3_msg.usm.security_flags & REPORTABLE_FLAG == 0 {
-            trace!("not-in-time-window with reportableFlag unset, discarding silently");
-            return None;
-        }
-        return crate::codec::encode_v3_report(
-            v3_msg.msg_id,
-            ctx.inputs.engine_id,
-            ctx.inputs.engine_boots,
-            ctx.inputs.engine_time,
-            &NOT_IN_TIME_WINDOWS_OID,
-            *ctx.inputs.not_in_time_windows_counter,
-        )
-        .inspect_err(|encode_error| {
-            debug!("failed to encode not-in-time-window report: {encode_error}");
-        })
-        .ok();
-    }
-
-    // Only the default (empty) context name is supported per REQ-0058.
-    // For authPriv messages the context_name is inside the encrypted blob and is validated
-    // after decryption below. For cleartext messages it is already decoded.
-    if !v3_msg.context_name.is_empty() {
-        debug!("unsupported context name (plaintext), discarding");
-        return None;
-    }
-
-    // REQ-0101, REQ-0102: decrypt authPriv ScopedPDU ciphertext after HMAC and
-    // time-window validation pass (processing order mandated by REQ-0102).
-    // Returns (inbound_pdu, effective_context_name) so the correct context name
-    // flows to the response encoder regardless of whether it came from the outer
-    // message envelope (cleartext) or the decrypted ScopedPdu (authPriv).
-    let (inbound_pdu, response_context_name) = match v3_msg.scoped_data {
-        crate::codec::V3ScopedData::Plaintext(pdu) => (pdu, v3_msg.context_name),
-        crate::codec::V3ScopedData::Encrypted(ciphertext) => {
-            // Security-level enforcement (REQ-0079) already verified the configured user
-            // is authPriv, so priv_protocol/priv_key must be Some here.
-            let Some((priv_protocol, priv_key)) = ctx
-                .inputs
-                .usm_user
-                .and_then(|user| user.priv_protocol().zip(user.priv_key()))
-            else {
-                // No configured user or no privacy credentials — can't decrypt, discard.
-                debug!("encrypted message but no privacy credentials configured, discarding");
-                return None;
-            };
-
-            // msgPrivacyParameters must be exactly 8 bytes (the AES salt per RFC 3826 §2.2).
-            let priv_params = &v3_msg.usm.priv_params;
-            if priv_params.len() != 8 {
-                debug!("msgPrivacyParameters length {} != 8", priv_params.len());
-                return emit_decryption_error_response(
-                    ctx,
-                    v3_msg.msg_id,
-                    v3_msg.usm.security_flags,
-                );
-            }
-
-            // Implements: REQ-0109
-            // IV = engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes) per RFC 3826 §2.2.
-            let mut aes_iv = [0_u8; 16];
-            aes_iv[0..4].copy_from_slice(&v3_msg.usm.auth_engine_boots.to_be_bytes());
-            aes_iv[4..8].copy_from_slice(&v3_msg.usm.auth_engine_time.to_be_bytes());
-            aes_iv[8..16].copy_from_slice(priv_params);
-
-            let Ok(scoped_pdu_bytes) = priv_protocol.decrypt(priv_key, &aes_iv, &ciphertext) else {
-                debug!("AES-CFB128 decryption failed");
-                return emit_decryption_error_response(
-                    ctx,
-                    v3_msg.msg_id,
-                    v3_msg.usm.security_flags,
-                );
-            };
-
-            let Ok(decoded) = crate::codec::decode_scoped_pdu(&scoped_pdu_bytes) else {
-                debug!("failed to decode decrypted ScopedPDU");
-                return emit_decryption_error_response(
-                    ctx,
-                    v3_msg.msg_id,
-                    v3_msg.usm.security_flags,
-                );
-            };
-
-            // REQ-0104: contextEngineID validation — the decrypted ScopedPDU's contextEngineID
-            // must match the agent's snmpEngineID per RFC 3412 §7.2 step 9d.
-            if decoded.context_engine_id != ctx.inputs.engine_id {
-                return emit_unknown_engine_id_response(
-                    ctx,
-                    v3_msg.msg_id,
-                    v3_msg.usm.security_flags,
-                );
-            }
-
-            // Context name validated after decryption; only the default (empty) context is supported.
-            if !decoded.context_name.is_empty() {
-                debug!("unsupported context name (decrypted), discarding");
-                return None;
-            }
-
-            (decoded.pdu, decoded.context_name)
-        }
-    };
-    let response = match inbound_pdu {
-        crate::codec::InboundPdu::GetRequest(req) => request::handle_get(&req, mib),
-        crate::codec::InboundPdu::GetNextRequest(req) => request::handle_get_next(&req, mib),
-        crate::codec::InboundPdu::GetBulkRequest(req) => {
-            // Bound response by the lesser of the sender's declared max_size and
-            // the agent's own frame limit, then convert to usize for size arithmetic.
-            // max_size is validated >= 484 during decode (RFC 3412 §7.2 step 5), so
-            // it is always positive; unwrap_or(0) is defence-in-depth only.
-            let effective_max_size = usize::try_from(v3_msg.max_size)
-                .unwrap_or(0)
-                .min(MAX_FRAME_SIZE);
-            request::handle_get_bulk(&req, mib, MAX_BULK_REPETITIONS, effective_max_size)
-        }
-        crate::codec::InboundPdu::SetRequest(req) => request::handle_set(&req),
-    };
-
-    // Implements: REQ-0107 — response security level must match the request.
-    let response_auth = ctx
-        .inputs
-        .usm_user
-        .and_then(|user| user.auth_protocol().zip(user.auth_key()));
-    // Implements: REQ-0101, REQ-0107
-    let response_priv = ctx
-        .inputs
-        .usm_user
-        .and_then(|user| user.priv_protocol().zip(user.priv_key()));
-    crate::codec::encode_v3_response(
-        v3_msg.msg_id,
-        ctx.inputs.engine_id,
-        &v3_msg.user_name,
-        &response_context_name,
-        ctx.inputs.engine_boots,
-        ctx.inputs.engine_time,
-        response_auth,
-        response_priv,
-        &response,
-    )
-    .inspect_err(|encode_error| debug!("failed to encode SNMPv3 response: {encode_error}"))
-    .ok()
 }
 
 #[cfg(test)]
