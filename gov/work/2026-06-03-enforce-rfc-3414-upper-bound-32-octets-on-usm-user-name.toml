@@ -1,0 +1,44 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-06-03-001"
+title = "Enforce RFC 3414 upper bound (32 octets) on USM user name"
+status = "active"
+created = "2026-06-03"
+started = "2026-06-03"
+
+[content]
+description = """
+RFC 3414 defines `msgUserName` as `OCTET STRING (SIZE(0..32))` and the USM MIB constrains
+`usmUserName` to `SnmpAdminString (SIZE(1..32))`.
+Neither bound is currently enforced.
+
+On the receive path (`codec::ber::snmp`) the wire `msgUserName` is decoded as an unbounded
+`Vec<u8>`.
+At configuration time (`UserName::new`) only emptiness is checked, not length.
+
+This work item adds both bounds:
+- Reject `msgUserName` longer than 32 octets on the wire as malformed.
+- Reject names longer than 32 bytes in `UserName::new()` at configuration time.
+
+Origin: identified during review of WI-2026-06-01-001 (security review remediation)."""
+
+[[content.acceptance_criteria]]
+text = "UserName::new() rejects names longer than 32 bytes per RFC 3414 usmUserName SIZE(1..32)"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "Inbound msgUserName fields longer than 32 octets are rejected during decode per RFC 3414 msgUserName SIZE(0..32)"
+status = "pending"
+category = "fixed"
+
+[[content.acceptance_criteria]]
+text = "Red/green regression tests cover both bounds"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "cargo test, cargo clippy, cargo fmt, and govctl check all pass"
+status = "pending"
+category = "chore"
