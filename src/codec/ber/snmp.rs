@@ -34,13 +34,6 @@ pub struct V3MessageEnvelope<'a> {
     /// Message ID from `HeaderData`; echoed in the `SNMPv3` response.
     pub msg_id: i32,
     /// Maximum message size from `HeaderData`.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "decoded envelope fields are built out ahead of production callers in the dispatch layer"
-        )
-    )]
     pub max_size: i32,
     /// Security flags byte from `HeaderData`.
     pub security_flags: u8,

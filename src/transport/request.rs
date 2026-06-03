@@ -124,6 +124,9 @@ pub fn handle_get_next(req: &GetNextRequest, store: &Store) -> GetResponse {
 /// - The remaining varbinds are repeated up to `max_repetitions` times, walking
 ///   forward in the MIB from each starting OID. `max_repetitions` is clamped to
 ///   `max_repetitions_cap`.
+/// - The response is bounded to `max_response_size` bytes by estimating the
+///   wire size of accumulated varbinds. When the budget would be exceeded, the
+///   repeating section is truncated at a complete row boundary per RFC 3416 §4.2.3.
 ///
 /// RFC 3416 §4.2.3 specifies that a negative `max-repetitions` on the wire must
 /// be treated as zero. The `rasn-snmp` `BulkPdu` type represents both fields as
@@ -135,12 +138,13 @@ pub fn handle_get_next(req: &GetNextRequest, store: &Store) -> GetResponse {
 /// defence-in-depth measure against large positive values.
 ///
 /// # Requirements
-/// Implements: REQ-0021, REQ-0022, REQ-0024, REQ-0025, REQ-0026, REQ-0027, REQ-0028, REQ-0029, REQ-0030, REQ-0031, REQ-0066
+/// Implements: REQ-0021, REQ-0022, REQ-0024, REQ-0025, REQ-0026, REQ-0027, REQ-0028, REQ-0029, REQ-0030, REQ-0031, REQ-0066, REQ-0133, REQ-0134
 #[must_use]
 pub fn handle_get_bulk(
     req: &GetBulkRequest,
     store: &Store,
     max_repetitions_cap: u32,
+    max_response_size: usize,
 ) -> GetResponse {
     let varbind_count = req.varbinds.len();
 
@@ -152,7 +156,11 @@ pub fn handle_get_bulk(
     // Cap max_repetitions to our configurable ceiling to prevent abuse.
     let max_repetitions = req.max_repetitions.min(max_repetitions_cap);
 
+    // REQ-0133: budget for varbind wire bytes after subtracting the envelope overhead.
+    let varbind_budget = max_response_size.saturating_sub(V3_ENVELOPE_OVERHEAD);
+
     let mut response_varbinds: Vec<Varbind> = Vec::new();
+    let mut estimated_response_size: usize = 0;
 
     // Non-repeating section: resolved exactly once each, like GETNEXT.
     let (non_repeating_varbinds, repeating_varbinds) = req.varbinds.split_at(non_repeaters);
@@ -167,6 +175,7 @@ pub fn handle_get_bulk(
                 value: VarbindValue::EndOfMibView,
             },
         };
+        estimated_response_size += estimated_varbind_wire_size(&resolved);
         response_varbinds.push(resolved);
     }
 
@@ -179,25 +188,40 @@ pub fn handle_get_bulk(
             repeating_varbinds.iter().map(|vb| vb.oid.clone()).collect();
 
         for _ in 0..max_repetitions {
+            // Collect the entire row before committing any of it, so truncation
+            // always falls on a complete row boundary (REQ-0134).
+            let mut row_varbinds: Vec<Varbind> = Vec::with_capacity(current_oids.len());
+            let mut row_estimated_size: usize = 0;
             let mut all_end_of_mib = true;
+
             for current_oid in &mut current_oids {
-                match store.next(current_oid) {
+                let varbind = match store.next(current_oid) {
                     Some((next_oid, next_val)) => {
                         all_end_of_mib = false;
-                        response_varbinds.push(Varbind {
+                        let vb = Varbind {
                             oid: next_oid.clone(),
                             value: VarbindValue::Value(next_val.clone()),
-                        });
+                        };
                         *current_oid = next_oid.clone();
+                        vb
                     }
-                    None => {
-                        response_varbinds.push(Varbind {
-                            oid: current_oid.clone(),
-                            value: VarbindValue::EndOfMibView,
-                        });
-                    }
-                }
+                    None => Varbind {
+                        oid: current_oid.clone(),
+                        value: VarbindValue::EndOfMibView,
+                    },
+                };
+                row_estimated_size += estimated_varbind_wire_size(&varbind);
+                row_varbinds.push(varbind);
             }
+
+            // REQ-0133, REQ-0134: check size budget before committing this row.
+            if estimated_response_size + row_estimated_size > varbind_budget {
+                break;
+            }
+
+            estimated_response_size += row_estimated_size;
+            response_varbinds.extend(row_varbinds);
+
             // RFC 3416 §4.2.3: stop early once all columns have reached end of MIB.
             if all_end_of_mib {
                 break;
@@ -210,6 +234,71 @@ pub fn handle_get_bulk(
         error_status: ErrorStatus::NoError,
         error_index: 0,
         varbinds: response_varbinds,
+    }
+}
+
+/// Generous fixed overhead for the `SNMPv3` message envelope surrounding
+/// the varbind list: outer SEQUENCE, version, `HeaderData`, USM security
+/// parameters (with auth+priv placeholders), `ScopedPdu` headers, and
+/// Response PDU headers (tag, length, request-id, error-status, error-index,
+/// varbind-list SEQUENCE wrapper).
+///
+/// Breakdown: outer SEQUENCE (~4), version INTEGER (3), `HeaderData` (~30),
+/// USM security parameters OCTET STRING (~100 with auth+priv),
+/// `ScopedPdu` SEQUENCE + context fields (~20), Response PDU headers (~15),
+/// varbind-list SEQUENCE wrapper (~4). Total ≈ 176 bytes; 512 provides
+/// a factor-of-three safety margin.
+// Implements: REQ-0133
+const V3_ENVELOPE_OVERHEAD: usize = 512;
+
+/// Upper-bound estimate of a varbind's BER-encoded wire size.
+///
+/// Deliberately overestimates to avoid ever producing a response that
+/// exceeds the negotiated message size limit. Overestimation is safe:
+/// the agent returns fewer rows than it could, which is compliant with
+/// RFC 3416 §4.2.3.
+// Implements: REQ-0133
+fn estimated_varbind_wire_size(varbind: &Varbind) -> usize {
+    let oid_content_upper_bound = varbind.oid.as_slice().len() * 5;
+    let oid_tlv_size = 1 + length_of_length(oid_content_upper_bound) + oid_content_upper_bound;
+
+    let value_content_upper_bound = match &varbind.value {
+        VarbindValue::Value(Value::Integer32(_) | Value::IpAddress(_)) => 4,
+        VarbindValue::Value(Value::Counter32(_) | Value::Gauge32(_) | Value::TimeTicks(_)) => 5,
+        VarbindValue::Value(Value::Counter64(_)) => 9,
+        VarbindValue::Value(Value::OctetString(octets) | Value::Opaque(octets)) => octets.len(),
+        VarbindValue::Value(Value::ObjectIdentifier(oid)) => oid.as_slice().len() * 5,
+        VarbindValue::NoSuchObject
+        | VarbindValue::NoSuchInstance
+        | VarbindValue::EndOfMibView
+        | VarbindValue::Unspecified => 0,
+    };
+    let value_tlv_size =
+        1 + length_of_length(value_content_upper_bound) + value_content_upper_bound;
+
+    // Wrapping SEQUENCE: tag(1) + length + contents
+    let inner_size = oid_tlv_size + value_tlv_size;
+    1 + length_of_length(inner_size) + inner_size
+}
+
+/// Returns the number of bytes required by BER definite-length encoding for
+/// a field whose content is `content_length` bytes long.
+///
+/// Used for conservative size estimation in `estimated_varbind_wire_size`: the
+/// estimate must never undercount, so this function must account for all
+/// possible BER length encodings including those above 65535 bytes.
+///
+/// BER short form: 1 byte for lengths 0–127. BER long form: 1 indicator byte
+/// plus the minimum number of bytes needed to represent the length value.
+// Implements: REQ-0133
+fn length_of_length(content_length: usize) -> usize {
+    if content_length < 128 {
+        1
+    } else {
+        // BER long form: 1 indicator byte + the minimum number of bytes
+        // needed to encode the length value.
+        let significant_bytes = (usize::BITS - content_length.leading_zeros()).div_ceil(8);
+        1 + usize::from(u8::try_from(significant_bytes).unwrap_or(u8::MAX))
     }
 }
 
@@ -420,7 +509,7 @@ mod tests {
             }],
         };
 
-        let resp = handle_get_bulk(&req, &store, 100);
+        let resp = handle_get_bulk(&req, &store, 100, 0xFFFF);
 
         // Only one non-repeating result.
         assert_eq!(resp.varbinds.len(), 1);
@@ -445,7 +534,7 @@ mod tests {
             }],
         };
 
-        let resp = handle_get_bulk(&req, &store, 100);
+        let resp = handle_get_bulk(&req, &store, 100, 0xFFFF);
 
         assert_eq!(resp.varbinds.len(), 3);
         assert_eq!(resp.varbinds[0].oid, oid("1.3.6.1.2.1.1.1.0"));
@@ -473,7 +562,7 @@ mod tests {
             }],
         };
 
-        let resp = handle_get_bulk(&req, &store, 10);
+        let resp = handle_get_bulk(&req, &store, 10, 0xFFFF);
 
         // Cap of 10 applied.
         assert_eq!(resp.varbinds.len(), 10);
@@ -493,7 +582,7 @@ mod tests {
             }],
         };
 
-        let resp = handle_get_bulk(&req, &store, 100);
+        let resp = handle_get_bulk(&req, &store, 100, 0xFFFF);
 
         // Only one real entry then EndOfMibView in the second iteration — early stop.
         assert_eq!(resp.varbinds.len(), 2);
@@ -514,7 +603,7 @@ mod tests {
                 value: VarbindValue::Unspecified,
             }],
         };
-        let resp = handle_get_bulk(&req, &store, 100);
+        let resp = handle_get_bulk(&req, &store, 100, 0xFFFF);
         // RFC 3416 §4.2.3: stop early when all columns have reached end of MIB.
         // With an empty MIB the first repetition exhausts all columns immediately,
         // so the response contains exactly one EndOfMibView varbind.
@@ -541,7 +630,7 @@ mod tests {
                 },
             ],
         };
-        let resp = handle_get_bulk(&req, &store, 100);
+        let resp = handle_get_bulk(&req, &store, 100, 0xFFFF);
         // Only the non-repeater varbind (GETNEXT of first OID) should appear.
         assert_eq!(resp.varbinds.len(), 1);
     }
@@ -564,7 +653,7 @@ mod tests {
             }],
         };
 
-        let resp = handle_get_bulk(&req, &store, 100);
+        let resp = handle_get_bulk(&req, &store, 100, 0xFFFF);
 
         // No non-repeaters and no repetitions: the response must be empty.
         assert_eq!(
@@ -704,5 +793,255 @@ mod tests {
             (1000..=1100).contains(&hundredths),
             "expected 1000..=1100, got {hundredths}"
         );
+    }
+
+    // ── handle_get_bulk size bounding (REQ-0133, REQ-0134) ────────────────────
+
+    #[test]
+    fn given_large_values_when_get_bulk_with_small_max_size_then_repeating_section_truncated() {
+        // Verifies: REQ-0133, REQ-0134
+        // A MIB with large OctetString values and a small max_response_size
+        // must produce a truncated repeating section.
+        let mut store = Store::new();
+        for i in 0_u32..10 {
+            store.set(
+                oid(&format!("1.3.6.1.2.1.1.{i}.0")),
+                Value::OctetString(vec![0xAA; 500]),
+            );
+        }
+        let req = GetBulkRequest {
+            request_id: 1,
+            non_repeaters: 0,
+            max_repetitions: 10,
+            varbinds: vec![Varbind {
+                oid: oid("1.3.0"),
+                value: VarbindValue::Unspecified,
+            }],
+        };
+        // With a 2000-byte limit, only a few 500-byte values should fit.
+        // Budget: 2000 - 512 = 1488 bytes.
+        // Each varbind: OID 1.3.6.1.2.1.1.x.0 has 9 arcs → content upper bound 45 bytes,
+        // TLV = 1+1+45 = 47. Value: 500-byte OctetString → TLV = 1+2+500 = 503.
+        // Inner = 47+503 = 550. Wrapping SEQUENCE = 1+2+550 = 553.
+        // Row 1: 553 ≤ 1488 → accept (running=553).
+        // Row 2: 553+553=1106 ≤ 1488 → accept (running=1106).
+        // Row 3: 1106+553=1659 > 1488 → reject. 2 varbinds total.
+        let resp = handle_get_bulk(&req, &store, 100, 2000);
+
+        assert_eq!(resp.varbinds.len(), 2);
+    }
+
+    #[test]
+    fn given_large_non_repeaters_when_get_bulk_with_small_max_size_then_non_repeaters_preserved() {
+        // Verifies: REQ-0134
+        // Non-repeating varbinds must not be truncated even when they are large.
+        let mut store = Store::new();
+        store.set(
+            oid("1.3.6.1.2.1.1.1.0"),
+            Value::OctetString(vec![0xBB; 1000]),
+        );
+        store.set(
+            oid("1.3.6.1.2.1.1.2.0"),
+            Value::OctetString(vec![0xCC; 1000]),
+        );
+        store.set(
+            oid("1.3.6.1.2.1.1.3.0"),
+            Value::OctetString(vec![0xDD; 1000]),
+        );
+        let req = GetBulkRequest {
+            request_id: 2,
+            non_repeaters: 2,
+            max_repetitions: 10,
+            varbinds: vec![
+                Varbind {
+                    oid: oid("1.3.6.1.2.1.1.0.0"),
+                    value: VarbindValue::Unspecified,
+                },
+                Varbind {
+                    oid: oid("1.3.6.1.2.1.1.1.0"),
+                    value: VarbindValue::Unspecified,
+                },
+                Varbind {
+                    oid: oid("1.3.6.1.2.1.1.2.0"),
+                    value: VarbindValue::Unspecified,
+                },
+            ],
+        };
+        // Budget: 2000 - 512 = 1488 bytes.
+        // Non-repeater #1: GETNEXT of 1.3.6.1.2.1.1.0.0 → 1.3.6.1.2.1.1.1.0 (9 arcs, 1000 bytes).
+        //   OID TLV = 1+1+45 = 47. Value TLV = 1+2+1000 = 1003. Inner = 1050. Wrapping = 1+2+1050 = 1053.
+        // Non-repeater #2: GETNEXT of 1.3.6.1.2.1.1.1.0 → 1.3.6.1.2.1.1.2.0 (9 arcs, 1000 bytes).
+        //   Same estimate: 1053.
+        // After non-repeaters: running = 2106.
+        // Repeating column: GETNEXT of 1.3.6.1.2.1.1.2.0 → 1.3.6.1.2.1.1.3.0 (1000 bytes) → 1053.
+        //   2106 + 1053 = 3159 > 1488 → row rejected.
+        // Total: 2 non-repeater varbinds, 0 repeating varbinds.
+        let resp = handle_get_bulk(&req, &store, 100, 2000);
+
+        assert_eq!(resp.varbinds.len(), 2);
+    }
+
+    #[test]
+    fn given_multiple_columns_when_size_exceeded_then_truncated_at_row_boundary() {
+        // Verifies: REQ-0133, REQ-0134
+        // With two repeating columns, truncation must occur at a complete row
+        // boundary — the response must contain an even number of repeating varbinds.
+        let mut store = Store::new();
+        // Column A: 1.3.6.1.2.1.1.x.0
+        // Column B: 1.3.6.1.2.1.2.x.0
+        for i in 0_u32..20 {
+            store.set(
+                oid(&format!("1.3.6.1.2.1.1.{i}.0")),
+                Value::OctetString(vec![0xAA; 200]),
+            );
+            store.set(
+                oid(&format!("1.3.6.1.2.1.2.{i}.0")),
+                Value::OctetString(vec![0xBB; 200]),
+            );
+        }
+        let req = GetBulkRequest {
+            request_id: 3,
+            non_repeaters: 0,
+            max_repetitions: 20,
+            varbinds: vec![
+                Varbind {
+                    oid: oid("1.3.6.1.2.1.1"),
+                    value: VarbindValue::Unspecified,
+                },
+                Varbind {
+                    oid: oid("1.3.6.1.2.1.2"),
+                    value: VarbindValue::Unspecified,
+                },
+            ],
+        };
+        // Budget: 3000 - 512 = 2488 bytes.
+        // Each varbind: OID 1.3.6.1.2.1.x.y.0 has 9 arcs → content upper bound 45, TLV = 1+1+45 = 47.
+        //   Value: 200-byte OctetString → TLV = 1+2+200 = 203. Inner = 47+203 = 250.
+        //   Wrapping SEQUENCE = 1+2+250 = 253 (250 ≥ 128 so length_of_length = 2).
+        // Row size (2 columns) = 253 + 253 = 506.
+        // Row 1: 506 ≤ 2488 → accept (running=506).
+        // Row 2: 1012 ≤ 2488 → accept.
+        // Row 3: 1518 ≤ 2488 → accept.
+        // Row 4: 2024 ≤ 2488 → accept.
+        // Row 5: 2024+506=2530 > 2488 → reject.
+        // 4 complete rows × 2 columns = 8 varbinds.
+        let resp = handle_get_bulk(&req, &store, 100, 3000);
+
+        assert_eq!(resp.varbinds.len(), 8);
+    }
+
+    #[test]
+    fn given_zero_max_response_size_when_get_bulk_then_only_non_repeaters_returned() {
+        // Verifies: REQ-0133
+        // With max_response_size=0, varbind_budget = 0.saturating_sub(512) = 0, so
+        // no repeating rows fit. Non-repeaters are added unconditionally before the
+        // budget check, so the single non-repeater varbind must still appear.
+        let store = store_with(&[
+            ("1.3.6.1.2.1.1.1.0", Value::Integer32(1)),
+            ("1.3.6.1.2.1.1.2.0", Value::Integer32(2)),
+        ]);
+        let req = GetBulkRequest {
+            request_id: 5,
+            non_repeaters: 1,
+            max_repetitions: 10,
+            varbinds: vec![
+                Varbind {
+                    oid: oid("1.3.6.1.2.1.1.1.0"),
+                    value: VarbindValue::Unspecified,
+                },
+                Varbind {
+                    oid: oid("1.3.0"),
+                    value: VarbindValue::Unspecified,
+                },
+            ],
+        };
+
+        let resp = handle_get_bulk(&req, &store, 100, 0);
+
+        // Only the non-repeater; the repeating section has budget 0 so no rows fit.
+        assert_eq!(resp.varbinds.len(), 1);
+        assert_eq!(resp.varbinds[0].oid, oid("1.3.6.1.2.1.1.2.0"));
+    }
+
+    #[test]
+    fn given_estimated_varbind_size_is_always_at_least_actual_encoded_size() {
+        // Verifies: REQ-0133
+        // The estimator must never underestimate; doing so could cause the agent to
+        // produce a response exceeding the negotiated message size limit.
+        use crate::codec::ber::varbind::{encode_varbind, encode_varbind_value};
+
+        let cases: &[(Varbind, &str)] = &[
+            (
+                Varbind {
+                    oid: oid("1.3.6.1.2.1.1.1.0"),
+                    value: VarbindValue::Value(Value::Integer32(42)),
+                },
+                "Integer32",
+            ),
+            (
+                Varbind {
+                    oid: oid("1.3.6.1.2.1.1.1.0"),
+                    value: VarbindValue::Value(Value::OctetString(vec![0xAA; 200])),
+                },
+                "OctetString 200 bytes",
+            ),
+            (
+                Varbind {
+                    oid: oid("1.3.6.1.2.1.1.1.0"),
+                    value: VarbindValue::Value(Value::OctetString(vec![0xBB; 500])),
+                },
+                "OctetString 500 bytes",
+            ),
+            (
+                Varbind {
+                    oid: oid("1.3.6.1.2.1.1.1.0"),
+                    value: VarbindValue::Value(Value::Counter64(u64::MAX)),
+                },
+                "Counter64",
+            ),
+            (
+                Varbind {
+                    oid: oid("1.3.6.1.2.1.1.1.0"),
+                    value: VarbindValue::EndOfMibView,
+                },
+                "EndOfMibView",
+            ),
+        ];
+
+        for (varbind, label) in cases {
+            let estimate = estimated_varbind_wire_size(varbind);
+            let encoded_value = encode_varbind_value(&varbind.value)
+                .unwrap_or_else(|_| panic!("encode_varbind_value must succeed for {label}"));
+            let actual_encoded = encode_varbind(&varbind.oid, &encoded_value);
+            assert!(
+                estimate >= actual_encoded.len(),
+                "{label}: estimate {estimate} < actual encoded size {}",
+                actual_encoded.len()
+            );
+        }
+    }
+
+    #[test]
+    fn given_generous_max_response_size_when_get_bulk_then_all_repetitions_returned() {
+        // Verifies: REQ-0133
+        // With a generous max_response_size, all repetitions should be returned
+        // as if the size limit did not exist.
+        let store = store_with(&[
+            ("1.3.6.1.2.1.1.1.0", Value::Integer32(1)),
+            ("1.3.6.1.2.1.1.2.0", Value::Integer32(2)),
+            ("1.3.6.1.2.1.1.3.0", Value::Integer32(3)),
+        ]);
+        let req = GetBulkRequest {
+            request_id: 4,
+            non_repeaters: 0,
+            max_repetitions: 3,
+            varbinds: vec![Varbind {
+                oid: oid("1.3.0"),
+                value: VarbindValue::Unspecified,
+            }],
+        };
+        let resp = handle_get_bulk(&req, &store, 100, 0xFFFF);
+
+        assert_eq!(resp.varbinds.len(), 3);
     }
 }

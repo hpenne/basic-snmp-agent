@@ -47,7 +47,7 @@ pub(crate) const MAX_BULK_REPETITIONS: u32 = 100;
 /// size exceeds this are rejected and the connection is closed to prevent
 /// memory exhaustion.
 // Implements: REQ-0117
-const MAX_FRAME_SIZE: usize = 0xFFFF;
+pub(crate) const MAX_FRAME_SIZE: usize = 0xFFFF;
 
 /// Default maximum number of concurrent TCP connections the agent will accept.
 /// When this limit is reached, new connections are rejected until existing

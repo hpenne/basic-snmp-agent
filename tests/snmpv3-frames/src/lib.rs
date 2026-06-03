@@ -466,6 +466,89 @@ pub fn try_encode_get_bulk_request(
     max_repetitions: u32,
     oid_arcs: &[u32],
 ) -> Result<Vec<u8>, rasn::error::EncodeError> {
+    try_encode_get_bulk_request_with_max_size(
+        engine_id,
+        context_name,
+        msg_id,
+        request_id,
+        non_repeaters,
+        max_repetitions,
+        oid_arcs,
+        0xFFFF,
+    )
+}
+
+/// Encode a minimal `SNMPv3` `GetBulkRequest` frame with an explicit `msgMaxSize`.
+///
+/// Use this when you need to test that the agent honours a small `msgMaxSize`
+/// by truncating the repeating section of a `GetBulkRequest` response.
+///
+/// # Panics
+///
+/// Does not panic in practice; all internal BER encodings are of well-formed structures.
+///
+/// # Examples
+///
+/// ```
+/// let frame = snmpv3_frames::encode_get_bulk_request_with_max_size(
+///     b"\x80\x00\x1f\x88\x04test",
+///     b"",
+///     3,
+///     42,
+///     0,
+///     10,
+///     &[1, 3, 6, 1, 2, 1, 1, 1, 0],
+///     1500,
+/// );
+/// assert!(!frame.is_empty());
+/// ```
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test helper mirrors SNMPv3 message fields from RFC 3412/3414"
+)]
+#[must_use]
+pub fn encode_get_bulk_request_with_max_size(
+    engine_id: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    request_id: i32,
+    non_repeaters: u32,
+    max_repetitions: u32,
+    oid_arcs: &[u32],
+    msg_max_size: i32,
+) -> Vec<u8> {
+    try_encode_get_bulk_request_with_max_size(
+        engine_id,
+        context_name,
+        msg_id,
+        request_id,
+        non_repeaters,
+        max_repetitions,
+        oid_arcs,
+        msg_max_size,
+    )
+    .expect("GetBulkRequest must encode")
+}
+
+/// Fallible variant of [`encode_get_bulk_request_with_max_size`].
+///
+/// # Errors
+///
+/// Returns an error if BER encoding fails (e.g. invalid OID arcs).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test helper mirrors SNMPv3 message fields from RFC 3412/3414"
+)]
+pub fn try_encode_get_bulk_request_with_max_size(
+    engine_id: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    request_id: i32,
+    non_repeaters: u32,
+    max_repetitions: u32,
+    oid_arcs: &[u32],
+    msg_max_size: i32,
+) -> Result<Vec<u8>, rasn::error::EncodeError> {
     let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(oid_arcs.to_vec()));
     let rasn_pdu = RasnGetBulkRequest(BulkPdu {
         request_id,
@@ -476,13 +559,14 @@ pub fn try_encode_get_bulk_request(
             value: RasnVarBindValue::Unspecified,
         }],
     });
-    encode_v3_message(
+    encode_v3_message_with_max_size(
         engine_id,
         b"",
         context_name,
         msg_id,
         Pdus::GetBulkRequest(rasn_pdu),
         0x04,
+        msg_max_size,
     )
 }
 
@@ -704,6 +788,44 @@ fn encode_v3_message(
         msg_flags_byte,
         &[],
     )
+}
+
+// Like encode_v3_message but with an explicit msgMaxSize value in HeaderData.
+fn encode_v3_message_with_max_size(
+    engine_id: &[u8],
+    user_name: &[u8],
+    context_name: &[u8],
+    msg_id: i32,
+    pdus: Pdus,
+    msg_flags_byte: u8,
+    msg_max_size: i32,
+) -> Result<Vec<u8>, rasn::error::EncodeError> {
+    let scoped_pdu = ScopedPdu {
+        engine_id: engine_id.to_vec().into(),
+        name: context_name.to_vec().into(),
+        data: pdus,
+    };
+    let usm_params = USMSecurityParameters {
+        authoritative_engine_id: engine_id.to_vec().into(),
+        authoritative_engine_boots: 0.into(),
+        authoritative_engine_time: 0.into(),
+        user_name: rasn::types::OctetString::from(user_name.to_vec()),
+        authentication_parameters: rasn::types::OctetString::from(vec![]),
+        privacy_parameters: rasn::types::OctetString::from(vec![]),
+    };
+    let security_parameters_bytes = rasn::ber::encode(&usm_params)?;
+    let v3_message = V3Message {
+        version: 3.into(),
+        global_data: HeaderData {
+            message_id: msg_id.into(),
+            max_size: msg_max_size.into(),
+            flags: rasn::types::OctetString::from(vec![msg_flags_byte]),
+            security_model: 3.into(),
+        },
+        security_parameters: security_parameters_bytes.into(),
+        scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
+    };
+    rasn::ber::encode(&v3_message)
 }
 
 // Like encode_v3_message but with explicit auth_params bytes in USMSecurityParameters.

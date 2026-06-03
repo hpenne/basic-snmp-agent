@@ -227,6 +227,7 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
 
     Ok(V3InboundMessage {
         msg_id,
+        max_size: envelope.max_size,
         security_model,
         engine_id,
         context_name,

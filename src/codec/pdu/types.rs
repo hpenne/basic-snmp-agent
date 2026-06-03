@@ -300,6 +300,11 @@ pub struct UsmSecurityFields {
 pub struct V3InboundMessage<'a> {
     /// Message ID from `HeaderData`; echoed in the `SNMPv3` response.
     pub msg_id: i32,
+    /// Maximum message size the sender can accept (from `HeaderData`).
+    ///
+    /// Validated by the decoder to be at least 484 per RFC 3412 §6.6.
+    /// Used to bound GETBULK response sizes per REQ-0133.
+    pub max_size: i32,
     /// Security model from `HeaderData` (RFC 3412 §6.6); must be [`SecurityModel::USM`].
     pub security_model: SecurityModel,
     /// Engine ID from the `ScopedPdu`; empty for authPriv messages pending decryption.

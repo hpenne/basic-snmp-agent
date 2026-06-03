@@ -4,7 +4,7 @@
 //! dispatch path can be exercised by fuzz targets and unit tests without
 //! requiring a running event loop.
 
-use crate::transport::event_loop::MAX_BULK_REPETITIONS;
+use crate::transport::event_loop::{MAX_BULK_REPETITIONS, MAX_FRAME_SIZE};
 use crate::transport::request;
 // Implements: [[RFC-0009:C-FACADE]]
 use log::{debug, trace};
@@ -621,7 +621,14 @@ pub fn process_snmpv3_request(
         crate::codec::InboundPdu::GetRequest(req) => request::handle_get(&req, mib),
         crate::codec::InboundPdu::GetNextRequest(req) => request::handle_get_next(&req, mib),
         crate::codec::InboundPdu::GetBulkRequest(req) => {
-            request::handle_get_bulk(&req, mib, MAX_BULK_REPETITIONS)
+            // Bound response by the lesser of the sender's declared max_size and
+            // the agent's own frame limit, then convert to usize for size arithmetic.
+            // max_size is validated >= 484 during decode (RFC 3412 §7.2 step 5), so
+            // it is always positive; unwrap_or(0) is defence-in-depth only.
+            let effective_max_size = usize::try_from(v3_msg.max_size)
+                .unwrap_or(0)
+                .min(MAX_FRAME_SIZE);
+            request::handle_get_bulk(&req, mib, MAX_BULK_REPETITIONS, effective_max_size)
         }
         crate::codec::InboundPdu::SetRequest(req) => request::handle_set(&req),
     };
@@ -3116,6 +3123,80 @@ mod tests {
         assert_eq!(
             tc.unknown_security_models, 1,
             "counter must still be incremented"
+        );
+    }
+
+    // ── GetBulk msgMaxSize plumbing (REQ-0133) ───────────────────────────────
+
+    #[test]
+    fn given_small_msg_max_size_when_get_bulk_then_response_truncated_compared_to_large_limit() {
+        // Verifies: REQ-0133
+        // A GETBULK request with a small msgMaxSize must produce fewer varbinds than
+        // the same request with a large msgMaxSize, proving that max_size is plumbed
+        // through dispatch into handle_get_bulk.
+        let mut mib = crate::mib::Store::new();
+        // Populate 20 OIDs with 200-byte values so there is plenty to walk.
+        for i in 0_u32..20 {
+            mib.set(
+                format!("1.3.6.1.2.1.1.{i}.0").parse().unwrap(),
+                crate::codec::Value::OctetString(vec![0xAA; 200]),
+            );
+        }
+
+        let engine_id = test_engine_id();
+        let oid_arcs: &[u32] = &[1, 3, 6, 1, 2, 1, 1, 0, 0];
+
+        // Request with a generous size limit — all 20 repetitions should be returned
+        // (subject to the max_repetitions_cap, which is MAX_BULK_REPETITIONS).
+        let large_frame = snmpv3_frames::encode_get_bulk_request_with_max_size(
+            engine_id, b"", 1, 1, 0, 20, oid_arcs, 0x7FFF,
+        );
+        let full_varbind_count = {
+            let mut tc = TestCtx::new();
+            let response_bytes = {
+                let mut ctx = tc.ctx(None);
+                process_snmpv3_request(&large_frame, &mut ctx, &mib)
+            }
+            .expect("large-limit GetBulk must produce a response");
+            let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
+                .expect("response must be a valid SNMPv3 message");
+            let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data
+            else {
+                panic!("response must contain a cleartext ScopedPDU");
+            };
+            let rasn_snmp::v2::Pdus::Response(resp_pdu) = scoped_pdu.data else {
+                panic!("response must be a GetResponse PDU");
+            };
+            resp_pdu.0.variable_bindings.len()
+        };
+
+        // Request with a small size limit — the repeating section must be truncated.
+        let small_frame = snmpv3_frames::encode_get_bulk_request_with_max_size(
+            engine_id, b"", 2, 2, 0, 20, oid_arcs, 1500,
+        );
+        let truncated_varbind_count = {
+            let mut tc = TestCtx::new();
+            let response_bytes = {
+                let mut ctx = tc.ctx(None);
+                process_snmpv3_request(&small_frame, &mut ctx, &mib)
+            }
+            .expect("small-limit GetBulk must produce a response");
+            let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
+                .expect("response must be a valid SNMPv3 message");
+            let rasn_snmp::v3::ScopedPduData::CleartextPdu(scoped_pdu) = v3_response.scoped_data
+            else {
+                panic!("response must contain a cleartext ScopedPDU");
+            };
+            let rasn_snmp::v2::Pdus::Response(resp_pdu) = scoped_pdu.data else {
+                panic!("response must be a GetResponse PDU");
+            };
+            resp_pdu.0.variable_bindings.len()
+        };
+
+        assert!(
+            truncated_varbind_count < full_varbind_count,
+            "small msgMaxSize ({truncated_varbind_count} varbinds) must yield fewer varbinds \
+             than large msgMaxSize ({full_varbind_count} varbinds)"
         );
     }
 
