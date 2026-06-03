@@ -57,29 +57,8 @@ pub struct TrapResult {
 ///
 /// # Requirements
 /// Implements: REQ-0036, REQ-0105, REQ-0106
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::net::SocketAddr;
-/// use std::time::Instant;
-/// use basic_snmp_agent::transport::trap::TrapSender;
-/// use basic_snmp_agent::TrapPdu;
-///
-/// let sender = TrapSender::new(Instant::now(), vec![0x80, 0x00, 0x1f, 0x88, 0x04], 1, None).unwrap();
-/// let pdu = TrapPdu {
-///     request_id: 1,
-///     trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
-///     varbinds: vec![],
-/// };
-/// let dest: SocketAddr = "192.0.2.1:162".parse().unwrap();
-/// let results = sender.send_trap(&pdu, &[dest]);
-/// for r in results {
-///     println!("{}: {:?}", r.destination, r.outcome);
-/// }
-/// ```
 #[derive(Clone)]
-pub struct TrapSender {
+pub(crate) struct TrapSender {
     socket: Arc<UdpSocket>,
     start_time: Instant,
     engine_id: Vec<u8>,
@@ -115,21 +94,7 @@ impl TrapSender {
     /// # Errors
     ///
     /// Returns an error if the UDP socket cannot be bound.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use std::time::Instant;
-    /// use basic_snmp_agent::transport::trap::TrapSender;
-    ///
-    /// let sender = TrapSender::new(
-    ///     Instant::now(),
-    ///     vec![0x80, 0x00, 0x1f, 0x88, 0x04],
-    ///     1,
-    ///     None,
-    /// ).unwrap();
-    /// ```
-    pub fn new(
+    pub(crate) fn new(
         start_time: Instant,
         engine_id: Vec<u8>,
         engine_boots: u32,
@@ -154,26 +119,8 @@ impl TrapSender {
     ///
     /// # Requirements
     /// Implements: REQ-0035, REQ-0042, REQ-0044, REQ-0045, REQ-0047, REQ-0105, REQ-0106
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use std::net::SocketAddr;
-    /// use std::time::Instant;
-    /// use basic_snmp_agent::transport::trap::TrapSender;
-    /// use basic_snmp_agent::TrapPdu;
-    ///
-    /// let sender = TrapSender::new(Instant::now(), vec![0x80, 0x00, 0x1f, 0x88, 0x04], 1, None).unwrap();
-    /// let pdu = TrapPdu {
-    ///     request_id: 1,
-    ///     trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
-    ///     varbinds: vec![],
-    /// };
-    /// let dest: SocketAddr = "192.0.2.1:162".parse().unwrap();
-    /// let results = sender.send_trap(&pdu, &[dest]);
-    /// ```
     #[must_use]
-    pub fn send_trap(&self, pdu: &TrapPdu, destinations: &[SocketAddr]) -> Vec<TrapResult> {
+    pub(crate) fn send_trap(&self, pdu: &TrapPdu, destinations: &[SocketAddr]) -> Vec<TrapResult> {
         let wire_pdu = build_wire_trap(pdu, self.start_time);
 
         let encoded_pdu = match self.encode_trap_pdu(&wire_pdu) {

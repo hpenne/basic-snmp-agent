@@ -35,7 +35,7 @@ use std::fs;
 use std::path::Path;
 
 use arbitrary::Unstructured;
-use basic_snmp_agent::transport::dispatch::DispatchContext;
+use basic_snmp_agent::transport::dispatch::{DispatchContext, DispatchInputs};
 
 #[path = "arbitrary_snmpv3.rs"]
 mod arbitrary_snmpv3;
@@ -89,7 +89,9 @@ impl DispatchCounters {
         usm_user: Option<&'a basic_snmp_agent::usm::user::UsmUser>,
         minimum_security_level: basic_snmp_agent::usm::user::SecurityLevel,
     ) -> DispatchContext<'a> {
-        DispatchContext {
+        // usm_user=None with NoAuthNoPriv floor and usm_user=Some with any floor are
+        // always valid combinations; unwrap is sound for all seed call sites.
+        DispatchContext::new(DispatchInputs {
             engine_id: ENGINE_ID,
             engine_boots: 1,
             engine_time: 0,
@@ -102,7 +104,8 @@ impl DispatchCounters {
             unknown_security_models_counter: &mut self.unknown_security_models,
             usm_user,
             minimum_security_level,
-        }
+        })
+        .unwrap()
     }
 }
 
@@ -157,7 +160,7 @@ fn write_snmpv3_request_seeds(corpus: &Path) {
             None,
             basic_snmp_agent::usm::user::SecurityLevel::NoAuthNoPriv,
         );
-        let response = basic_snmp_agent::process_snmpv3_request(encoded, &mut ctx, &empty_mib());
+        let response = basic_snmp_agent::transport::process_snmpv3_request(encoded, &mut ctx, &empty_mib());
         assert!(
             response.is_some(),
             "seed '{name}' did not produce a response — check engine ID or encoding"
@@ -306,7 +309,7 @@ fn write_auth_seeds(auth_corpus: &Path) {
             Some(&auth_user),
             basic_snmp_agent::usm::user::SecurityLevel::AuthNoPriv,
         );
-        let response = basic_snmp_agent::process_snmpv3_request(encoded, &mut ctx, &empty_mib());
+        let response = basic_snmp_agent::transport::process_snmpv3_request(encoded, &mut ctx, &empty_mib());
         if *expect_response {
             assert!(
                 response.is_some(),

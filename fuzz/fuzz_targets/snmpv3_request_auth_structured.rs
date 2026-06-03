@@ -12,8 +12,8 @@ mod fuzz_support;
 use std::sync::OnceLock;
 
 use arbitrary_snmpv3::FuzzSnmpv3Auth;
-use basic_snmp_agent::process_snmpv3_request;
-use basic_snmp_agent::transport::dispatch::DispatchContext;
+use basic_snmp_agent::transport::dispatch::{DispatchContext, DispatchInputs};
+use basic_snmp_agent::transport::process_snmpv3_request;
 use basic_snmp_agent::usm::auth::AuthProtocol;
 use basic_snmp_agent::usm::keys::SecretKey;
 use basic_snmp_agent::usm::user::{AuthNoPrivUser, UserName, UsmUser};
@@ -46,7 +46,8 @@ fuzz_target!(|input: FuzzSnmpv3Auth| {
     let mut not_in_time_windows_counter = 0u32;
     let mut decryption_errors_counter = 0u32;
     let mut unknown_security_models_counter = 0u32;
-    let mut ctx = DispatchContext {
+    // usm_user=Some with AuthNoPriv floor is always valid; unwrap is sound.
+    let mut ctx = DispatchContext::new(DispatchInputs {
         engine_id,
         engine_boots: 1,
         engine_time: 0,
@@ -59,6 +60,7 @@ fuzz_target!(|input: FuzzSnmpv3Auth| {
         unknown_security_models_counter: &mut unknown_security_models_counter,
         usm_user: Some(user()),
         minimum_security_level: basic_snmp_agent::usm::user::SecurityLevel::AuthNoPriv,
-    };
+    })
+    .unwrap();
     let _ = process_snmpv3_request(&encoded, &mut ctx, fuzz_support::mib());
 });

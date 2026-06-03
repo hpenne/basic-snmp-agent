@@ -3,8 +3,8 @@
 #[path = "../fuzz_support.rs"]
 mod fuzz_support;
 
-use basic_snmp_agent::process_snmpv3_request;
-use basic_snmp_agent::transport::dispatch::DispatchContext;
+use basic_snmp_agent::transport::dispatch::{DispatchContext, DispatchInputs};
+use basic_snmp_agent::transport::process_snmpv3_request;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|request_bytes: &[u8]| {
@@ -18,7 +18,8 @@ fuzz_target!(|request_bytes: &[u8]| {
     let mut not_in_time_windows_counter = 0u32;
     let mut decryption_errors_counter = 0u32;
     let mut unknown_security_models_counter = 0u32;
-    let mut ctx = DispatchContext {
+    // usm_user=None with NoAuthNoPriv floor is always valid; unwrap is sound.
+    let mut ctx = DispatchContext::new(DispatchInputs {
         engine_id,
         engine_boots: 1,
         engine_time: 0,
@@ -31,6 +32,7 @@ fuzz_target!(|request_bytes: &[u8]| {
         unknown_security_models_counter: &mut unknown_security_models_counter,
         usm_user: None,
         minimum_security_level: basic_snmp_agent::usm::user::SecurityLevel::NoAuthNoPriv,
-    };
+    })
+    .unwrap();
     let _ = process_snmpv3_request(request_bytes, &mut ctx, fuzz_support::mib());
 });
