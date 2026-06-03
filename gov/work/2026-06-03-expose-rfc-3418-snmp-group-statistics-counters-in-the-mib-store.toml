@@ -1,0 +1,55 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-06-03-002"
+title = "Expose RFC 3418 SNMP group statistics counters in the MIB store"
+status = "queue"
+created = "2026-06-03"
+
+[content]
+description = """
+RFC 3418 (SNMPv2-MIB) defines the SNMP group statistics counters that an agent
+exposes about its own message-processing behaviour.
+These are diagnostic counters for operational visibility — an NMS polls them to
+detect misconfigured managers, protocol mismatches, or malformed traffic.
+
+The agent currently tracks USM-specific counters (usmStatsUnknownUserNames,
+usmStatsWrongDigests, etc.) because they are carried in Report PDU varbinds as
+part of the protocol flow.
+The RFC 3418 SNMP group counters are purely observational and have no
+infrastructure today.
+
+Counters to implement (at minimum):
+- `snmpInASNParseErrs` (1.3.6.1.2.1.11.6.0) — malformed BER messages,
+  including USM security parameter SIZE violations (see RFC-0007 REQ-0132 rationale).
+- `snmpInBadVersions` (1.3.6.1.2.1.11.3.0) — messages with unsupported version field.
+- `snmpUnknownSecurityModels` (1.3.6.1.6.3.11.2.1.1.0) — already tracked internally
+  but not yet exposed in the MIB store.
+
+Origin: identified during WI-2026-06-03-001 (USM user name length bounds) when
+REQ-0132 was softened to defer the snmpInASNParseErrs counter increment."""
+
+[[content.acceptance_criteria]]
+text = "snmpInASNParseErrs counter tracked and exposed in the MIB store"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "snmpInBadVersions counter tracked and exposed in the MIB store"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "snmpUnknownSecurityModels counter exposed in the MIB store (already tracked internally)"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "All counters increment correctly under the conditions defined in RFC 3418"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "cargo test, cargo clippy, and govctl check all pass"
+status = "pending"
+category = "chore"

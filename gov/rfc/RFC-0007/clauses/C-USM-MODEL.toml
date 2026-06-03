@@ -23,7 +23,7 @@ text = """
 
 [REQ-0130] The agent MUST reject any inbound USM message whose `msgFlags` security level is above the security capabilities of the user identified by the message's `msgUserName` field, and MUST respond with a Report PDU carrying the `usmStatsUnsupportedSecLevels` counter as specified in RFC 3414 §3.2.
 
-[REQ-0132] The agent MUST treat any inbound USM message whose `msgUserName` field exceeds 32 octets as a malformed `UsmSecurityParameters` structure per RFC 3414 §3.2 step 1: the `snmpInASNParseErrs` counter is incremented and the message is discarded without generating a Report PDU.
+[REQ-0132] The agent MUST treat any inbound USM message whose `msgUserName` field exceeds 32 octets as a malformed `UsmSecurityParameters` structure per RFC 3414 §3.2 step 1 and discard the message without generating a Report PDU.
 
 [REQ-0080] The agent MUST process engine-ID discovery exchanges per RFC 3414 §4 regardless of the configured minimum security level. Discovery probes carrying an empty `msgAuthoritativeEngineID` MUST be handled before user-name and security-level enforcement apply.
 
@@ -41,6 +41,7 @@ Without this check, the agent would attempt cryptographic operations with missin
 A `msgUserName` exceeding 32 octets violates the `OCTET STRING (SIZE(0..32))` constraint in the ASN.1 definition of `UsmSecurityParameters` (RFC 3414 §2.4).
 RFC 3414 §3.2 step 1 requires that malformed security parameters trigger `snmpInASNParseErrs` and a `parseError` return without OID/value — which means the message processing model (RFC 3412 §7.2 step 6) has no OID/value pair to include in a Report PDU, so the message is silently discarded.
 This is distinct from the unknown-user path (step 4), which returns `usmStatsUnknownUserNames` with OID/value and does produce a Report PDU.
+The `snmpInASNParseErrs` counter increment mandated by RFC 3414 §3.2 step 1 is deferred to separate work covering the full set of RFC 3418 SNMP group statistics.
 
 A single configured user is the minimum viable USM deployment and keeps the public construction API small.
 When multi-user support lands, the public API is expected to change in a breaking way so that user-name selection, per-user context, and trap-user selection can all be revisited together.
