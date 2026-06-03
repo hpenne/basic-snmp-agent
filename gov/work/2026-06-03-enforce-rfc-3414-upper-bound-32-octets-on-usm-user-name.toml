@@ -42,3 +42,13 @@ category = "chore"
 text = "cargo test, cargo clippy, cargo fmt, and govctl check all pass"
 status = "pending"
 category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Add normative requirement to RFC-0007 C-USM-USERS for rejecting user names longer than 32 octets at construction time"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Add normative requirement to RFC-0007 C-USM-MODEL for rejecting inbound msgUserName longer than 32 octets"
+status = "pending"
+category = "chore"
