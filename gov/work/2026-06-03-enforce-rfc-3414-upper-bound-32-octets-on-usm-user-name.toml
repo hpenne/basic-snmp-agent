@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-06-03-001"
 title = "Enforce RFC 3414 upper bound (32 octets) on USM user name"
-status = "active"
+status = "done"
 created = "2026-06-03"
 started = "2026-06-03"
+completed = "2026-06-03"
 refs = ["RFC-0007"]
 
 [content]
@@ -26,30 +27,30 @@ Origin: identified during review of WI-2026-06-01-001 (security review remediati
 
 [[content.acceptance_criteria]]
 text = "UserName::new() rejects names longer than 32 bytes per RFC 3414 usmUserName SIZE(1..32)"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "Inbound msgUserName fields longer than 32 octets are rejected during decode per RFC 3414 msgUserName SIZE(0..32)"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "Red/green regression tests cover both bounds"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "cargo test, cargo clippy, cargo fmt, and govctl check all pass"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "Add normative requirement to RFC-0007 C-USM-USERS for rejecting user names longer than 32 octets at construction time"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "Add normative requirement to RFC-0007 C-USM-MODEL for rejecting inbound msgUserName longer than 32 octets"
-status = "pending"
+status = "done"
 category = "chore"

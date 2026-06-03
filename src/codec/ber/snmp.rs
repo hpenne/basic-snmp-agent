@@ -10,6 +10,12 @@ use super::{BerError, BerReader, BerWriter, TAG_OCTET_STRING, TAG_SEQUENCE};
 /// `SNMPv3` message version field value (RFC 3412 §6).
 const SNMPV3_VERSION: i32 = 3;
 
+/// RFC 3414 §2.4 upper bound for `msgUserName OCTET STRING (SIZE(0..32))`.
+///
+/// This is the same 32-octet limit as `UserName::MAX_LENGTH` in `usm::user`,
+/// which enforces the MIB-level `SnmpAdminString (SIZE(1..32))` constraint.
+const MSG_USER_NAME_MAX_LENGTH: usize = 32;
+
 /// `SNMPv2c` message version field value (RFC 1901 §3).
 const SNMPV2C_VERSION: i32 = 1;
 
@@ -181,6 +187,13 @@ pub fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, BerErro
     let engine_boots = usm_reader.read_integer()?;
     let engine_time = usm_reader.read_integer()?;
     let user_name = usm_reader.read_octet_string()?.to_vec();
+    // Implements: REQ-0132
+    if user_name.len() > MSG_USER_NAME_MAX_LENGTH {
+        return Err(BerError::new(format!(
+            "BER: msgUserName length {} exceeds RFC 3414 §2.4 maximum of {MSG_USER_NAME_MAX_LENGTH} octets",
+            user_name.len()
+        )));
+    }
     let auth_params = usm_reader.read_octet_string()?.to_vec();
     // auth_params_offset is the absolute offset of the auth_params VALUE bytes.
     let auth_params_offset = if auth_params.is_empty() {
@@ -1219,6 +1232,92 @@ mod tests {
         assert_eq!(version, 1);
         assert_eq!(community, b"");
         assert_eq!(decoded_pdu, trap_pdu.as_slice());
+    }
+
+    // ── Test 17: msgUserName length bounds (REQ-0132) ─────────────────────────
+
+    #[test]
+    fn given_msg_user_name_of_33_bytes_when_decoded_then_error() {
+        // Verifies: REQ-0132
+        // A msgUserName exceeding 32 octets must be rejected as a malformed
+        // UsmSecurityParameters structure per RFC 3414 §2.4.
+        let long_user_name = vec![b'a'; 33];
+        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
+        let (encoded, _) = encode_v3_message(
+            1,
+            MSG_MAX_SIZE_UDP,
+            0x04,
+            3,
+            &[],
+            0,
+            0,
+            &long_user_name,
+            &[],
+            &[],
+            &scoped_pdu,
+            false,
+        )
+        .expect("encoding must succeed regardless of user name length");
+
+        let ber_error = decode_v3_envelope(&encoded).unwrap_err();
+        assert_eq!(
+            ber_error.to_string(),
+            "BER: msgUserName length 33 exceeds RFC 3414 §2.4 maximum of 32 octets"
+        );
+    }
+
+    #[test]
+    fn given_msg_user_name_of_zero_bytes_when_decoded_then_accepted() {
+        // Verifies: REQ-0132
+        // Wire-level constraint is SIZE(0..32): an empty msgUserName is valid and
+        // is used in engine-ID discovery probes (RFC 3414 §4).
+        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
+        let (encoded, _) = encode_v3_message(
+            1,
+            MSG_MAX_SIZE_UDP,
+            0x04,
+            3,
+            &[],
+            0,
+            0,
+            &[],
+            &[],
+            &[],
+            &scoped_pdu,
+            false,
+        )
+        .expect("encoding must succeed");
+
+        let envelope = decode_v3_envelope(&encoded)
+            .expect("empty msgUserName is valid per RFC 3414 §2.4 and must decode");
+        assert_eq!(envelope.usm.user_name, b"");
+    }
+
+    #[test]
+    fn given_msg_user_name_of_exactly_32_bytes_when_decoded_then_accepted() {
+        // Verifies: REQ-0132
+        // A msgUserName of exactly 32 octets is at the upper boundary and must be accepted.
+        let boundary_user_name = vec![b'a'; 32];
+        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
+        let (encoded, _) = encode_v3_message(
+            1,
+            MSG_MAX_SIZE_UDP,
+            0x04,
+            3,
+            &[],
+            0,
+            0,
+            &boundary_user_name,
+            &[],
+            &[],
+            &scoped_pdu,
+            false,
+        )
+        .expect("encoding must succeed");
+
+        let envelope = decode_v3_envelope(&encoded)
+            .expect("msgUserName of 32 bytes is at the valid boundary and must decode");
+        assert_eq!(envelope.usm.user_name, boundary_user_name);
     }
 
     // ── msgID boundary value (0) must be accepted ────────────────────────────

@@ -232,3 +232,13 @@ rationale = "Pressure mode (shorter timeout near connection limit) requires fill
 req     = "REQ-0129"
 missing = ["behave_test"]
 rationale = "Compile-time type constraint: the SecurityConfig enum enforces bundling of minimum security level, user credentials, and engine-boots store at construction via Rust's type system. A Behave system test cannot introspect API shape or type relationships."
+
+[[gap]]
+req     = "REQ-0131"
+missing = ["behave_test"]
+rationale = "User name length rejection is a configuration-time constraint enforced at construction before any network interaction. A Behave test cannot exercise builder-level validation. Verified by unit tests."
+
+[[gap]]
+req     = "REQ-0132"
+missing = ["behave_test"]
+rationale = "Oversized msgUserName rejection requires crafting a packet with a user name field exceeding 32 octets, which net-snmp CLI tools cannot produce. Verified by unit tests with hand-crafted BER frames."

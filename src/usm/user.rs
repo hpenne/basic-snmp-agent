@@ -2,7 +2,7 @@
 //! authentication and privacy credentials.
 //!
 //! # Requirements
-//! Implements: REQ-0075, REQ-0076, REQ-0077, REQ-0079, REQ-0083, REQ-0084, REQ-0090, REQ-0091, REQ-0092
+//! Implements: REQ-0075, REQ-0076, REQ-0077, REQ-0079, REQ-0083, REQ-0084, REQ-0090, REQ-0091, REQ-0092, REQ-0131
 
 use std::fmt;
 
@@ -12,55 +12,89 @@ use crate::usm::privacy::PrivProtocol;
 
 // ── UserName ──────────────────────────────────────────────────────────────────
 
-/// Error returned when attempting to create a [`UserName`] from an empty string.
+/// Error returned when a [`UserName`] cannot be constructed from the
+/// provided string.
 ///
 /// # Requirements
-/// Implements: REQ-0091
+/// Implements: REQ-0091, REQ-0131
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EmptyUserNameError;
+pub enum InvalidUserNameError {
+    /// The name is empty (zero-length).
+    Empty,
+    /// The name exceeds the RFC 3414 maximum of 32 octets.
+    TooLong {
+        /// The actual byte length of the supplied name.
+        length: usize,
+    },
+}
 
-impl fmt::Display for EmptyUserNameError {
+impl fmt::Display for InvalidUserNameError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "USM user name must not be empty per RFC 3414")
+        match self {
+            Self::Empty => write!(f, "USM user name must not be empty per RFC 3414"),
+            Self::TooLong { length } => write!(
+                f,
+                "USM user name length {length} exceeds the RFC 3414 maximum of {} octets",
+                UserName::MAX_LENGTH,
+            ),
+        }
     }
 }
 
-impl std::error::Error for EmptyUserNameError {}
+impl std::error::Error for InvalidUserNameError {}
 
-/// A validated, non-empty USM user name.
+/// A validated USM user name: non-empty and at most 32 octets.
 ///
-/// RFC 3414 requires non-empty security names for user lookup. This type
-/// enforces that invariant at construction time.
+/// RFC 3414 `usmUserName` is typed `SnmpAdminString (SIZE(1..32))`, so
+/// both the lower bound (non-empty) and the upper bound (32 octets) are
+/// enforced at construction time.
 ///
 /// # Requirements
-/// Implements: REQ-0091
+/// Implements: REQ-0091, REQ-0131
 ///
 /// # Examples
 ///
 /// ```
-/// use basic_snmp_agent::usm::user::UserName;
+/// use basic_snmp_agent::usm::user::{UserName, InvalidUserNameError};
 ///
 /// let name = UserName::new("admin").unwrap();
 /// assert_eq!(name.as_str(), "admin");
 ///
-/// assert!(UserName::new("").is_err());
+/// assert_eq!(UserName::new("").unwrap_err(), InvalidUserNameError::Empty);
+///
+/// let long_name = "a".repeat(33);
+/// assert_eq!(
+///     UserName::new(long_name).unwrap_err(),
+///     InvalidUserNameError::TooLong { length: 33 }
+/// );
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UserName(String);
 
 impl UserName {
-    /// Create a new `UserName`, returning an error if the name is empty.
+    /// RFC 3414 `usmUserName` upper bound: `SnmpAdminString (SIZE(1..32))`.
+    ///
+    /// The same 32-octet limit is enforced on the wire in `codec::ber::snmp`
+    /// as `MSG_USER_NAME_MAX_LENGTH`, per the `msgUserName OCTET STRING
+    /// (SIZE(0..32))` constraint in RFC 3414 §2.4.
+    pub const MAX_LENGTH: usize = 32;
+
+    /// Create a new `UserName`, validating both the lower and upper length bounds.
     ///
     /// # Errors
     ///
-    /// Returns [`EmptyUserNameError`] if `name` is empty.
+    /// Returns [`InvalidUserNameError::Empty`] if `name` is empty, or
+    /// [`InvalidUserNameError::TooLong`] if `name` exceeds 32 octets.
     ///
     /// # Requirements
-    /// Implements: REQ-0091, REQ-0116
-    pub fn new(name: impl Into<String>) -> Result<Self, EmptyUserNameError> {
+    /// Implements: REQ-0091, REQ-0116, REQ-0131
+    pub fn new(name: impl Into<String>) -> Result<Self, InvalidUserNameError> {
         let name = name.into();
         if name.is_empty() {
-            return Err(EmptyUserNameError);
+            return Err(InvalidUserNameError::Empty);
+        }
+        if name.len() > Self::MAX_LENGTH {
+            return Err(InvalidUserNameError::TooLong { length: name.len() });
         }
         Ok(Self(name))
     }
@@ -736,10 +770,49 @@ mod tests {
     fn given_empty_string_when_username_new_then_error() {
         // Verifies: REQ-0091, REQ-0116
         let result = UserName::new("");
+        assert_eq!(result.unwrap_err(), InvalidUserNameError::Empty);
         assert_eq!(
-            result.unwrap_err().to_string(),
+            InvalidUserNameError::Empty.to_string(),
             "USM user name must not be empty per RFC 3414"
         );
+    }
+
+    #[test]
+    fn given_name_exceeding_32_bytes_when_username_new_then_error() {
+        // Verifies: REQ-0131
+        let long_name = "a".repeat(33);
+        let result = UserName::new(long_name);
+        assert_eq!(
+            result.unwrap_err(),
+            InvalidUserNameError::TooLong { length: 33 }
+        );
+        assert_eq!(
+            InvalidUserNameError::TooLong { length: 33 }.to_string(),
+            "USM user name length 33 exceeds the RFC 3414 maximum of 32 octets"
+        );
+    }
+
+    #[test]
+    fn given_name_within_char_limit_but_exceeding_byte_limit_when_username_new_then_error() {
+        // Verifies: REQ-0131
+        // 11 snowman characters (☃ = U+2603, 3 bytes each) = 33 bytes, 11 chars.
+        // The RFC 3414 constraint is on octets, not characters.
+        let snowmen: String = std::iter::repeat_n('\u{2603}', 11).collect();
+        assert_eq!(snowmen.len(), 33);
+        assert_eq!(snowmen.chars().count(), 11);
+        let result = UserName::new(snowmen);
+        assert_eq!(
+            result.unwrap_err(),
+            InvalidUserNameError::TooLong { length: 33 }
+        );
+    }
+
+    #[test]
+    fn given_name_of_exactly_32_bytes_when_username_new_then_ok() {
+        // Verifies: REQ-0131
+        let boundary_name = "a".repeat(32);
+        let name = UserName::new(boundary_name).unwrap();
+        assert_eq!(name.as_str(), &"a".repeat(32));
     }
 
     #[test]
