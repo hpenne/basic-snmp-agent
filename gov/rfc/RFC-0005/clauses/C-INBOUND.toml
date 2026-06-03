@@ -35,6 +35,12 @@ text = """
 
 [REQ-0119] The agent MUST reject any inbound SNMPv3 message whose `msgMaxSize` field is less than 484, as specified in RFC 3412 §6.6.
 
+[REQ-0133] The agent MUST bound the encoded size of a GetBulkRequest Response PDU so that the complete SNMPv3 message does not exceed `min(msgMaxSize, MAX_FRAME_SIZE)`, where `msgMaxSize` is the value from the inbound message's `HeaderData` and `MAX_FRAME_SIZE` is the agent's local frame-size limit (65535).
+The agent MUST enforce this bound during varbind accumulation so that oversized responses are never fully constructed in memory.
+
+[REQ-0134] When the response size limit would be exceeded, the agent MUST truncate the repeating section of the GetBulkRequest response at a complete row boundary (all columns for one repetition), as specified in RFC 3416 §4.2.3.
+The non-repeating section MUST NOT be truncated.
+
 **Rationale:**
 These behaviours follow RFC 3416.
 Returning `notWritable` for SET requests informs the manager that the agent explicitly does not support writes, which is preferable to silent discard as it allows managers to report a clear error.
@@ -43,4 +49,7 @@ REQ-0033, which previously required silently discarding PDUs received over a TLS
 
 Rejecting oversized messages at the framing layer (REQ-0117) prevents an attacker from forcing large allocations by sending a message with a crafted BER length field. The check must occur before the payload is read into a buffer.
 
-Validating `msgID` (REQ-0118) and `msgMaxSize` (REQ-0119) catches malformed messages early. A negative `msgID` has no defined meaning in RFC 3412 and could cause unexpected behaviour if used as an index or map key. A `msgMaxSize` below 484 violates the protocol minimum and indicates a malformed or crafted message."""
+Validating `msgID` (REQ-0118) and `msgMaxSize` (REQ-0119) catches malformed messages early. A negative `msgID` has no defined meaning in RFC 3412 and could cause unexpected behaviour if used as an index or map key. A `msgMaxSize` below 484 violates the protocol minimum and indicates a malformed or crafted message.
+
+Bounding GETBULK response size (REQ-0133, REQ-0134) prevents amplification attacks where an attacker sends a small GETBULK request with high max-repetitions against a MIB containing large OctetString values, producing a multi-megabyte response that exceeds the negotiated message size.
+The size bound is enforced during construction rather than post-hoc truncation to prevent memory exhaustion from building oversized responses (RFC 3416 §4.2.3)."""
