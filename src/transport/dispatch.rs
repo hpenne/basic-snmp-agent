@@ -7,73 +7,13 @@
 mod dispatch_context;
 pub use dispatch_context::{DispatchContext, DispatchInputs, NoUserSecurityLevelError};
 
+use std::sync::LazyLock;
+
+use crate::codec::Oid;
 use crate::transport::event_loop::{MAX_BULK_REPETITIONS, MAX_FRAME_SIZE};
 use crate::transport::request;
 // Implements: [[RFC-0009:C-FACADE]]
 use log::{debug, trace};
-
-// Implements: REQ-0093, REQ-0104
-static UNKNOWN_ENGINE_IDS_OID: std::sync::LazyLock<crate::codec::Oid> =
-    std::sync::LazyLock::new(|| {
-        crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS
-            .parse()
-            .expect("USM_STATS_UNKNOWN_ENGINE_IDS is a valid OID constant")
-    });
-
-// Implements: REQ-0078
-static UNKNOWN_USER_NAMES_OID: std::sync::LazyLock<crate::codec::Oid> =
-    std::sync::LazyLock::new(|| {
-        crate::usm::counters::USM_STATS_UNKNOWN_USER_NAMES
-            .parse()
-            .expect("USM_STATS_UNKNOWN_USER_NAMES is a valid OID constant")
-    });
-
-// Implements: REQ-0079
-static UNSUPPORTED_SEC_LEVELS_OID: std::sync::LazyLock<crate::codec::Oid> =
-    std::sync::LazyLock::new(|| {
-        crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS
-            .parse()
-            .expect("USM_STATS_UNSUPPORTED_SEC_LEVELS is a valid OID constant")
-    });
-
-// Implements: REQ-0100
-static WRONG_DIGESTS_OID: std::sync::LazyLock<crate::codec::Oid> = std::sync::LazyLock::new(|| {
-    crate::usm::counters::USM_STATS_WRONG_DIGESTS
-        .parse()
-        .expect("USM_STATS_WRONG_DIGESTS is a valid OID constant")
-});
-
-// Implements: REQ-0098
-static NOT_IN_TIME_WINDOWS_OID: std::sync::LazyLock<crate::codec::Oid> =
-    std::sync::LazyLock::new(|| {
-        crate::usm::counters::USM_STATS_NOT_IN_TIME_WINDOWS
-            .parse()
-            .expect("USM_STATS_NOT_IN_TIME_WINDOWS is a valid OID constant")
-    });
-
-// Implements: REQ-0101
-static DECRYPTION_ERRORS_OID: std::sync::LazyLock<crate::codec::Oid> =
-    std::sync::LazyLock::new(|| {
-        crate::usm::counters::USM_STATS_DECRYPTION_ERRORS
-            .parse()
-            .expect("USM_STATS_DECRYPTION_ERRORS is a valid OID constant")
-    });
-
-/// OID for `snmpUnknownSecurityModels.0` (RFC 3412, SNMP-MPD-MIB).
-// Implements: REQ-0115
-const SNMP_UNKNOWN_SECURITY_MODELS_OID: &str = "1.3.6.1.6.3.11.2.1.1.0";
-
-// Implements: REQ-0115
-static UNKNOWN_SECURITY_MODELS_OID: std::sync::LazyLock<crate::codec::Oid> =
-    std::sync::LazyLock::new(|| {
-        SNMP_UNKNOWN_SECURITY_MODELS_OID
-            .parse()
-            .expect("SNMP_UNKNOWN_SECURITY_MODELS_OID is a valid OID constant")
-    });
-
-/// Bit mask for the `reportableFlag` in `msgFlags` (RFC 3412 §7.1.3a).
-const REPORTABLE_FLAG: u8 = 0x04;
-
 /// Decode, validate, and dispatch a single RFC 3430 BER frame, returning
 /// the encoded response bytes on success.
 ///
@@ -84,7 +24,7 @@ const REPORTABLE_FLAG: u8 = 0x04;
 ///
 /// Engine-ID discovery probes (empty `msgAuthoritativeEngineID`) always produce
 /// a Report PDU response and increment `ctx.inputs.unknown_engine_ids_counter` (REQ-0093),
-/// provided the `reportableFlag` ([`REPORTABLE_FLAG`]) is set in `msgFlags`. Probes without
+/// provided the `reportableFlag` (bit 0x04) is set in `msgFlags`. Probes without
 /// the flag set are silently discarded per RFC 3412 §7.1.3a.
 ///
 /// Kept `pub` only so the out-of-workspace `fuzz` crate can drive dispatch directly;
@@ -92,6 +32,11 @@ const REPORTABLE_FLAG: u8 = 0x04;
 ///
 /// # Requirements
 /// Implements: REQ-0056, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0077, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0102, REQ-0103, REQ-0104, REQ-0107, REQ-0109, REQ-0115, REQ-0130
+#[expect(
+    clippy::too_many_lines,
+    reason = "seven sequential RFC 3412 §7.2 security checks with inline report-emission \
+              calls; wrapper functions were eliminated as code duplication"
+)]
 #[doc(hidden)]
 #[must_use]
 pub fn process_snmpv3_request(
@@ -108,22 +53,45 @@ pub fn process_snmpv3_request(
     // RFC 3412 §7.2 step 2: reject messages with unsupported security models.
     // Implements: REQ-0115
     if !v3_msg.security_model.is_usm() {
-        return emit_unknown_security_model_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
+        return emit_report_response(
+            ctx,
+            |inputs| &mut inputs.unknown_security_models_counter,
+            &UNKNOWN_SECURITY_MODELS_OID,
+            "unknown security model",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        );
     }
 
     // REQ-0093: engine-ID discovery probe — the manager sent an empty
     // msgAuthoritativeEngineID. Respond with a Report PDU carrying the
     // usmStatsUnknownEngineIDs counter and our authoritative engine state
     // so the manager can learn our engine ID, boots, and approximate time.
+    // Implements: REQ-0093
     if v3_msg.usm.auth_engine_id.is_empty() {
-        return emit_discovery_probe_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
+        return emit_report_response(
+            ctx,
+            |inputs| &mut inputs.unknown_engine_ids_counter,
+            &UNKNOWN_ENGINE_IDS_OID,
+            "engine-ID discovery probe",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        );
     }
 
     // REQ-0104: contextEngineID mismatch — the ScopedPDU's contextEngineID does not
     // match the agent's snmpEngineID. Respond with a Report PDU carrying
     // usmStatsUnknownEngineIDs.
+    // Implements: REQ-0104
     if v3_msg.engine_id != ctx.inputs.engine_id {
-        return emit_unknown_engine_id_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
+        return emit_report_response(
+            ctx,
+            |inputs| &mut inputs.unknown_engine_ids_counter,
+            &UNKNOWN_ENGINE_IDS_OID,
+            "unknown engine ID",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        );
     }
 
     // REQ-0078, REQ-0080: user-name lookup — discovery (above) runs before this check.
@@ -132,10 +100,18 @@ pub fn process_snmpv3_request(
     // (RFC 3412 §7.1.3a).
     // Non-constant-time comparison is acceptable: user names are transmitted in cleartext
     // on the wire (RFC 3414 §2.4), so they are not secret.
+    // Implements: REQ-0078, REQ-0080
     if let Some(user) = ctx.inputs.usm_user
         && v3_msg.user_name != user.name().as_bytes()
     {
-        return emit_unknown_user_name_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
+        return emit_report_response(
+            ctx,
+            |inputs| &mut inputs.unknown_user_names_counter,
+            &UNKNOWN_USER_NAMES_OID,
+            "unknown user name",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        );
     }
 
     // REQ-0079, REQ-0103, REQ-0130: security-level enforcement — runs after user-name lookup.
@@ -143,17 +119,26 @@ pub fn process_snmpv3_request(
     // For noAuthNoPriv messages that pass both checks, authentication and decryption
     // are skipped naturally (REQ-0103).
     let msg_level = crate::usm::user::SecurityLevel::try_from(v3_msg.usm.security_flags);
+    // Implements: REQ-0079, REQ-0103, REQ-0130
     if should_reject_security_level(
         msg_level,
         ctx.inputs.minimum_security_level,
         ctx.inputs.usm_user,
     ) {
-        return emit_unsupported_sec_level_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
+        return emit_report_response(
+            ctx,
+            |inputs| &mut inputs.unsupported_sec_levels_counter,
+            &UNSUPPORTED_SEC_LEVELS_OID,
+            "unsupported security level",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        );
     }
 
     // REQ-0100, REQ-0102: HMAC verification for authenticated messages.
     // Runs after security-level check per REQ-0102 processing order.
     // For noAuthNoPriv users, auth_protocol() returns None so this block is skipped (REQ-0103).
+    // Implements: REQ-0100, REQ-0102
     if let Some(user) = ctx.inputs.usm_user
         && let (Some(auth_protocol), Some(auth_key)) = (user.auth_protocol(), user.auth_key())
         && !verify_hmac(
@@ -164,11 +149,19 @@ pub fn process_snmpv3_request(
             v3_msg.auth_params_offset,
         )
     {
-        return emit_wrong_digest_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
+        return emit_report_response(
+            ctx,
+            |inputs| &mut inputs.wrong_digests_counter,
+            &WRONG_DIGESTS_OID,
+            "wrong digest",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        );
     }
 
     // REQ-0098: time-window validation for authenticated messages.
     // Runs after HMAC verification per REQ-0102 processing order.
+    // Implements: REQ-0098
     if let Some(user) = ctx.inputs.usm_user
         && user.auth_protocol().is_some()
         && !crate::usm::time_window::is_in_time_window(
@@ -178,7 +171,14 @@ pub fn process_snmpv3_request(
             ctx.inputs.engine_time,
         )
     {
-        return emit_not_in_time_windows_response(ctx, v3_msg.msg_id, v3_msg.usm.security_flags);
+        return emit_report_response(
+            ctx,
+            |inputs| &mut inputs.not_in_time_windows_counter,
+            &NOT_IN_TIME_WINDOWS_OID,
+            "not-in-time-window",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        );
     }
 
     // Only the default (empty) context name is supported per REQ-0058.
@@ -363,7 +363,15 @@ fn decrypt_scoped_pdu(
     // msgPrivacyParameters must be exactly 8 bytes (the AES salt per RFC 3826 §2.2).
     if priv_params.len() != 8 {
         debug!("msgPrivacyParameters length {} != 8", priv_params.len());
-        return Err(emit_decryption_error_response(ctx, msg_id, security_flags));
+        // Implements: REQ-0101
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.decryption_errors_counter,
+            &DECRYPTION_ERRORS_OID,
+            "decryption error",
+            msg_id,
+            security_flags,
+        ));
     }
 
     // Implements: REQ-0109
@@ -375,18 +383,42 @@ fn decrypt_scoped_pdu(
 
     let Ok(scoped_pdu_bytes) = priv_protocol.decrypt(priv_key, &aes_iv, ciphertext) else {
         debug!("AES-CFB128 decryption failed");
-        return Err(emit_decryption_error_response(ctx, msg_id, security_flags));
+        // Implements: REQ-0101
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.decryption_errors_counter,
+            &DECRYPTION_ERRORS_OID,
+            "decryption error",
+            msg_id,
+            security_flags,
+        ));
     };
 
     let Ok(decoded) = crate::codec::decode_scoped_pdu(&scoped_pdu_bytes) else {
         debug!("failed to decode decrypted ScopedPDU");
-        return Err(emit_decryption_error_response(ctx, msg_id, security_flags));
+        // Implements: REQ-0101
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.decryption_errors_counter,
+            &DECRYPTION_ERRORS_OID,
+            "decryption error",
+            msg_id,
+            security_flags,
+        ));
     };
 
     // REQ-0104: contextEngineID validation — the decrypted ScopedPDU's contextEngineID
     // must match the agent's snmpEngineID per RFC 3412 §7.2 step 9d.
+    // Implements: REQ-0104
     if decoded.context_engine_id != ctx.inputs.engine_id {
-        return Err(emit_unknown_engine_id_response(ctx, msg_id, security_flags));
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.unknown_engine_ids_counter,
+            &UNKNOWN_ENGINE_IDS_OID,
+            "unknown engine ID",
+            msg_id,
+            security_flags,
+        ));
     }
 
     // Context name validated after decryption; only the default (empty) context is supported.
@@ -396,249 +428,6 @@ fn decrypt_scoped_pdu(
     }
 
     Ok((decoded.pdu, decoded.context_name))
-}
-
-/// Engine identity and time parameters, captured independently from the counter
-/// mutable borrow so both can coexist across the `emit_report_response` call.
-struct EngineState<'a> {
-    id: &'a [u8],
-    boots: u32,
-    time: u32,
-}
-
-/// Increment `counter`, and if `reportableFlag` is set in `security_flags`, encode and
-/// return a Report PDU carrying `oid` and the updated counter value; otherwise return
-/// `None` (silent discard per RFC 3412 §7.1.3a).
-fn emit_report_response(
-    counter: &mut u32,
-    oid: &crate::codec::Oid,
-    trace_description: &str,
-    engine: &EngineState<'_>,
-    msg_id: i32,
-    security_flags: u8,
-) -> Option<Vec<u8>> {
-    *counter = counter.saturating_add(1);
-    let counter_value = *counter;
-    if security_flags & REPORTABLE_FLAG == 0 {
-        trace!("{trace_description} with reportableFlag unset, discarding silently");
-        return None;
-    }
-    crate::codec::encode_v3_report(
-        msg_id,
-        engine.id,
-        engine.boots,
-        engine.time,
-        oid,
-        counter_value,
-    )
-    .inspect_err(|encode_error| {
-        debug!("failed to encode {trace_description} report: {encode_error}");
-    })
-    .ok()
-}
-
-/// Increment `decryption_errors_counter` and, if `reportableFlag` is set, return a
-/// `usmStatsDecryptionErrors` Report PDU; otherwise return `None` (silent discard).
-///
-/// # Requirements
-/// Implements: REQ-0101
-fn emit_decryption_error_response(
-    ctx: &mut DispatchContext<'_>,
-    msg_id: i32,
-    security_flags: u8,
-) -> Option<Vec<u8>> {
-    // Extract engine state first to avoid holding a borrow of ctx while also
-    // borrowing the counter field mutably.
-    let engine = EngineState {
-        id: ctx.inputs.engine_id,
-        boots: ctx.inputs.engine_boots,
-        time: ctx.inputs.engine_time,
-    };
-    emit_report_response(
-        ctx.inputs.decryption_errors_counter,
-        &DECRYPTION_ERRORS_OID,
-        "decryption error",
-        &engine,
-        msg_id,
-        security_flags,
-    )
-}
-
-/// Increment `unknown_engine_ids_counter` unconditionally (RFC 3414 §4.2.4) and, if
-/// `reportableFlag` is set, return a `usmStatsUnknownEngineIDs` Report PDU; otherwise
-/// return `None` (silent discard).
-///
-/// # Requirements
-/// Implements: REQ-0104
-fn emit_unknown_engine_id_response(
-    ctx: &mut DispatchContext<'_>,
-    msg_id: i32,
-    security_flags: u8,
-) -> Option<Vec<u8>> {
-    let engine = EngineState {
-        id: ctx.inputs.engine_id,
-        boots: ctx.inputs.engine_boots,
-        time: ctx.inputs.engine_time,
-    };
-    emit_report_response(
-        ctx.inputs.unknown_engine_ids_counter,
-        &UNKNOWN_ENGINE_IDS_OID,
-        "unknown engine ID",
-        &engine,
-        msg_id,
-        security_flags,
-    )
-}
-
-/// Increment `unknown_security_models_counter` and, if `reportableFlag` is set, return a
-/// `snmpUnknownSecurityModels` Report PDU; otherwise return `None` (silent discard).
-///
-/// # Requirements
-/// Implements: REQ-0115
-fn emit_unknown_security_model_response(
-    ctx: &mut DispatchContext<'_>,
-    msg_id: i32,
-    security_flags: u8,
-) -> Option<Vec<u8>> {
-    let engine = EngineState {
-        id: ctx.inputs.engine_id,
-        boots: ctx.inputs.engine_boots,
-        time: ctx.inputs.engine_time,
-    };
-    emit_report_response(
-        ctx.inputs.unknown_security_models_counter,
-        &UNKNOWN_SECURITY_MODELS_OID,
-        "unknown security model",
-        &engine,
-        msg_id,
-        security_flags,
-    )
-}
-
-/// Increment `unknown_engine_ids_counter` and, if `reportableFlag` is set, return a
-/// `usmStatsUnknownEngineIDs` Report PDU for an engine-ID discovery probe; otherwise
-/// return `None` (silent discard).
-///
-/// # Requirements
-/// Implements: REQ-0093
-fn emit_discovery_probe_response(
-    ctx: &mut DispatchContext<'_>,
-    msg_id: i32,
-    security_flags: u8,
-) -> Option<Vec<u8>> {
-    let engine = EngineState {
-        id: ctx.inputs.engine_id,
-        boots: ctx.inputs.engine_boots,
-        time: ctx.inputs.engine_time,
-    };
-    emit_report_response(
-        ctx.inputs.unknown_engine_ids_counter,
-        &UNKNOWN_ENGINE_IDS_OID,
-        "engine-ID discovery probe",
-        &engine,
-        msg_id,
-        security_flags,
-    )
-}
-
-/// Increment `unknown_user_names_counter` and, if `reportableFlag` is set, return a
-/// `usmStatsUnknownUserNames` Report PDU; otherwise return `None` (silent discard).
-///
-/// # Requirements
-/// Implements: REQ-0078, REQ-0080
-fn emit_unknown_user_name_response(
-    ctx: &mut DispatchContext<'_>,
-    msg_id: i32,
-    security_flags: u8,
-) -> Option<Vec<u8>> {
-    let engine = EngineState {
-        id: ctx.inputs.engine_id,
-        boots: ctx.inputs.engine_boots,
-        time: ctx.inputs.engine_time,
-    };
-    emit_report_response(
-        ctx.inputs.unknown_user_names_counter,
-        &UNKNOWN_USER_NAMES_OID,
-        "unknown user name",
-        &engine,
-        msg_id,
-        security_flags,
-    )
-}
-
-/// Increment `unsupported_sec_levels_counter` and, if `reportableFlag` is set, return a
-/// `usmStatsUnsupportedSecLevels` Report PDU; otherwise return `None` (silent discard).
-///
-/// # Requirements
-/// Implements: REQ-0079, REQ-0103, REQ-0130
-fn emit_unsupported_sec_level_response(
-    ctx: &mut DispatchContext<'_>,
-    msg_id: i32,
-    security_flags: u8,
-) -> Option<Vec<u8>> {
-    let engine = EngineState {
-        id: ctx.inputs.engine_id,
-        boots: ctx.inputs.engine_boots,
-        time: ctx.inputs.engine_time,
-    };
-    emit_report_response(
-        ctx.inputs.unsupported_sec_levels_counter,
-        &UNSUPPORTED_SEC_LEVELS_OID,
-        "unsupported security level",
-        &engine,
-        msg_id,
-        security_flags,
-    )
-}
-
-/// Increment `wrong_digests_counter` and, if `reportableFlag` is set, return a
-/// `usmStatsWrongDigests` Report PDU; otherwise return `None` (silent discard).
-///
-/// # Requirements
-/// Implements: REQ-0100, REQ-0102
-fn emit_wrong_digest_response(
-    ctx: &mut DispatchContext<'_>,
-    msg_id: i32,
-    security_flags: u8,
-) -> Option<Vec<u8>> {
-    let engine = EngineState {
-        id: ctx.inputs.engine_id,
-        boots: ctx.inputs.engine_boots,
-        time: ctx.inputs.engine_time,
-    };
-    emit_report_response(
-        ctx.inputs.wrong_digests_counter,
-        &WRONG_DIGESTS_OID,
-        "wrong digest",
-        &engine,
-        msg_id,
-        security_flags,
-    )
-}
-
-/// Increment `not_in_time_windows_counter` and, if `reportableFlag` is set, return a
-/// `usmStatsNotInTimeWindows` Report PDU; otherwise return `None` (silent discard).
-///
-/// # Requirements
-/// Implements: REQ-0098
-fn emit_not_in_time_windows_response(
-    ctx: &mut DispatchContext<'_>,
-    msg_id: i32,
-    security_flags: u8,
-) -> Option<Vec<u8>> {
-    let engine = EngineState {
-        id: ctx.inputs.engine_id,
-        boots: ctx.inputs.engine_boots,
-        time: ctx.inputs.engine_time,
-    };
-    emit_report_response(
-        ctx.inputs.not_in_time_windows_counter,
-        &NOT_IN_TIME_WINDOWS_OID,
-        "not-in-time-window",
-        &engine,
-        msg_id,
-        security_flags,
-    )
 }
 
 /// Return a copy of `raw_message` with the `msgAuthenticationParameters` bytes zeroed.
@@ -671,6 +460,98 @@ fn zero_auth_params_in_message(
     }
     zeroed
 }
+
+/// Increment the counter selected by `select_counter`, and if `reportableFlag` is set in
+/// `security_flags`, encode and return a Report PDU carrying `oid` and the updated counter
+/// value; otherwise return `None` (silent discard per RFC 3412 §7.1.3a).
+fn emit_report_response(
+    ctx: &mut DispatchContext<'_>,
+    select_counter: impl for<'a> FnOnce(&'a mut DispatchInputs<'_>) -> &'a mut u32,
+    oid: &Oid,
+    description: &str,
+    msg_id: i32,
+    security_flags: u8,
+) -> Option<Vec<u8>> {
+    // Scope the closure call so the mutable borrow of ctx.inputs ends before
+    // we read engine_id, engine_boots, and engine_time below.
+    let counter_value = {
+        let counter = select_counter(&mut ctx.inputs);
+        *counter = counter.saturating_add(1);
+        *counter
+    };
+    if security_flags & REPORTABLE_FLAG == 0 {
+        trace!("{description} with reportableFlag unset, discarding silently");
+        return None;
+    }
+    crate::codec::encode_v3_report(
+        msg_id,
+        ctx.inputs.engine_id,
+        ctx.inputs.engine_boots,
+        ctx.inputs.engine_time,
+        oid,
+        counter_value,
+    )
+    .inspect_err(|encode_error| {
+        debug!("failed to encode {description} report: {encode_error}");
+    })
+    .ok()
+}
+
+// Implements: REQ-0093, REQ-0104
+static UNKNOWN_ENGINE_IDS_OID: LazyLock<Oid> = LazyLock::new(|| {
+    crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS
+        .parse()
+        .expect("USM_STATS_UNKNOWN_ENGINE_IDS is a valid OID constant")
+});
+
+// Implements: REQ-0078
+static UNKNOWN_USER_NAMES_OID: LazyLock<Oid> = LazyLock::new(|| {
+    crate::usm::counters::USM_STATS_UNKNOWN_USER_NAMES
+        .parse()
+        .expect("USM_STATS_UNKNOWN_USER_NAMES is a valid OID constant")
+});
+
+// Implements: REQ-0079
+static UNSUPPORTED_SEC_LEVELS_OID: LazyLock<Oid> = LazyLock::new(|| {
+    crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS
+        .parse()
+        .expect("USM_STATS_UNSUPPORTED_SEC_LEVELS is a valid OID constant")
+});
+
+// Implements: REQ-0100
+static WRONG_DIGESTS_OID: LazyLock<Oid> = LazyLock::new(|| {
+    crate::usm::counters::USM_STATS_WRONG_DIGESTS
+        .parse()
+        .expect("USM_STATS_WRONG_DIGESTS is a valid OID constant")
+});
+
+// Implements: REQ-0098
+static NOT_IN_TIME_WINDOWS_OID: LazyLock<Oid> = LazyLock::new(|| {
+    crate::usm::counters::USM_STATS_NOT_IN_TIME_WINDOWS
+        .parse()
+        .expect("USM_STATS_NOT_IN_TIME_WINDOWS is a valid OID constant")
+});
+
+// Implements: REQ-0101
+static DECRYPTION_ERRORS_OID: LazyLock<Oid> = LazyLock::new(|| {
+    crate::usm::counters::USM_STATS_DECRYPTION_ERRORS
+        .parse()
+        .expect("USM_STATS_DECRYPTION_ERRORS is a valid OID constant")
+});
+
+/// OID for `snmpUnknownSecurityModels.0` (RFC 3412, SNMP-MPD-MIB).
+// Implements: REQ-0115
+const SNMP_UNKNOWN_SECURITY_MODELS_OID: &str = "1.3.6.1.6.3.11.2.1.1.0";
+
+// Implements: REQ-0115
+static UNKNOWN_SECURITY_MODELS_OID: LazyLock<Oid> = LazyLock::new(|| {
+    SNMP_UNKNOWN_SECURITY_MODELS_OID
+        .parse()
+        .expect("SNMP_UNKNOWN_SECURITY_MODELS_OID is a valid OID constant")
+});
+
+/// Bit mask for the `reportableFlag` in `msgFlags` (RFC 3412 §7.1.3a).
+const REPORTABLE_FLAG: u8 = 0x04;
 
 #[cfg(test)]
 mod tests {

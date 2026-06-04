@@ -58,7 +58,7 @@ pub struct DispatchInputs<'a> {
 /// # Requirements
 /// Implements: REQ-0077, REQ-0079
 pub struct DispatchContext<'a> {
-    // pub(super) so dispatch.rs (the parent module) can access fields directly
+    // pub(super) so the dispatch submodules can access fields directly
     // without requiring accessor methods on the hot dispatch path.
     pub(super) inputs: DispatchInputs<'a>,
 }
