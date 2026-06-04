@@ -9,9 +9,7 @@ started = "2026-05-05"
 completed = "2026-05-06"
 
 [content]
-description = """
-Describe the work to be done.
-What is the goal? What are the acceptance criteria?"""
+description = "See acceptance criteria for scope."
 
 [[content.acceptance_criteria]]
 text = "F-01 — Seed privacy salt counter with random u64: on Linux read 8 bytes from /dev/urandom; on other platforms use RandomState::new().build_hasher() fed with seconds and nanoseconds from SystemTime::now()"

@@ -9,9 +9,7 @@ started = "2026-05-06"
 completed = "2026-05-06"
 
 [content]
-description = """
-Describe the work to be done.
-What is the goal? What are the acceptance criteria?"""
+description = "See acceptance criteria for scope."
 
 [[content.acceptance_criteria]]
 text = "Remove non-minimal OID sub-identifier rejection from decode_base128"

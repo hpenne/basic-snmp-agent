@@ -2,7 +2,7 @@ Review and iterate on the implementation of: $ARGUMENTS
 
 This workflow takes precedence over general implementation approach guidelines.
 
-Follow this loop (max 3 iterations):
+Follow this loop (max 3 iterations). Skipping steps is STRICTLY PROHIBITED:
 1. Use the **implementer** subagent to write the code and tests. **Brief it with the goal and constraints, not step-by-step instructions** — it has access to CLAUDE.md and can read the codebase. Describe *what* to achieve and *why*, not *how* to write it. Do not specify line numbers, exact code snippets, or placement of functions. **Capture its agent ID** — you will resume it in later steps instead of launching a new instance.
 2. Run `make test` to verify the build is clean before proceeding (clippy, Rust unit/doc tests, Python tests, Behave tests). If any fail, **resume** the implementer (using its agent ID) and pass only the failures — do not repeat the original task description.
 3. Use the **reviewer** subagent (opus) to review the result. For new or untracked files, tell the reviewer which files to read. For changes to tracked files, pass the `git diff` output.

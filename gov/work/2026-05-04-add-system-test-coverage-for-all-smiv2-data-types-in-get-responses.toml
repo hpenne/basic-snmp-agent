@@ -9,9 +9,7 @@ started = "2026-05-04"
 completed = "2026-05-04"
 
 [content]
-description = """
-Describe the work to be done.
-What is the goal? What are the acceptance criteria?"""
+description = "See acceptance criteria for scope."
 
 [[content.acceptance_criteria]]
 text = "Test MIB seeds one OID per missing SMIv2 type (Integer32, Counter32, Counter64, Gauge32, IpAddress, ObjectIdentifier, Opaque)"

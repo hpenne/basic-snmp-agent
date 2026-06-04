@@ -64,15 +64,21 @@
       "WebFetch(domain:www.rfc-editor.org)",
       "Skill(deep-research)",
       "WebFetch(domain:www.itu.int)",
-      "Bash(uv run *)"
+      "Bash(uv run *)",
+      "WebFetch(domain:api.anthropic.com)"
     ]
   },
   "sandbox": {
     "enabled": true,
     "autoAllowBashIfSandboxed": true,
     "filesystem": {
-      "allowWrite": ["~/.cache/uv"]
+      "allowWrite": [
+        "~/.cache/uv"
+      ]
     },
-    "excludedCommands": ["make", "uv"]
+    "excludedCommands": [
+      "make",
+      "uv"
+    ]
   }
 }

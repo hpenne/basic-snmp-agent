@@ -9,9 +9,7 @@ started = "2026-05-28"
 completed = "2026-05-28"
 
 [content]
-description = """
-Describe the work to be done.
-What is the goal? What are the acceptance criteria?"""
+description = "See acceptance criteria for scope."
 
 [[content.acceptance_criteria]]
 text = "README.md with project overview and features"

@@ -5,6 +5,7 @@ id = "C-TCP-LIMITS"
 title = "TCP Connection Limits"
 kind = "normative"
 status = "active"
+since = "0.4.0"
 
 [content]
 text = """

@@ -4,10 +4,11 @@
 id = "RFC-0008"
 title = "Codec"
 version = "0.1.0"
-status = "draft"
+status = "normative"
 phase = "spec"
 owners = ["@hpenne"]
 created = "2026-05-06"
+updated = "2026-06-04"
 
 [[sections]]
 title = "Summary"

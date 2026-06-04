@@ -18,7 +18,7 @@ context = """
 RFC-0006 specified SNMP over TLS (the Transport Security Model, TSM, per RFC 5953 / RFC 6353) as the inbound transport and authentication mechanism for basic-snmp-agent, with plain TCP (RFC-0005) as a temporary bridge until the TLS layer was implemented.
 Earlier governance — specifically RFC-0001:C-AUTH REQ-0016 — also explicitly forbade USM.
 
-Before starting the TLS implementation work items (WI-2026-03-16-004, WI-2026-03-16-005), a survey of real-world SNMP/TLS adoption revealed three problems that together make TSM unviable as a target for this agent:
+Before starting the TLS implementation work, a survey of real-world SNMP/TLS adoption revealed three problems that together make TSM unviable as a target for this agent:
 
 1. Industry uptake of SNMP/TSM is extremely low. Very few managers and agents actually implement RFC 6353, so an agent that speaks only TSM would be incompatible with almost everything in the ecosystem.
 2. The reference open-source implementation, net-snmp, only supports TLS 1.0 for its SNMP/TLS transport. TLS 1.0 has itself been deprecated by the TLS working group (RFC 8996) and is disabled in modern TLS libraries such as rustls by default. An agent that required TLS 1.0 to interoperate with net-snmp would be building on an already-obsolete foundation.
@@ -55,11 +55,11 @@ Negative:
 - Plain TCP with noAuthNoPriv provides no confidentiality or authentication on the wire until authNoPriv and authPriv ship. Deployments that need either must rely on network-layer controls in the interim.
 - REQ tags REQ-0004 through REQ-0020 and REQ-0033 become burned (retired, never reused) because the clauses that owned them are retired. New USM auth requirements will receive fresh tag numbers.
 
-Governance follow-ups (tracked in WI-2026-04-14-001):
+Governance follow-ups:
 - RFC-0006 deprecated.
 - RFC-0001 C-SUMMARY rewritten, C-TRANSPORT repointed at RFC-0005:C-PLAINTCP, C-AUTH flipped to deprecated.
 - RFC-0002 C-RUNTIME exception notes removed.
 - RFC-0005 C-PLAINTCP rationale rewritten and C-INBOUND REQ-0033 dropped.
 - req-coverage-gaps entry for REQ-0033 removed.
-- Queued TLS work items (WI-2026-03-16-004 and WI-2026-03-16-005) cancelled.
+- Queued TLS work items cancelled.
 - A new queued placeholder work item captures the future USM auth/priv and trap-auth work; the follow-up RFC is written when that work is picked up."""

@@ -3,13 +3,13 @@
 [govctl]
 id = "RFC-0005"
 title = "Plain TCP Transport and Inbound Requests"
-version = "0.3.0"
+version = "0.4.0"
 status = "normative"
 phase = "stable"
 owners = ["@Helge Penne"]
 created = "2026-03-16"
-updated = "2026-04-28"
-signature = "80fca83c53790e0f3176fdbe8be5078a9e4c3f73f19022b8e2ebf898ab48a30b"
+updated = "2026-06-04"
+signature = "967c0a7c4d60ff14d7701505494a79bca2cbb7c3ffac934c900ab924b6c0d534"
 
 [[sections]]
 title = "Summary"
@@ -22,6 +22,12 @@ clauses = [
     "clauses/C-PLAINTCP.toml",
     "clauses/C-TCP-LIMITS.toml",
 ]
+
+[[changelog]]
+version = "0.4.0"
+date = "2026-06-04"
+notes = "Stamp C-TCP-LIMITS since version"
+added = ["C-TCP-LIMITS clause versioned"]
 
 [[changelog]]
 version = "0.3.0"

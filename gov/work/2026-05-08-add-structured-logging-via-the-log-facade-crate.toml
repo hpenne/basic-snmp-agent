@@ -10,9 +10,7 @@ completed = "2026-05-08"
 refs = ["RFC-0009"]
 
 [content]
-description = """
-Describe the work to be done.
-What is the goal? What are the acceptance criteria?"""
+description = "See acceptance criteria for scope."
 
 [[content.acceptance_criteria]]
 text = "Integrate the log facade crate for structured logging"
