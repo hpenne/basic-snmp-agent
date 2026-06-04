@@ -1,3 +1,5 @@
+//! Validated dispatch context and security-level policy for inbound frame processing.
+
 /// Named inputs for constructing a [`DispatchContext`].
 ///
 /// Bundles the per-frame engine state, USM statistics counters, configured user,
@@ -46,6 +48,35 @@ pub struct DispatchInputs<'a> {
     pub minimum_security_level: crate::usm::user::SecurityLevel,
 }
 
+impl DispatchInputs<'_> {
+    /// Determine whether the message's security level should be rejected.
+    ///
+    /// Three checks in priority order:
+    /// 1. Floor: `msg_level < minimum_security_level` (REQ-0079)
+    /// 2. Ceiling: `msg_level > user.security_level()` when a user is configured (REQ-0130)
+    /// 3. F1 fail-closed: no configured user and `msg_level > noAuthNoPriv` (REQ-0079)
+    ///
+    /// Returns `true` when the message must be rejected.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0079, REQ-0103, REQ-0130
+    pub(super) fn should_reject_security_level(
+        &self,
+        msg_level: Result<crate::usm::user::SecurityLevel, crate::usm::user::InvalidMsgFlags>,
+    ) -> bool {
+        // Invalid flags (e.g. privFlag without authFlag) → always reject.
+        let Ok(level) = msg_level else { return true };
+        // REQ-0079: below the configured floor
+        level < self.minimum_security_level
+        // REQ-0130: above what the user can satisfy (if a user is configured)
+        || self.usm_user.is_some_and(|user| level > user.security_level())
+        // F1: with no configured user the agent has no credentials, so it can
+        // only serve noAuthNoPriv. A message claiming auth/priv must be rejected
+        // rather than served as if authenticated (fail closed). Implements: REQ-0079
+        || (self.usm_user.is_none() && level > crate::usm::user::SecurityLevel::NoAuthNoPriv)
+    }
+}
+
 /// Validated engine state and statistics for inbound frame dispatch.
 ///
 /// Construct via [`DispatchContext::new`] (validating) — the no-user-implies-noAuthNoPriv
@@ -62,27 +93,6 @@ pub struct DispatchContext<'a> {
     // without requiring accessor methods on the hot dispatch path.
     pub(super) inputs: DispatchInputs<'a>,
 }
-
-/// Error returned when a [`DispatchContext`] is constructed with a minimum security
-/// level above `noAuthNoPriv` but no configured USM user.
-///
-/// Without a USM user the agent has no credentials and cannot authenticate or
-/// decrypt inbound messages. Configuring a security-level floor above
-/// `noAuthNoPriv` in that state would be silently unsatisfiable and is rejected
-/// at construction time so the bad state is never observable at dispatch time.
-///
-/// # Requirements
-/// Implements: REQ-0079
-#[derive(Debug, PartialEq, Eq)]
-pub struct NoUserSecurityLevelError;
-
-impl std::fmt::Display for NoUserSecurityLevelError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(crate::usm::user::SECURITY_LEVEL_REQUIRES_USER_MESSAGE)
-    }
-}
-
-impl std::error::Error for NoUserSecurityLevelError {}
 
 impl<'a> DispatchContext<'a> {
     /// Construct a [`DispatchContext`], validating the no-user security-level invariant.
@@ -128,3 +138,24 @@ impl<'a> DispatchContext<'a> {
         Self { inputs }
     }
 }
+
+/// Error returned when a [`DispatchContext`] is constructed with a minimum security
+/// level above `noAuthNoPriv` but no configured USM user.
+///
+/// Without a USM user the agent has no credentials and cannot authenticate or
+/// decrypt inbound messages. Configuring a security-level floor above
+/// `noAuthNoPriv` in that state would be silently unsatisfiable and is rejected
+/// at construction time so the bad state is never observable at dispatch time.
+///
+/// # Requirements
+/// Implements: REQ-0079
+#[derive(Debug, PartialEq, Eq)]
+pub struct NoUserSecurityLevelError;
+
+impl std::fmt::Display for NoUserSecurityLevelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(crate::usm::user::SECURITY_LEVEL_REQUIRES_USER_MESSAGE)
+    }
+}
+
+impl std::error::Error for NoUserSecurityLevelError {}

@@ -5,11 +5,14 @@
 //! requiring a running event loop.
 
 mod dispatch_context;
+mod report;
 pub use dispatch_context::{DispatchContext, DispatchInputs, NoUserSecurityLevelError};
+use report::{
+    DECRYPTION_ERRORS_OID, NOT_IN_TIME_WINDOWS_OID, Reject, UNKNOWN_ENGINE_IDS_OID,
+    UNKNOWN_SECURITY_MODELS_OID, UNKNOWN_USER_NAMES_OID, UNSUPPORTED_SEC_LEVELS_OID,
+    WRONG_DIGESTS_OID, emit_report_response,
+};
 
-use std::sync::LazyLock;
-
-use crate::codec::Oid;
 use crate::transport::event_loop::{MAX_BULK_REPETITIONS, MAX_FRAME_SIZE};
 use crate::transport::request;
 // Implements: [[RFC-0009:C-FACADE]]
@@ -42,26 +45,6 @@ pub fn process_snmpv3_request(
     match run_validation_pipeline(frame, ctx, mib) {
         Ok(response) => Some(response),
         Err(reject) => Option::from(reject),
-    }
-}
-
-// Control-flow type for the validation pipeline — does not directly implement a requirement.
-// Outcome of a failed security check: either send a Report PDU or silently discard.
-//
-// `Error` is intentionally not implemented: `Report` carries a valid encoded PDU to return to
-// the manager (not an error description), and `Discard` signals a silent drop. Implementing
-// `Error` would misrepresent these variants as error conditions.
-enum Reject {
-    Report(Vec<u8>),
-    Discard,
-}
-
-impl From<Reject> for Option<Vec<u8>> {
-    fn from(reject: Reject) -> Self {
-        match reject {
-            Reject::Report(encoded_report) => Some(encoded_report),
-            Reject::Discard => None,
-        }
     }
 }
 
@@ -215,11 +198,7 @@ fn check_security_level(
     ctx: &mut DispatchContext<'_>,
 ) -> Result<(), Reject> {
     let msg_level = crate::usm::user::SecurityLevel::try_from(v3_msg.usm.security_flags);
-    if !should_reject_security_level(
-        msg_level,
-        ctx.inputs.minimum_security_level,
-        ctx.inputs.usm_user,
-    ) {
+    if !ctx.inputs.should_reject_security_level(msg_level) {
         return Ok(());
     }
     Err(emit_report_response(
@@ -362,34 +341,6 @@ fn dispatch_pdu_and_encode_response(
     )
     .inspect_err(|encode_error| debug!("failed to encode SNMPv3 response: {encode_error}"))
     .ok()
-}
-
-/// Determine whether the message's security level should be rejected.
-///
-/// Three checks in priority order:
-/// 1. Floor: `msg_level < minimum_security_level` (REQ-0079)
-/// 2. Ceiling: `msg_level > user.security_level()` when a user is configured (REQ-0130)
-/// 3. F1 fail-closed: no configured user and `msg_level > noAuthNoPriv` (REQ-0079)
-///
-/// Returns `true` when the message must be rejected.
-///
-/// # Requirements
-/// Implements: REQ-0079, REQ-0103, REQ-0130
-fn should_reject_security_level(
-    msg_level: Result<crate::usm::user::SecurityLevel, crate::usm::user::InvalidMsgFlags>,
-    minimum_security_level: crate::usm::user::SecurityLevel,
-    usm_user: Option<&crate::usm::user::UsmUser>,
-) -> bool {
-    // Invalid flags (e.g. privFlag without authFlag) → always reject.
-    let Ok(level) = msg_level else { return true };
-    // REQ-0079: below the configured floor
-    level < minimum_security_level
-    // REQ-0130: above what the user can satisfy (if a user is configured)
-    || usm_user.is_some_and(|user| level > user.security_level())
-    // F1: with no configured user the agent has no credentials, so it can
-    // only serve noAuthNoPriv. A message claiming auth/priv must be rejected
-    // rather than served as if authenticated (fail closed). Implements: REQ-0079
-    || (usm_user.is_none() && level > crate::usm::user::SecurityLevel::NoAuthNoPriv)
 }
 
 /// Verify the HMAC of an authenticated `SNMPv3` message.
@@ -548,101 +499,10 @@ fn zero_auth_params_in_message(
     zeroed
 }
 
-/// Increment the counter selected by `select_counter`, and if `reportableFlag` is set in
-/// `security_flags`, encode and return a `Reject::Report` carrying the encoded PDU;
-/// otherwise return `Reject::Discard` (silent discard per RFC 3412 §7.1.3a).
-fn emit_report_response(
-    ctx: &mut DispatchContext<'_>,
-    select_counter: impl for<'a> FnOnce(&'a mut DispatchInputs<'_>) -> &'a mut u32,
-    oid: &Oid,
-    description: &str,
-    msg_id: i32,
-    security_flags: u8,
-) -> Reject {
-    // Scope the closure call so the mutable borrow of ctx.inputs ends before
-    // we read engine_id, engine_boots, and engine_time below.
-    let counter_value = {
-        let counter = select_counter(&mut ctx.inputs);
-        *counter = counter.saturating_add(1);
-        *counter
-    };
-    if security_flags & REPORTABLE_FLAG == 0 {
-        trace!("{description} with reportableFlag unset, discarding silently");
-        return Reject::Discard;
-    }
-    crate::codec::encode_v3_report(
-        msg_id,
-        ctx.inputs.engine_id,
-        ctx.inputs.engine_boots,
-        ctx.inputs.engine_time,
-        oid,
-        counter_value,
-    )
-    .inspect_err(|encode_error| {
-        debug!("failed to encode {description} report: {encode_error}");
-    })
-    .map_or(Reject::Discard, Reject::Report)
-}
-
-// Implements: REQ-0093, REQ-0104
-static UNKNOWN_ENGINE_IDS_OID: LazyLock<Oid> = LazyLock::new(|| {
-    crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS
-        .parse()
-        .expect("USM_STATS_UNKNOWN_ENGINE_IDS is a valid OID constant")
-});
-
-// Implements: REQ-0078
-static UNKNOWN_USER_NAMES_OID: LazyLock<Oid> = LazyLock::new(|| {
-    crate::usm::counters::USM_STATS_UNKNOWN_USER_NAMES
-        .parse()
-        .expect("USM_STATS_UNKNOWN_USER_NAMES is a valid OID constant")
-});
-
-// Implements: REQ-0079
-static UNSUPPORTED_SEC_LEVELS_OID: LazyLock<Oid> = LazyLock::new(|| {
-    crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS
-        .parse()
-        .expect("USM_STATS_UNSUPPORTED_SEC_LEVELS is a valid OID constant")
-});
-
-// Implements: REQ-0100
-static WRONG_DIGESTS_OID: LazyLock<Oid> = LazyLock::new(|| {
-    crate::usm::counters::USM_STATS_WRONG_DIGESTS
-        .parse()
-        .expect("USM_STATS_WRONG_DIGESTS is a valid OID constant")
-});
-
-// Implements: REQ-0098
-static NOT_IN_TIME_WINDOWS_OID: LazyLock<Oid> = LazyLock::new(|| {
-    crate::usm::counters::USM_STATS_NOT_IN_TIME_WINDOWS
-        .parse()
-        .expect("USM_STATS_NOT_IN_TIME_WINDOWS is a valid OID constant")
-});
-
-// Implements: REQ-0101
-static DECRYPTION_ERRORS_OID: LazyLock<Oid> = LazyLock::new(|| {
-    crate::usm::counters::USM_STATS_DECRYPTION_ERRORS
-        .parse()
-        .expect("USM_STATS_DECRYPTION_ERRORS is a valid OID constant")
-});
-
-/// OID for `snmpUnknownSecurityModels.0` (RFC 3412, SNMP-MPD-MIB).
-// Implements: REQ-0115
-const SNMP_UNKNOWN_SECURITY_MODELS_OID: &str = "1.3.6.1.6.3.11.2.1.1.0";
-
-// Implements: REQ-0115
-static UNKNOWN_SECURITY_MODELS_OID: LazyLock<Oid> = LazyLock::new(|| {
-    SNMP_UNKNOWN_SECURITY_MODELS_OID
-        .parse()
-        .expect("SNMP_UNKNOWN_SECURITY_MODELS_OID is a valid OID constant")
-});
-
-/// Bit mask for the `reportableFlag` in `msgFlags` (RFC 3412 §7.1.3a).
-const REPORTABLE_FLAG: u8 = 0x04;
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use report::SNMP_UNKNOWN_SECURITY_MODELS_OID;
 
     fn test_engine_id() -> &'static [u8] {
         b"\x80\x00\x1f\x88\x04test"
