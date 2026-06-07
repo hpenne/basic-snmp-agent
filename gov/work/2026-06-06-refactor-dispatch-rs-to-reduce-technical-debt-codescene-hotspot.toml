@@ -17,14 +17,15 @@ CodeScene smells in production code: Low Cohesion (LCOM4=3); Code Duplication ac
 This is a pure restructuring covered by the existing dispatch pipeline decision (ADR-0020) — no new requirements, no RFC, no ADR. The work proceeds in small, independently shippable steps, each driven through /implement-and-review (red/green TDD, clippy/test/traceability gates) and verified afterwards with the CodeScene code_health_score tool before moving to the next.
 
 Steps:
-1. Collapse the duplicated check_security_model / check_discovery_probe / check_engine_id functions into a shared, parameterised check.
-2. Introduce parameter-object newtypes bundling the shared security/scoped-PDU context, reducing dispatch_pdu_and_encode_response, verify_hmac, and decrypt_scoped_pdu below the 4-argument threshold and removing primitive-obsession smells.
-3. Extract IV/salt derivation and the decrypt step from decrypt_scoped_pdu into named helpers to bring it under 70 LoC.
-4. Reduce test code duplication by extracting shared patterns (counter-at-max tests, non-reportable-flag tests, report-and-increment tests) into parameterised test helpers.
-5. Reduce test Large Method and Excess Arguments smells — refactor build_authpriv_frame (76 LoC, 7 args) and the authpriv decrypt test (94 LoC).
-6. (Stretch) Split the module along its natural responsibilities (security checks vs. PDU decode/dispatch vs. crypto) to raise cohesion, e.g. a dispatch/security.rs submodule alongside the existing report submodule.
+1. ✅ Collapse the duplicated check_security_model / check_discovery_probe / check_engine_id functions into a shared, parameterised check.
+2. ✅ Introduce parameter-object newtypes bundling the shared security/scoped-PDU context, reducing dispatch_pdu_and_encode_response, verify_hmac, and decrypt_scoped_pdu below the 4-argument threshold and removing primitive-obsession smells.
+3. ✅ Extract IV/salt derivation and the decrypt step from decrypt_scoped_pdu into named helpers to bring it under 70 LoC. (Satisfied as side effect of step 2.)
+4. Refactor build_authpriv_frame (76 LoC, 7 args) and the authpriv decrypt test (94 LoC) to reduce Large Method and Excess Arguments smells in test code.
+5. Split the module along its natural responsibilities (security checks vs. PDU decode/dispatch vs. crypto) to raise cohesion, e.g. a dispatch/security.rs submodule alongside the existing report submodule. This targets the Low Cohesion (LCOM4=3) smell, likely the heaviest contributor to the score.
 
-Hard gate: dispatch.rs code_health_score >= 8.0 (up from 6.24). The cohesion split (step 6) and the business-case top-5% target (9.1) are stretch goals, not blocking criteria."""
+Test code duplication (19 functions, 10 groups) was evaluated and dropped as a step: the structural similarity is inherent to testing parallel rejection paths through the same pipeline, and reducing it would require sacrificing test readability or requirement traceability — neither acceptable trade-offs for a CodeScene score.
+
+Hard gate: dispatch.rs code_health_score >= 8.0 (up from 6.24 baseline, currently 6.48 after steps 1-3). The business-case top-5% target (9.1) is a stretch goal, not a blocking criterion."""
 
 [[content.acceptance_criteria]]
 text = "Duplicated check_security_model / check_discovery_probe / check_engine_id collapsed into a shared parameterised check (no Code Duplication smell among them)"
@@ -72,11 +73,11 @@ status = "pending"
 category = "chore"
 
 [[content.acceptance_criteria]]
-text = "Test code duplication reduced — no Code Duplication smell remains in dispatch.rs test code"
+text = "build_authpriv_frame refactored to under 70 LoC and 4 or fewer arguments"
 status = "pending"
 category = "changed"
 
 [[content.acceptance_criteria]]
-text = "No Large Method or Excess Arguments smells remain in dispatch.rs test code (build_authpriv_frame under 70 LoC and 4 args, authpriv decrypt test under 70 LoC)"
+text = "Module split along natural responsibilities to improve cohesion (target LCOM4 < 3)"
 status = "pending"
 category = "changed"
