@@ -59,9 +59,7 @@ fn run_validation_pipeline(
         .inspect_err(|decode_error| debug!("failed to decode SNMPv3 message: {decode_error}"))
         .map_err(|_| Reject::Discard)?;
 
-    check_security_model(&v3_msg, ctx)?;
-    check_discovery_probe(&v3_msg, ctx)?;
-    check_engine_id(&v3_msg, ctx)?;
+    check_message_envelope(&v3_msg, ctx)?;
     check_user_name(&v3_msg, ctx)?;
     check_security_level(&v3_msg, ctx)?;
     verify_authentication(&v3_msg, ctx)?;
@@ -98,66 +96,50 @@ fn run_validation_pipeline(
     .ok_or(Reject::Discard)
 }
 
-// RFC 3412 §7.2 step 2: reject messages with unsupported security models.
-// Implements: REQ-0115
-fn check_security_model(
+// Pre-USM-user envelope checks: security model, discovery probe, and engine-ID.
+// These run in RFC 3412 §7.2 order before any per-user validation.
+// Implements: REQ-0115, REQ-0093, REQ-0104
+fn check_message_envelope(
     v3_msg: &crate::codec::V3InboundMessage<'_>,
     ctx: &mut DispatchContext<'_>,
 ) -> Result<(), Reject> {
-    if v3_msg.security_model.is_usm() {
-        return Ok(());
+    // RFC 3412 §7.2 step 2: reject messages with unsupported security models (REQ-0115).
+    if !v3_msg.security_model.is_usm() {
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.unknown_security_models_counter,
+            &UNKNOWN_SECURITY_MODELS_OID,
+            "unknown security model",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        ));
     }
-    Err(emit_report_response(
-        ctx,
-        |inputs| &mut inputs.unknown_security_models_counter,
-        &UNKNOWN_SECURITY_MODELS_OID,
-        "unknown security model",
-        v3_msg.msg_id,
-        v3_msg.usm.security_flags,
-    ))
-}
-
-// REQ-0093: engine-ID discovery probe — the manager sent an empty
-// msgAuthoritativeEngineID. Respond with a Report PDU carrying the
-// usmStatsUnknownEngineIDs counter and our authoritative engine state
-// so the manager can learn our engine ID, boots, and approximate time.
-// Implements: REQ-0093
-fn check_discovery_probe(
-    v3_msg: &crate::codec::V3InboundMessage<'_>,
-    ctx: &mut DispatchContext<'_>,
-) -> Result<(), Reject> {
-    if !v3_msg.usm.auth_engine_id.is_empty() {
-        return Ok(());
+    // REQ-0093: engine-ID discovery probe — the manager sent an empty
+    // msgAuthoritativeEngineID. The Report response carries the agent's
+    // authoritative engine state so the manager can learn the engine ID,
+    // boots, and approximate time.
+    if v3_msg.usm.auth_engine_id.is_empty() {
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.unknown_engine_ids_counter,
+            &UNKNOWN_ENGINE_IDS_OID,
+            "engine-ID discovery probe",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        ));
     }
-    Err(emit_report_response(
-        ctx,
-        |inputs| &mut inputs.unknown_engine_ids_counter,
-        &UNKNOWN_ENGINE_IDS_OID,
-        "engine-ID discovery probe",
-        v3_msg.msg_id,
-        v3_msg.usm.security_flags,
-    ))
-}
-
-// REQ-0104: contextEngineID mismatch — the ScopedPDU's contextEngineID does not
-// match the agent's snmpEngineID. Respond with a Report PDU carrying
-// usmStatsUnknownEngineIDs.
-// Implements: REQ-0104
-fn check_engine_id(
-    v3_msg: &crate::codec::V3InboundMessage<'_>,
-    ctx: &mut DispatchContext<'_>,
-) -> Result<(), Reject> {
-    if v3_msg.engine_id == ctx.inputs.engine_id {
-        return Ok(());
+    // REQ-0104: contextEngineID mismatch — the ScopedPDU's contextEngineID does not match the agent's snmpEngineID.
+    if v3_msg.engine_id != ctx.inputs.engine_id {
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.unknown_engine_ids_counter,
+            &UNKNOWN_ENGINE_IDS_OID,
+            "unknown engine ID",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        ));
     }
-    Err(emit_report_response(
-        ctx,
-        |inputs| &mut inputs.unknown_engine_ids_counter,
-        &UNKNOWN_ENGINE_IDS_OID,
-        "unknown engine ID",
-        v3_msg.msg_id,
-        v3_msg.usm.security_flags,
-    ))
+    Ok(())
 }
 
 // REQ-0078, REQ-0080: user-name lookup — discovery (above) runs before this check.
@@ -171,21 +153,21 @@ fn check_user_name(
     v3_msg: &crate::codec::V3InboundMessage<'_>,
     ctx: &mut DispatchContext<'_>,
 ) -> Result<(), Reject> {
-    if ctx
+    let name_matches = ctx
         .inputs
         .usm_user
-        .is_none_or(|user| v3_msg.user_name == user.name().as_bytes())
-    {
-        return Ok(());
+        .is_none_or(|user| v3_msg.user_name == user.name().as_bytes());
+    if !name_matches {
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.unknown_user_names_counter,
+            &UNKNOWN_USER_NAMES_OID,
+            "unknown user name",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        ));
     }
-    Err(emit_report_response(
-        ctx,
-        |inputs| &mut inputs.unknown_user_names_counter,
-        &UNKNOWN_USER_NAMES_OID,
-        "unknown user name",
-        v3_msg.msg_id,
-        v3_msg.usm.security_flags,
-    ))
+    Ok(())
 }
 
 // REQ-0079, REQ-0103, REQ-0130: security-level enforcement — runs after user-name lookup.
@@ -198,17 +180,17 @@ fn check_security_level(
     ctx: &mut DispatchContext<'_>,
 ) -> Result<(), Reject> {
     let msg_level = crate::usm::user::SecurityLevel::try_from(v3_msg.usm.security_flags);
-    if !ctx.inputs.should_reject_security_level(msg_level) {
-        return Ok(());
+    if ctx.inputs.should_reject_security_level(msg_level) {
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.unsupported_sec_levels_counter,
+            &UNSUPPORTED_SEC_LEVELS_OID,
+            "unsupported security level",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        ));
     }
-    Err(emit_report_response(
-        ctx,
-        |inputs| &mut inputs.unsupported_sec_levels_counter,
-        &UNSUPPORTED_SEC_LEVELS_OID,
-        "unsupported security level",
-        v3_msg.msg_id,
-        v3_msg.usm.security_flags,
-    ))
+    Ok(())
 }
 
 // REQ-0100, REQ-0102: HMAC verification for authenticated messages.
@@ -225,23 +207,24 @@ fn verify_authentication(
     let (Some(auth_protocol), Some(auth_key)) = (user.auth_protocol(), user.auth_key()) else {
         return Ok(());
     };
-    if verify_hmac(
+    let hmac_valid = verify_hmac(
         auth_protocol,
         auth_key,
         v3_msg.raw_message,
         &v3_msg.usm.auth_params,
         v3_msg.auth_params_offset,
-    ) {
-        return Ok(());
+    );
+    if !hmac_valid {
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.wrong_digests_counter,
+            &WRONG_DIGESTS_OID,
+            "wrong digest",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        ));
     }
-    Err(emit_report_response(
-        ctx,
-        |inputs| &mut inputs.wrong_digests_counter,
-        &WRONG_DIGESTS_OID,
-        "wrong digest",
-        v3_msg.msg_id,
-        v3_msg.usm.security_flags,
-    ))
+    Ok(())
 }
 
 // REQ-0098: time-window validation for authenticated messages.
@@ -257,22 +240,23 @@ fn check_time_window(
     if user.auth_protocol().is_none() {
         return Ok(());
     }
-    if crate::usm::time_window::is_in_time_window(
+    let in_time_window = crate::usm::time_window::is_in_time_window(
         v3_msg.usm.auth_engine_boots,
         v3_msg.usm.auth_engine_time,
         ctx.inputs.engine_boots,
         ctx.inputs.engine_time,
-    ) {
-        return Ok(());
+    );
+    if !in_time_window {
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.not_in_time_windows_counter,
+            &NOT_IN_TIME_WINDOWS_OID,
+            "not-in-time-window",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        ));
     }
-    Err(emit_report_response(
-        ctx,
-        |inputs| &mut inputs.not_in_time_windows_counter,
-        &NOT_IN_TIME_WINDOWS_OID,
-        "not-in-time-window",
-        v3_msg.msg_id,
-        v3_msg.usm.security_flags,
-    ))
+    Ok(())
 }
 
 // Only the default (empty) context name is supported per REQ-0058.
