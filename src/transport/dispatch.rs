@@ -75,23 +75,27 @@ fn run_validation_pipeline(
         crate::codec::V3ScopedData::Plaintext(pdu) => (pdu, v3_msg.context_name),
         crate::codec::V3ScopedData::Encrypted(ciphertext) => decrypt_scoped_pdu(
             ctx,
-            v3_msg.msg_id,
-            v3_msg.usm.security_flags,
+            &DecryptionParams {
+                msg_id: v3_msg.msg_id,
+                security_flags: v3_msg.usm.security_flags,
+                priv_params: &v3_msg.usm.priv_params,
+                auth_engine_boots: v3_msg.usm.auth_engine_boots,
+                auth_engine_time: v3_msg.usm.auth_engine_time,
+            },
             &ciphertext,
-            &v3_msg.usm.priv_params,
-            v3_msg.usm.auth_engine_boots,
-            v3_msg.usm.auth_engine_time,
         )?,
     };
 
     dispatch_pdu_and_encode_response(
         ctx,
-        v3_msg.msg_id,
-        v3_msg.max_size,
-        &v3_msg.user_name,
+        &ResponseEnvelope {
+            msg_id: v3_msg.msg_id,
+            max_size: v3_msg.max_size,
+            user_name: &v3_msg.user_name,
+            context_name: &response_context_name,
+        },
         mib,
         inbound_pdu,
-        &response_context_name,
     )
     .ok_or(Reject::Discard)
 }
@@ -210,9 +214,11 @@ fn verify_authentication(
     let hmac_valid = verify_hmac(
         auth_protocol,
         auth_key,
-        v3_msg.raw_message,
-        &v3_msg.usm.auth_params,
-        v3_msg.auth_params_offset,
+        &HmacInput {
+            raw_message: v3_msg.raw_message,
+            auth_params: &v3_msg.usm.auth_params,
+            auth_params_offset: v3_msg.auth_params_offset,
+        },
     );
     if !hmac_valid {
         return Err(emit_report_response(
@@ -271,6 +277,16 @@ fn check_context_name(v3_msg: &crate::codec::V3InboundMessage<'_>) -> Result<(),
     Err(Reject::Discard)
 }
 
+// Message-level fields needed for response encoding.
+#[derive(Debug)]
+struct ResponseEnvelope<'a> {
+    msg_id: i32,
+    max_size: i32,
+    user_name: &'a [u8],
+    // May come from the outer message (cleartext) or the decrypted ScopedPDU (authPriv).
+    context_name: &'a [u8],
+}
+
 /// Dispatch a decoded PDU to the appropriate request handler and encode the response.
 ///
 /// Called after all security checks pass. Determines the effective `max_size` for GETBULK
@@ -281,12 +297,9 @@ fn check_context_name(v3_msg: &crate::codec::V3InboundMessage<'_>) -> Result<(),
 /// Implements: REQ-0056, REQ-0066, REQ-0068, REQ-0107
 fn dispatch_pdu_and_encode_response(
     ctx: &DispatchContext<'_>,
-    msg_id: i32,
-    max_size: i32,
-    user_name: &[u8],
+    envelope: &ResponseEnvelope<'_>,
     mib: &crate::mib::Store,
     inbound_pdu: crate::codec::InboundPdu,
-    response_context_name: &[u8],
 ) -> Option<Vec<u8>> {
     let response = match inbound_pdu {
         crate::codec::InboundPdu::GetRequest(req) => request::handle_get(&req, mib),
@@ -296,7 +309,9 @@ fn dispatch_pdu_and_encode_response(
             // the agent's own frame limit, then convert to usize for size arithmetic.
             // max_size is validated >= 484 during decode (RFC 3412 §7.2 step 5), so
             // it is always positive; unwrap_or(0) is defence-in-depth only.
-            let effective_max_size = usize::try_from(max_size).unwrap_or(0).min(MAX_FRAME_SIZE);
+            let effective_max_size = usize::try_from(envelope.max_size)
+                .unwrap_or(0)
+                .min(MAX_FRAME_SIZE);
             request::handle_get_bulk(&req, mib, MAX_BULK_REPETITIONS, effective_max_size)
         }
         crate::codec::InboundPdu::SetRequest(req) => request::handle_set(&req),
@@ -313,10 +328,10 @@ fn dispatch_pdu_and_encode_response(
         .usm_user
         .and_then(|user| user.priv_protocol().zip(user.priv_key()));
     crate::codec::encode_v3_response(
-        msg_id,
+        envelope.msg_id,
         ctx.inputs.engine_id,
-        user_name,
-        response_context_name,
+        envelope.user_name,
+        envelope.context_name,
         ctx.inputs.engine_boots,
         ctx.inputs.engine_time,
         response_auth,
@@ -325,6 +340,14 @@ fn dispatch_pdu_and_encode_response(
     )
     .inspect_err(|encode_error| debug!("failed to encode SNMPv3 response: {encode_error}"))
     .ok()
+}
+
+// Bundles message-level fields for HMAC verification.
+#[derive(Debug)]
+struct HmacInput<'a> {
+    raw_message: &'a [u8],
+    auth_params: &'a [u8],
+    auth_params_offset: Option<usize>,
 }
 
 /// Verify the HMAC of an authenticated `SNMPv3` message.
@@ -337,18 +360,26 @@ fn dispatch_pdu_and_encode_response(
 fn verify_hmac(
     auth_protocol: crate::usm::auth::AuthProtocol,
     auth_key: &crate::usm::keys::SecretKey,
-    raw_message: &[u8],
-    auth_params: &[u8],
-    auth_params_offset: Option<usize>,
+    hmac: &HmacInput<'_>,
 ) -> bool {
-    let Some(offset) = auth_params_offset else {
+    let Some(offset) = hmac.auth_params_offset else {
         trace!("auth_params_offset absent, treating as HMAC failure");
         return false;
     };
-    let zeroed = zero_auth_params_in_message(raw_message, offset, auth_params.len());
+    let zeroed = zero_auth_params_in_message(hmac.raw_message, offset, hmac.auth_params.len());
     auth_protocol
-        .verify_mac(auth_key, &zeroed, auth_params)
+        .verify_mac(auth_key, &zeroed, hmac.auth_params)
         .is_ok()
+}
+
+// Bundles USM fields needed for decryption and error reporting.
+#[derive(Debug)]
+struct DecryptionParams<'a> {
+    msg_id: i32,
+    security_flags: u8,
+    priv_params: &'a [u8],
+    auth_engine_boots: u32,
+    auth_engine_time: u32,
 }
 
 /// Decrypt an authPriv `ScopedPDU` ciphertext and decode the plaintext.
@@ -363,12 +394,8 @@ fn verify_hmac(
 /// Implements: REQ-0101, REQ-0102, REQ-0104, REQ-0109
 fn decrypt_scoped_pdu(
     ctx: &mut DispatchContext<'_>,
-    msg_id: i32,
-    security_flags: u8,
+    decryption: &DecryptionParams<'_>,
     ciphertext: &[u8],
-    priv_params: &[u8],
-    auth_engine_boots: u32,
-    auth_engine_time: u32,
 ) -> Result<(crate::codec::InboundPdu, Vec<u8>), Reject> {
     // Security-level enforcement (REQ-0079) already verified the configured user
     // is authPriv, so priv_protocol/priv_key must be Some here.
@@ -383,25 +410,28 @@ fn decrypt_scoped_pdu(
     };
 
     // msgPrivacyParameters must be exactly 8 bytes (the AES salt per RFC 3826 §2.2).
-    if priv_params.len() != 8 {
-        debug!("msgPrivacyParameters length {} != 8", priv_params.len());
+    if decryption.priv_params.len() != 8 {
+        debug!(
+            "msgPrivacyParameters length {} != 8",
+            decryption.priv_params.len()
+        );
         // Implements: REQ-0101
         return Err(emit_report_response(
             ctx,
             |inputs| &mut inputs.decryption_errors_counter,
             &DECRYPTION_ERRORS_OID,
             "decryption error",
-            msg_id,
-            security_flags,
+            decryption.msg_id,
+            decryption.security_flags,
         ));
     }
 
     // Implements: REQ-0109
     // IV = engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes) per RFC 3826 §2.2.
     let mut aes_iv = [0_u8; 16];
-    aes_iv[0..4].copy_from_slice(&auth_engine_boots.to_be_bytes());
-    aes_iv[4..8].copy_from_slice(&auth_engine_time.to_be_bytes());
-    aes_iv[8..16].copy_from_slice(priv_params);
+    aes_iv[0..4].copy_from_slice(&decryption.auth_engine_boots.to_be_bytes());
+    aes_iv[4..8].copy_from_slice(&decryption.auth_engine_time.to_be_bytes());
+    aes_iv[8..16].copy_from_slice(decryption.priv_params);
 
     let Ok(scoped_pdu_bytes) = priv_protocol.decrypt(priv_key, &aes_iv, ciphertext) else {
         debug!("AES-CFB128 decryption failed");
@@ -411,8 +441,8 @@ fn decrypt_scoped_pdu(
             |inputs| &mut inputs.decryption_errors_counter,
             &DECRYPTION_ERRORS_OID,
             "decryption error",
-            msg_id,
-            security_flags,
+            decryption.msg_id,
+            decryption.security_flags,
         ));
     };
 
@@ -424,8 +454,8 @@ fn decrypt_scoped_pdu(
             |inputs| &mut inputs.decryption_errors_counter,
             &DECRYPTION_ERRORS_OID,
             "decryption error",
-            msg_id,
-            security_flags,
+            decryption.msg_id,
+            decryption.security_flags,
         ));
     };
 
@@ -438,8 +468,8 @@ fn decrypt_scoped_pdu(
             |inputs| &mut inputs.unknown_engine_ids_counter,
             &UNKNOWN_ENGINE_IDS_OID,
             "unknown engine ID",
-            msg_id,
-            security_flags,
+            decryption.msg_id,
+            decryption.security_flags,
         ));
     }
 
