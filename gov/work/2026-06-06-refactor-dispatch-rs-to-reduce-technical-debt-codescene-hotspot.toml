@@ -1,0 +1,82 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-06-06-001"
+title = "Refactor dispatch.rs to reduce technical debt (CodeScene hotspot)"
+status = "active"
+created = "2026-06-06"
+started = "2026-06-06"
+refs = ["ADR-0020"]
+
+[content]
+description = """
+Behaviour-preserving internal restructuring of src/transport/dispatch.rs to clear CodeScene-identified technical debt. The file is the project's top refactoring hotspot: code health 6.24 (Yellow), the lowest in the codebase, with rising friction (0.349/month and climbing). It is the security-critical SNMPv3 message-processing pipeline, so debt here carries correctness risk as well as maintenance cost.
+
+CodeScene smells in production code: Low Cohesion (LCOM4=3); Code Duplication across the check_security_model / check_discovery_probe / check_engine_id functions; Large Method (decrypt_scoped_pdu, 70 LoC); Excess Number of Function Arguments (dispatch_pdu_and_encode_response = 7, decrypt_scoped_pdu = 7, verify_hmac = 5; threshold is 4); and Primitive Obsession (35% of functions take raw primitives).
+
+This is a pure restructuring covered by the existing dispatch pipeline decision (ADR-0020) — no new requirements, no RFC, no ADR. The work proceeds in small, independently shippable steps, each driven through /implement-and-review (red/green TDD, clippy/test/traceability gates) and verified afterwards with the CodeScene code_health_score tool before moving to the next.
+
+Steps:
+1. Collapse the duplicated check_security_model / check_discovery_probe / check_engine_id functions into a shared, parameterised check.
+2. Introduce parameter-object newtypes bundling the shared security/scoped-PDU context, reducing dispatch_pdu_and_encode_response, verify_hmac, and decrypt_scoped_pdu below the 4-argument threshold and removing primitive-obsession smells.
+3. Extract IV/salt derivation and the decrypt step from decrypt_scoped_pdu into named helpers to bring it under 70 LoC.
+4. Reduce test code duplication by extracting shared patterns (counter-at-max tests, non-reportable-flag tests, report-and-increment tests) into parameterised test helpers.
+5. Reduce test Large Method and Excess Arguments smells — refactor build_authpriv_frame (76 LoC, 7 args) and the authpriv decrypt test (94 LoC).
+6. (Stretch) Split the module along its natural responsibilities (security checks vs. PDU decode/dispatch vs. crypto) to raise cohesion, e.g. a dispatch/security.rs submodule alongside the existing report submodule.
+
+Hard gate: dispatch.rs code_health_score >= 8.0 (up from 6.24). The cohesion split (step 6) and the business-case top-5% target (9.1) are stretch goals, not blocking criteria."""
+
+[[content.acceptance_criteria]]
+text = "Duplicated check_security_model / check_discovery_probe / check_engine_id collapsed into a shared parameterised check (no Code Duplication smell among them)"
+status = "done"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "dispatch_pdu_and_encode_response, verify_hmac, and decrypt_scoped_pdu each take 4 or fewer arguments via parameter-object newtypes (no Excess Number of Function Arguments smell)"
+status = "done"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "decrypt_scoped_pdu is under 70 LoC (no Large Method smell)"
+status = "done"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "CodeScene code_health_score for src/transport/dispatch.rs is >= 8.0"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "No Large Method, Excess Arguments, or Code Duplication smells remain in dispatch.rs production code"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "No behavioural change — existing test suite passes unchanged in intent, with coverage preserved"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Requirement traceability annotations preserved on all moved/renamed items"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "make pre-commit passes (clippy -D warnings, tests, fuzz, traceability, format check)"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Test code duplication reduced — no Code Duplication smell remains in dispatch.rs test code"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "No Large Method or Excess Arguments smells remain in dispatch.rs test code (build_authpriv_frame under 70 LoC and 4 args, authpriv decrypt test under 70 LoC)"
+status = "pending"
+category = "changed"
