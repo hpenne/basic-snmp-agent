@@ -747,88 +747,6 @@ mod tests {
         v3_response
     }
 
-    // Dispatch `frame`, assert the counter saturates at `u32::MAX` (no overflow), and
-    // assert the Report PDU varbind carries `u32::MAX`. Used by all counter-saturation tests.
-    fn dispatch_and_assert_saturated_counter(
-        frame: &[u8],
-        user: Option<&crate::usm::user::UsmUser>,
-        mib: &crate::mib::Store,
-        tc: &mut TestCtx,
-        read_counter: impl Fn(&TestCtx) -> u32,
-        counter_oid: &str,
-        expect_msg: &str,
-    ) {
-        let response_bytes = {
-            let mut ctx = tc.ctx(user);
-            process_snmpv3_request(frame, &mut ctx, mib)
-        }
-        .expect(expect_msg);
-        assert_eq!(read_counter(tc), u32::MAX, "counter must not overflow");
-        assert_report_pdu_varbind(&response_bytes, counter_oid, u32::MAX);
-    }
-
-    // Dispatch `frame` and assert the request is silently discarded (no response) while the
-    // counter is still incremented to 1. Used by all no-reportableFlag tests.
-    fn dispatch_and_assert_discarded_with_counter(
-        frame: &[u8],
-        user: Option<&crate::usm::user::UsmUser>,
-        mib: &crate::mib::Store,
-        tc: &mut TestCtx,
-        read_counter: impl Fn(&TestCtx) -> u32,
-        discard_msg: &str,
-    ) {
-        let result = {
-            let mut ctx = tc.ctx(user);
-            process_snmpv3_request(frame, &mut ctx, mib)
-        };
-        assert!(result.is_none(), "{discard_msg}");
-        assert_eq!(
-            read_counter(tc),
-            1,
-            "counter must still be incremented even when no Report is sent"
-        );
-    }
-
-    // Dispatch `frame`, assert the counter increments to 1, and assert the response is a
-    // Report PDU whose single varbind carries the expected OID and the value 1.
-    // Returns the decoded SNMPv3 response so callers can perform additional assertions
-    // (e.g. USM parameters or message ID).
-    fn dispatch_and_assert_report_increments_counter(
-        frame: &[u8],
-        user: Option<&crate::usm::user::UsmUser>,
-        mib: &crate::mib::Store,
-        tc: &mut TestCtx,
-        read_counter: impl Fn(&TestCtx) -> u32,
-        counter_oid: &str,
-        response_expect_msg: &str,
-    ) -> rasn_snmp::v3::Message {
-        let result = {
-            let mut ctx = tc.ctx(user);
-            process_snmpv3_request(frame, &mut ctx, mib)
-        };
-        assert_eq!(read_counter(tc), 1, "counter must be incremented to 1");
-        assert_report_pdu_varbind(&result.expect(response_expect_msg), counter_oid, 1)
-    }
-
-    // Dispatch `frame` and assert the request produces a GetResponse (not a Report)
-    // with the specified counter remaining at zero. Used by all "validation passes" tests.
-    fn dispatch_and_assert_proceeds(
-        frame: &[u8],
-        user: Option<&crate::usm::user::UsmUser>,
-        mib: &crate::mib::Store,
-        tc: &mut TestCtx,
-        read_counter: impl Fn(&TestCtx) -> u32,
-        counter_msg: &str,
-        response_expect_msg: &str,
-    ) {
-        let result = {
-            let mut ctx = tc.ctx(user);
-            process_snmpv3_request(frame, &mut ctx, mib)
-        };
-        assert_eq!(read_counter(tc), 0, "{counter_msg}");
-        assert_get_response(&result.expect(response_expect_msg));
-    }
-
     // ── Discovery probe (REQ-0093) ────────────────────────────────────────────
 
     #[test]
@@ -837,14 +755,19 @@ mod tests {
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe();
         let mut tc = TestCtx::new().with_boots_time(3, 100);
-        let v3_response = dispatch_and_assert_report_increments_counter(
-            &probe_frame,
-            None,
-            &mib,
-            &mut tc,
-            |tc| tc.unknown_engine_ids,
+        let result = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&probe_frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.unknown_engine_ids, 1,
+            "counter must be incremented for discovery probe"
+        );
+        let response_bytes = result.expect("discovery probe must produce a Report response");
+        let v3_response = assert_report_pdu_varbind(
+            &response_bytes,
             crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS,
-            "discovery probe must produce a Report response",
+            1,
         );
         assert_usm_params(&v3_response, 3, 100);
     }
@@ -875,15 +798,11 @@ mod tests {
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
         let frame = snmpv3_frames::encode_get_request(test_engine_id(), b"", 1, 2, oid.as_slice());
         let mut tc = TestCtx::new();
-        dispatch_and_assert_proceeds(
-            &frame,
-            None,
-            &mib,
-            &mut tc,
-            |tc| tc.unknown_engine_ids,
-            "counter must not be incremented for correct engine ID",
-            "valid request must produce a GetResponse",
-        );
+        {
+            let mut ctx = tc.ctx(None);
+            let _response = process_snmpv3_request(&frame, &mut ctx, &mib);
+        }
+        assert_eq!(tc.unknown_engine_ids, 0);
     }
 
     #[test]
@@ -892,14 +811,16 @@ mod tests {
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe();
         let mut tc = TestCtx::new().with_unknown_engine_ids(u32::MAX);
-        dispatch_and_assert_saturated_counter(
-            &probe_frame,
-            None,
-            &mib,
-            &mut tc,
-            |tc| tc.unknown_engine_ids,
+        let response_bytes = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&probe_frame, &mut ctx, &mib)
+        }
+        .expect("discovery probe must produce a Report response even when counter is at max");
+        assert_eq!(tc.unknown_engine_ids, u32::MAX);
+        assert_report_pdu_varbind(
+            &response_bytes,
             crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS,
-            "discovery probe must produce a Report response even when counter is at max",
+            u32::MAX,
         );
     }
 
@@ -909,13 +830,17 @@ mod tests {
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe_no_report();
         let mut tc = TestCtx::new().with_boots_time(3, 100);
-        dispatch_and_assert_discarded_with_counter(
-            &probe_frame,
-            None,
-            &mib,
-            &mut tc,
-            |tc| tc.unknown_engine_ids,
-            "probe without reportableFlag must be silently discarded",
+        let result = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&probe_frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_none(),
+            "probe without reportableFlag must be silently discarded"
+        );
+        assert_eq!(
+            tc.unknown_engine_ids, 1,
+            "counter must be incremented even for non-reportable probe"
         );
     }
 
@@ -935,14 +860,21 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new().with_boots_time(3, 100);
-        let v3_response = dispatch_and_assert_report_increments_counter(
-            &frame,
-            None,
-            &mib,
-            &mut tc,
-            |tc| tc.unknown_engine_ids,
+        let result = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.unknown_engine_ids, 1,
+            "counter must be incremented on contextEngineID mismatch"
+        );
+        let response_bytes =
+            result.expect("contextEngineID mismatch must produce a Report response");
+        // Verify Report PDU carries usmStatsUnknownEngineIDs.
+        let v3_response = assert_report_pdu_varbind(
+            &response_bytes,
             crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS,
-            "contextEngineID mismatch must produce a Report response",
+            1,
         );
         assert_usm_params(&v3_response, 3, 100);
     }
@@ -962,13 +894,17 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new();
-        dispatch_and_assert_discarded_with_counter(
-            &frame,
-            None,
-            &mib,
-            &mut tc,
-            |tc| tc.unknown_engine_ids,
-            "contextEngineID mismatch without reportableFlag must be silently discarded",
+        let result = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_none(),
+            "contextEngineID mismatch without reportableFlag must be silently discarded"
+        );
+        assert_eq!(
+            tc.unknown_engine_ids, 1,
+            "counter must still be incremented even when no Report is sent"
         );
     }
 
@@ -984,14 +920,18 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new().with_unknown_engine_ids(u32::MAX);
-        dispatch_and_assert_saturated_counter(
-            &frame,
-            None,
-            &mib,
-            &mut tc,
-            |tc| tc.unknown_engine_ids,
-            crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS,
+        let response_bytes = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        }
+        .expect(
             "contextEngineID mismatch must produce a Report response even when counter is at max",
+        );
+        assert_eq!(tc.unknown_engine_ids, u32::MAX, "counter must not overflow");
+        assert_report_pdu_varbind(
+            &response_bytes,
+            crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS,
+            u32::MAX,
         );
     }
 
@@ -1008,14 +948,21 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new();
-        dispatch_and_assert_report_increments_counter(
-            &frame,
-            None,
-            &mib,
-            &mut tc,
-            |tc| tc.unknown_engine_ids,
+        let result = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.unknown_engine_ids, 1,
+            "counter must be incremented on contextEngineID mismatch"
+        );
+        let response_bytes = result.expect(
+            "contextEngineID mismatch must produce a Report response even when msgAuthoritativeEngineID matches"
+        );
+        assert_report_pdu_varbind(
+            &response_bytes,
             crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS,
-            "contextEngineID mismatch must produce a Report response even when msgAuthoritativeEngineID matches",
+            1,
         );
     }
 
@@ -1028,15 +975,14 @@ mod tests {
         // Frame with empty user name; usm_user: None means no check is performed.
         let frame = snmpv3_frames::encode_get_request(test_engine_id(), b"", 1, 2, test_oid_arcs());
         let mut tc = TestCtx::new();
-        dispatch_and_assert_proceeds(
-            &frame,
-            None,
-            &mib,
-            &mut tc,
-            |tc| tc.unknown_user_names,
-            "counter must not be incremented",
-            "request must pass through when no USM user is configured",
-        );
+        let result = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(tc.unknown_user_names, 0, "counter must not be incremented");
+        let response_bytes =
+            result.expect("request must pass through when no USM user is configured");
+        assert_get_response(&response_bytes);
     }
 
     #[test]
@@ -1053,15 +999,17 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new();
-        dispatch_and_assert_proceeds(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.unknown_user_names,
-            "counter must not be incremented on match",
-            "matching user name must produce a response",
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.unknown_user_names, 0,
+            "counter must not be incremented on match"
         );
+        // A Report PDU would decode as Pdus::Report; a GetResponse decodes as Pdus::Response.
+        let response_bytes = result.expect("matching user name must produce a response");
+        assert_get_response(&response_bytes);
     }
 
     #[test]
@@ -1079,14 +1027,19 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new();
-        let v3_response = dispatch_and_assert_report_increments_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.unknown_user_names,
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.unknown_user_names, 1,
+            "counter must be incremented on mismatch"
+        );
+        let response_bytes = result.expect("mismatched user name must produce a Report response");
+        let v3_response = assert_report_pdu_varbind(
+            &response_bytes,
             crate::usm::counters::USM_STATS_UNKNOWN_USER_NAMES,
-            "mismatched user name must produce a Report response",
+            1,
         );
         assert_usm_params(&v3_response, 1, 0);
     }
@@ -1107,13 +1060,17 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new();
-        dispatch_and_assert_discarded_with_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.unknown_user_names,
-            "user-name mismatch without reportableFlag must be silently discarded",
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_none(),
+            "user-name mismatch without reportableFlag must be silently discarded"
+        );
+        assert_eq!(
+            tc.unknown_user_names, 1,
+            "counter must still be incremented even when no Report is sent"
         );
     }
 
@@ -1131,14 +1088,16 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new().with_unknown_user_names(u32::MAX);
-        dispatch_and_assert_saturated_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.unknown_user_names,
+        let response_bytes = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        }
+        .expect("user-name mismatch must produce a Report response even when counter is at max");
+        assert_eq!(tc.unknown_user_names, u32::MAX, "counter must not overflow");
+        assert_report_pdu_varbind(
+            &response_bytes,
             crate::usm::counters::USM_STATS_UNKNOWN_USER_NAMES,
-            "user-name mismatch must produce a Report response even when counter is at max",
+            u32::MAX,
         );
     }
 
@@ -1159,15 +1118,16 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new();
-        dispatch_and_assert_proceeds(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.unsupported_sec_levels,
-            "counter must not be incremented on match",
-            "matching security level must produce a response",
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.unsupported_sec_levels, 0,
+            "counter must not be incremented on match"
         );
+        let response_bytes = result.expect("matching security level must produce a response");
+        assert_get_response(&response_bytes);
     }
 
     #[test]
@@ -1186,14 +1146,19 @@ mod tests {
             0x05, // authFlag set, reportableFlag set → authNoPriv, reportable
         );
         let mut tc = TestCtx::new();
-        let v3_response = dispatch_and_assert_report_increments_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.unsupported_sec_levels,
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.unsupported_sec_levels, 1,
+            "counter must be incremented on ceiling violation"
+        );
+        // Verify the Report PDU contains the correct varbind (usmStatsUnsupportedSecLevels).
+        let v3_response = assert_report_pdu_varbind(
+            &result.expect("ceiling violation must produce a Report response"),
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
-            "ceiling violation must produce a Report response",
+            1,
         );
         assert_usm_params(&v3_response, 1, 0);
     }
@@ -1215,13 +1180,17 @@ mod tests {
             0x01,
         );
         let mut tc = TestCtx::new();
-        dispatch_and_assert_discarded_with_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.unsupported_sec_levels,
-            "ceiling violation without reportableFlag must be silently discarded",
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_none(),
+            "ceiling violation without reportableFlag must be silently discarded"
+        );
+        assert_eq!(
+            tc.unsupported_sec_levels, 1,
+            "counter must still be incremented even when no Report is sent"
         );
     }
 
@@ -1243,14 +1212,20 @@ mod tests {
             0x05,
         );
         let mut tc = TestCtx::new();
-        dispatch_and_assert_report_increments_counter(
-            &frame,
-            None,
-            &mib,
-            &mut tc,
-            |tc| tc.unsupported_sec_levels,
+        let result = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.unsupported_sec_levels, 1,
+            "counter must be incremented for no-user auth/priv message (fail-closed)"
+        );
+        let response_bytes = result
+            .expect("authNoPriv message with reportableFlag set must produce a Report response");
+        assert_report_pdu_varbind(
+            &response_bytes,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
-            "authNoPriv message with reportableFlag set must produce a Report response",
+            1,
         );
     }
 
@@ -1269,14 +1244,20 @@ mod tests {
             0x05,
         );
         let mut tc = TestCtx::new().with_unsupported_sec_levels(u32::MAX);
-        dispatch_and_assert_saturated_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.unsupported_sec_levels,
+        let response_bytes = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        }
+        .expect("ceiling violation must produce a Report response even when counter is at max");
+        assert_eq!(
+            tc.unsupported_sec_levels,
+            u32::MAX,
+            "counter must not overflow"
+        );
+        assert_report_pdu_varbind(
+            &response_bytes,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
-            "ceiling violation must produce a Report response even when counter is at max",
+            u32::MAX,
         );
     }
 
@@ -1297,14 +1278,20 @@ mod tests {
             0x06,
         );
         let mut tc = TestCtx::new();
-        dispatch_and_assert_report_increments_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.unsupported_sec_levels,
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        let response_bytes =
+            result.expect("invalid msgFlags combination must produce a Report response");
+        assert_eq!(
+            tc.unsupported_sec_levels, 1,
+            "counter must be incremented for invalid msgFlags"
+        );
+        assert_report_pdu_varbind(
+            &response_bytes,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
-            "invalid msgFlags combination must produce a Report response",
+            1,
         );
     }
 
@@ -1324,14 +1311,19 @@ mod tests {
         );
         let mut tc =
             TestCtx::new().with_minimum_security_level(crate::usm::user::SecurityLevel::AuthNoPriv);
-        dispatch_and_assert_report_increments_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.unsupported_sec_levels,
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.unsupported_sec_levels, 1,
+            "counter must be incremented for below-floor message"
+        );
+        // Verify Report carries usmStatsUnsupportedSecLevels
+        assert_report_pdu_varbind(
+            &result.expect("below-floor message must produce a Report response"),
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
-            "below-floor message must produce a Report response",
+            1,
         );
     }
 
@@ -1353,14 +1345,20 @@ mod tests {
         );
         let mut tc =
             TestCtx::new().with_minimum_security_level(crate::usm::user::SecurityLevel::AuthPriv);
-        dispatch_and_assert_report_increments_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.unsupported_sec_levels,
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        let response_bytes =
+            result.expect("below-floor authNoPriv message must produce a Report response");
+        assert_eq!(
+            tc.unsupported_sec_levels, 1,
+            "counter must be incremented for below-floor message"
+        );
+        assert_report_pdu_varbind(
+            &response_bytes,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
-            "below-floor authNoPriv message must produce a Report response",
+            1,
         );
     }
 
@@ -1415,14 +1413,19 @@ mod tests {
         );
         let mut tc =
             TestCtx::new().with_minimum_security_level(crate::usm::user::SecurityLevel::AuthNoPriv);
-        dispatch_and_assert_report_increments_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.unsupported_sec_levels,
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        let response_bytes = result.expect("ceiling violation must produce a Report response");
+        assert_eq!(
+            tc.unsupported_sec_levels, 1,
+            "counter must be incremented for ceiling violation"
+        );
+        assert_report_pdu_varbind(
+            &response_bytes,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
-            "ceiling violation must produce a Report response",
+            1,
         );
     }
 
@@ -1514,15 +1517,17 @@ mod tests {
         let alice = test_auth_user("alice", &auth_key_bytes);
         let authenticated_frame = build_authenticated_frame(&auth_key_bytes);
         let mut tc = TestCtx::new();
-        dispatch_and_assert_proceeds(
-            &authenticated_frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.wrong_digests,
-            "counter must not be incremented on correct HMAC",
-            "correct HMAC must produce a normal response",
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&authenticated_frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.wrong_digests, 0,
+            "counter must not be incremented on correct HMAC"
         );
+        // Verify it's a GetResponse (not a Report)
+        let response_bytes = result.expect("correct HMAC must produce a normal response");
+        assert_get_response(&response_bytes);
     }
 
     #[test]
@@ -1542,14 +1547,19 @@ mod tests {
             &[0xBB_u8; 24],
         );
         let mut tc = TestCtx::new();
-        dispatch_and_assert_report_increments_counter(
-            &frame_with_wrong_mac,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.wrong_digests,
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame_with_wrong_mac, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.wrong_digests, 1,
+            "counter must be incremented on wrong HMAC"
+        );
+        // Verify the Report carries usmStatsWrongDigests
+        assert_report_pdu_varbind(
+            &result.expect("wrong HMAC must produce a Report response"),
             crate::usm::counters::USM_STATS_WRONG_DIGESTS,
-            "wrong HMAC must produce a Report response",
+            1,
         );
     }
 
@@ -1570,14 +1580,18 @@ mod tests {
             &[],
         );
         let mut tc = TestCtx::new();
-        dispatch_and_assert_report_increments_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.wrong_digests,
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.wrong_digests, 1,
+            "counter must be incremented for empty auth_params"
+        );
+        assert_report_pdu_varbind(
+            &result.expect("empty auth_params must produce a Report response"),
             crate::usm::counters::USM_STATS_WRONG_DIGESTS,
-            "empty auth_params must produce a Report response",
+            1,
         );
     }
 
@@ -1599,13 +1613,17 @@ mod tests {
             &[0xBB_u8; 24],
         );
         let mut tc = TestCtx::new();
-        dispatch_and_assert_discarded_with_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.wrong_digests,
-            "wrong HMAC without reportableFlag must be silently discarded",
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_none(),
+            "wrong HMAC without reportableFlag must be silently discarded"
+        );
+        assert_eq!(
+            tc.wrong_digests, 1,
+            "counter must still be incremented even when no Report is sent"
         );
     }
 
@@ -1625,14 +1643,16 @@ mod tests {
             &[0xBB_u8; 24],
         );
         let mut tc = TestCtx::new().with_wrong_digests(u32::MAX);
-        dispatch_and_assert_saturated_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.wrong_digests,
+        let response_bytes = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        }
+        .expect("wrong HMAC must produce a Report response even when counter is at max");
+        assert_eq!(tc.wrong_digests, u32::MAX, "counter must not overflow");
+        assert_report_pdu_varbind(
+            &response_bytes,
             crate::usm::counters::USM_STATS_WRONG_DIGESTS,
-            "wrong HMAC must produce a Report response even when counter is at max",
+            u32::MAX,
         );
     }
 
@@ -1740,15 +1760,16 @@ mod tests {
         // boots=1 matches engine_boots=1; time=0 matches engine_time=0 (within 150s window)
         let frame = build_authenticated_frame_with_time(&auth_key_bytes, 1, 0);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        dispatch_and_assert_proceeds(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.not_in_time_windows,
-            "counter must not be incremented for in-window message",
-            "in-window message must produce a normal response",
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.not_in_time_windows, 0,
+            "counter must not be incremented for in-window message"
         );
+        let response_bytes = result.expect("in-window message must produce a normal response");
+        assert_get_response(&response_bytes);
     }
 
     #[test]
@@ -1760,14 +1781,19 @@ mod tests {
         // boots=2 does not match engine_boots=1 → out of window
         let frame = build_authenticated_frame_with_time(&auth_key_bytes, 2, 0);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        let v3_response = dispatch_and_assert_report_increments_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.not_in_time_windows,
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.not_in_time_windows, 1,
+            "counter must be incremented for out-of-window message"
+        );
+        let response_bytes = result.expect("out-of-window message must produce a Report response");
+        let v3_response = assert_report_pdu_varbind(
+            &response_bytes,
             crate::usm::counters::USM_STATS_NOT_IN_TIME_WINDOWS,
-            "out-of-window message must produce a Report response",
+            1,
         );
         assert_eq!(
             i32::try_from(v3_response.global_data.message_id.clone()).unwrap(),
@@ -1788,13 +1814,17 @@ mod tests {
         // reportableFlag cleared, so agent must discard silently (no Report sent).
         let frame = build_authenticated_frame_with_time_and_flags(&auth_key_bytes, 2, 0, 0x01);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        dispatch_and_assert_discarded_with_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.not_in_time_windows,
-            "out-of-window without reportableFlag must be silently discarded",
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_none(),
+            "out-of-window without reportableFlag must be silently discarded"
+        );
+        assert_eq!(
+            tc.not_in_time_windows, 1,
+            "counter must still be incremented even when no Report is sent"
         );
     }
 
@@ -1808,14 +1838,20 @@ mod tests {
         let mut tc = TestCtx::new()
             .with_not_in_time_windows(u32::MAX)
             .with_boots_time(1, 0);
-        dispatch_and_assert_saturated_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.not_in_time_windows,
+        let response_bytes = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        }
+        .expect("out-of-window must produce a Report response even when counter is at max");
+        assert_eq!(
+            tc.not_in_time_windows,
+            u32::MAX,
+            "counter must not overflow"
+        );
+        assert_report_pdu_varbind(
+            &response_bytes,
             crate::usm::counters::USM_STATS_NOT_IN_TIME_WINDOWS,
-            "out-of-window must produce a Report response even when counter is at max",
+            u32::MAX,
         );
     }
 
@@ -1836,15 +1872,17 @@ mod tests {
         // engine_boots=5 but message has boots=0 (from encode_get_request_with_user default)
         // If the check were applied, this would fail. It must be skipped.
         let mut tc = TestCtx::new().with_boots_time(5, 100);
-        dispatch_and_assert_proceeds(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.not_in_time_windows,
-            "counter must not be incremented for noAuthNoPriv messages",
-            "noAuthNoPriv message must pass through regardless of boots/time",
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.not_in_time_windows, 0,
+            "counter must not be incremented for noAuthNoPriv messages"
         );
+        let response_bytes =
+            result.expect("noAuthNoPriv message must pass through regardless of boots/time");
+        assert_get_response(&response_bytes);
     }
 
     #[test]
@@ -1856,14 +1894,18 @@ mod tests {
         // boots=1 matches engine_boots=1, but msg_time=200, engine_time=0 → diff=200 > 150
         let frame = build_authenticated_frame_with_time(&auth_key_bytes, 1, 200);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        dispatch_and_assert_report_increments_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.not_in_time_windows,
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.not_in_time_windows, 1,
+            "counter must be incremented for time-difference out-of-window message"
+        );
+        assert_report_pdu_varbind(
+            &result.expect("time-difference out-of-window message must produce a Report response"),
             crate::usm::counters::USM_STATS_NOT_IN_TIME_WINDOWS,
-            "time-difference out-of-window message must produce a Report response",
+            1,
         );
     }
 
@@ -1910,17 +1952,24 @@ mod tests {
         };
         let encoded_frame = rasn::ber::encode(&v3_msg).unwrap();
 
+        let mut tc = TestCtx::new();
+        let result = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&encoded_frame, &mut ctx, &mib)
+        };
+
         // F1: with no configured user the F1 guard fires at the security-level check,
         // incrementing the counter and returning a Report PDU (reportableFlag is set).
-        let mut tc = TestCtx::new();
-        dispatch_and_assert_report_increments_counter(
-            &encoded_frame,
-            None,
-            &mib,
-            &mut tc,
-            |tc| tc.unsupported_sec_levels,
+        assert_eq!(
+            tc.unsupported_sec_levels, 1,
+            "counter must be incremented for no-user authPriv message (fail-closed)"
+        );
+        let response_bytes =
+            result.expect("authPriv message with reportableFlag and no user must produce a Report");
+        assert_report_pdu_varbind(
+            &response_bytes,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
-            "authPriv message with reportableFlag and no user must produce a Report",
+            1,
         );
     }
 
@@ -2149,14 +2198,18 @@ mod tests {
             [0x01_u8; 8],
         );
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        dispatch_and_assert_report_increments_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.decryption_errors,
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.decryption_errors, 1,
+            "counter must be incremented on decryption failure"
+        );
+        assert_report_pdu_varbind(
+            &result.expect("decryption failure must produce a Report response"),
             crate::usm::counters::USM_STATS_DECRYPTION_ERRORS,
-            "decryption failure must produce a Report response",
+            1,
         );
     }
 
@@ -2219,14 +2272,18 @@ mod tests {
         frame[auth_params_offset..auth_params_offset + mac_len].copy_from_slice(&mac);
 
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        dispatch_and_assert_report_increments_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.decryption_errors,
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert_eq!(
+            tc.decryption_errors, 1,
+            "decryption_errors counter must be incremented for invalid priv_params length"
+        );
+        assert_report_pdu_varbind(
+            &result.expect("invalid priv_params length must produce a Report response"),
             crate::usm::counters::USM_STATS_DECRYPTION_ERRORS,
-            "invalid priv_params length must produce a Report response",
+            1,
         );
     }
 
@@ -2291,13 +2348,17 @@ mod tests {
         frame[auth_params_offset..auth_params_offset + mac_len].copy_from_slice(&mac);
 
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        dispatch_and_assert_discarded_with_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.decryption_errors,
-            "decryption failure without reportableFlag must be silently discarded",
+        let result = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            result.is_none(),
+            "decryption failure without reportableFlag must be silently discarded"
+        );
+        assert_eq!(
+            tc.decryption_errors, 1,
+            "counter must still be incremented even when no Report is sent"
         );
     }
 
@@ -2322,14 +2383,16 @@ mod tests {
         let mut tc = TestCtx::new()
             .with_boots_time(1, 0)
             .with_decryption_errors(u32::MAX);
-        dispatch_and_assert_saturated_counter(
-            &frame,
-            Some(&alice),
-            &mib,
-            &mut tc,
-            |tc| tc.decryption_errors,
+        let response_bytes = {
+            let mut ctx = tc.ctx(Some(&alice));
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        }
+        .expect("decryption failure must produce a Report response even when counter is at max");
+        assert_eq!(tc.decryption_errors, u32::MAX, "counter must not overflow");
+        assert_report_pdu_varbind(
+            &response_bytes,
             crate::usm::counters::USM_STATS_DECRYPTION_ERRORS,
-            "decryption failure must produce a Report response even when counter is at max",
+            u32::MAX,
         );
     }
 
@@ -2341,15 +2404,15 @@ mod tests {
         // so patching security_model should produce a Report PDU response.
         let frame = build_frame_with_non_usm_security_model();
         let mut tc = TestCtx::new();
-        dispatch_and_assert_report_increments_counter(
-            &frame,
-            None,
-            &mib,
-            &mut tc,
-            |tc| tc.unknown_security_models,
-            SNMP_UNKNOWN_SECURITY_MODELS_OID,
-            "should return a Report PDU for unsupported security model",
-        );
+        let response = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        let report_bytes =
+            response.expect("should return a Report PDU for unsupported security model");
+        assert_eq!(tc.unknown_security_models, 1);
+        // Verify the Report PDU carries the snmpUnknownSecurityModels OID.
+        assert_report_pdu_varbind(&report_bytes, SNMP_UNKNOWN_SECURITY_MODELS_OID, 1);
     }
 
     #[test]
@@ -2359,14 +2422,19 @@ mod tests {
         // Start from the patched (non-USM) frame and also clear the reportable flag.
         let mut frame = build_frame_with_non_usm_security_model();
         clear_reportable_flag(&mut frame);
+
         let mut tc = TestCtx::new();
-        dispatch_and_assert_discarded_with_counter(
-            &frame,
-            None,
-            &mib,
-            &mut tc,
-            |tc| tc.unknown_security_models,
-            "no reportable flag means silent discard",
+        let response = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        };
+        assert!(
+            response.is_none(),
+            "no reportable flag means silent discard"
+        );
+        assert_eq!(
+            tc.unknown_security_models, 1,
+            "counter must still be incremented"
         );
     }
 
@@ -2481,14 +2549,18 @@ mod tests {
         let mib = crate::mib::Store::new();
         let frame = build_frame_with_non_usm_security_model();
         let mut tc = TestCtx::new().with_unknown_security_models(u32::MAX);
-        dispatch_and_assert_saturated_counter(
-            &frame,
-            None,
-            &mib,
-            &mut tc,
-            |tc| tc.unknown_security_models,
-            SNMP_UNKNOWN_SECURITY_MODELS_OID,
+        let response_bytes = {
+            let mut ctx = tc.ctx(None);
+            process_snmpv3_request(&frame, &mut ctx, &mib)
+        }
+        .expect(
             "unsupported security model must produce a Report response even when counter is at max",
         );
+        assert_eq!(
+            tc.unknown_security_models,
+            u32::MAX,
+            "counter must not overflow"
+        );
+        assert_report_pdu_varbind(&response_bytes, SNMP_UNKNOWN_SECURITY_MODELS_OID, u32::MAX);
     }
 }
