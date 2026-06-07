@@ -4,11 +4,10 @@ This workflow takes precedence over general implementation approach guidelines.
 
 Follow this loop (max 3 iterations). Skipping steps is STRICTLY PROHIBITED:
 1. Use the **implementer** subagent to write the code and tests. **Brief it with the goal and constraints, not step-by-step instructions** — it has access to CLAUDE.md and can read the codebase. Describe *what* to achieve and *why*, not *how* to write it. Do not specify line numbers, exact code snippets, or placement of functions. **Capture its agent ID** — you will resume it in later steps instead of launching a new instance.
-2. Run `make test` to verify the build is clean before proceeding (clippy, Rust unit/doc tests, Python tests, Behave tests). If any fail, **resume** the implementer (using its agent ID) and pass only the failures — do not repeat the original task description.
-3. Use the **reviewer** subagent (opus) to review the result. For new or untracked files, tell the reviewer which files to read. For changes to tracked files, pass the `git diff` output.
-4. If the reviewer returns comments, **resume** the implementer (using its agent ID) and pass only the exact reviewer feedback, addressing all MUST FIX, SHOULD FIX, and SUGGESTION items per CLAUDE.md. Do NOT scope-limit based on whether the finding touches code outside the original diff.
-5. Stop when there is nothing left that needs fixing, or after 3 iterations.
-6. **Before committing:** Run `make pre-commit` and fix any failures before recording the commit.
+2. Use the **reviewer** subagent (opus) to review the result. For new or untracked files, tell the reviewer which files to read. For changes to tracked files, pass the specific `git diff` command to run to get the changes.
+3. If the reviewer returns comments, **resume** the implementer (using its agent ID) and pass only the exact reviewer feedback, addressing all MUST FIX, SHOULD FIX, and SUGGESTION items per CLAUDE.md. Do NOT scope-limit based on whether the finding touches code outside the original diff.
+4. Stop when there is nothing left that needs fixing, or after 3 iterations.
+5. **Before committing:** Run `make pre-commit` and `make behave-test` and fix any failures before recording the commit.
 
 If you encounter a situation where a design decision is unclear or the right approach requires trade-offs between alternatives, ask the user before proceeding.
 

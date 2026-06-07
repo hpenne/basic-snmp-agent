@@ -21,6 +21,9 @@
       "Bash(git commit -m ':*)",
       "Bash(cargo mutants *)",
       "Bash(make *)",
+      "Bash(make:*)",
+      "Bash(govctl:*)",
+      "Bash(cargo test:*)",
       "Bash(behave features/mib_reads_auth_no_priv.feature)",
       "Bash(docker compose *)",
       "Bash(docker network *)",
@@ -65,11 +68,18 @@
       "Skill(deep-research)",
       "WebFetch(domain:www.itu.int)",
       "Bash(uv run *)",
-      "WebFetch(domain:api.anthropic.com)"
+      "WebFetch(domain:api.anthropic.com)",
+      "mcp__plugin_codescene_codescene__list_technical_debt_hotspots_for_project",
+      "mcp__plugin_codescene_codescene__list_technical_debt_goals_for_project",
+      "mcp__plugin_codescene_codescene__list_technical_debt_hotspots_for_project_file",
+      "mcp__plugin_codescene_codescene__code_health_score",
+      "mcp__plugin_codescene_codescene__code_health_review",
+      "mcp__plugin_codescene_codescene__code_health_refactoring_business_case",
+      "Bash(git stash *)"
     ]
   },
   "sandbox": {
-    "enabled": true,
+    "enabled": false,
     "autoAllowBashIfSandboxed": true,
     "filesystem": {
       "allowWrite": [
@@ -78,7 +88,8 @@
     },
     "excludedCommands": [
       "make",
-      "uv"
+      "uv",
+      "cargo test"
     ]
   }
 }

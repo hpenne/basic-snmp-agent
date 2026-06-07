@@ -89,7 +89,7 @@ pub(super) static UNKNOWN_SECURITY_MODELS_OID: LazyLock<Oid> = LazyLock::new(|| 
 pub(super) fn emit_report_response(
     ctx: &mut DispatchContext<'_>,
     select_counter: impl for<'a> FnOnce(&'a mut DispatchInputs<'_>) -> &'a mut u32,
-    oid: &Oid,
+    counter_oid: &Oid,
     description: &str,
     msg_id: i32,
     security_flags: u8,
@@ -110,7 +110,7 @@ pub(super) fn emit_report_response(
         ctx.inputs.engine_id,
         ctx.inputs.engine_boots,
         ctx.inputs.engine_time,
-        oid,
+        counter_oid,
         counter_value,
     )
     .inspect_err(|encode_error| {
