@@ -23,6 +23,27 @@ thread-safe `Agent` handle that is `Clone + Send + Sync`.
 - **Secure key handling** -- secret keys are zeroised on drop via
   `write_volatile` and `compiler_fence`.
 
+## Development methodology
+
+This libray has been developed using Claude Code along with the `govctl` Spec-Driven Design tool.
+Full requirements tracing is performed to both tests and code.
+
+Claude Code has been set up with a coding loop consisting of separate implementer and reviewer agents using different models, where the loop iterates until the reviewer is satisfied.
+
+Strict coding guidelines, hard quality gates and extensive testing has been used, along with human review of summaries.
+
+This produced code that scores 8.0 out of 10 on the CodeScene code quality metric.
+For comparison, the `bytes` crate scores 9.0 and `rand` 9.6.
+
+## Testing
+
+The code has extensive unit test coverage.
+`cargo-mutants` has been run regularly to ensure near full actual coverage of logic.
+
+Interoperability with net-snmp is tested through Gherkin tests implemented using Python, Behave and Docker.
+
+Security testing is done using cumulative fuzzing, which runs daily in CI.
+
 ## Quick start
 
 Add the dependency to your `Cargo.toml`:
