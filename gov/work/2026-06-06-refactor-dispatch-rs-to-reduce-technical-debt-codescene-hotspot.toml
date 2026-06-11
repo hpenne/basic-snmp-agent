@@ -10,22 +10,25 @@ refs = ["ADR-0020"]
 
 [content]
 description = """
-Behaviour-preserving internal restructuring of src/transport/dispatch.rs to clear CodeScene-identified technical debt. The file is the project's top refactoring hotspot: code health 6.24 (Yellow), the lowest in the codebase, with rising friction (0.349/month and climbing). It is the security-critical SNMPv3 message-processing pipeline, so debt here carries correctness risk as well as maintenance cost.
+Behaviour-preserving internal restructuring of src/transport/dispatch.rs to clear CodeScene-identified technical debt. The file is the project's top refactoring hotspot: code health 6.24 (Yellow) at baseline, the lowest in the codebase, with rising friction (0.349/month and climbing). It is the security-critical SNMPv3 message-processing pipeline, so debt here carries correctness risk as well as maintenance cost.
 
-CodeScene smells in production code: Low Cohesion (LCOM4=3); Code Duplication across the check_security_model / check_discovery_probe / check_engine_id functions; Large Method (decrypt_scoped_pdu, 70 LoC); Excess Number of Function Arguments (dispatch_pdu_and_encode_response = 7, decrypt_scoped_pdu = 7, verify_hmac = 5; threshold is 4); and Primitive Obsession (35% of functions take raw primitives).
+Baseline CodeScene smells in production code: Low Cohesion (LCOM4=3); Code Duplication across the check_security_model / check_discovery_probe / check_engine_id functions; Large Method (decrypt_scoped_pdu, 70 LoC); Excess Number of Function Arguments (dispatch_pdu_and_encode_response = 7, decrypt_scoped_pdu = 7, verify_hmac = 5; threshold is 4); and Primitive Obsession (35% of functions take raw primitives).
 
 This is a pure restructuring covered by the existing dispatch pipeline decision (ADR-0020) — no new requirements, no RFC, no ADR. The work proceeds in small, independently shippable steps, each driven through /implement-and-review (red/green TDD, clippy/test/traceability gates) and verified afterwards with the CodeScene code_health_score tool before moving to the next.
 
+Measurement finding (2026-06-11, after steps 1-3): scoring the production half (lines 1-514) and the test module (lines 516-2566) of dispatch.rs separately shows the production code at 10.0 with zero findings, while the test module alone scores 5.76 and carries every remaining smell — including the Low Cohesion (LCOM4=3) previously attributed to production code. The originally planned module split along security/decode/crypto responsibilities was therefore dropped: it targeted code CodeScene already scores as optimal, would not move the score (the cohesion components live in the test module), and would fragment the single sequential pipeline mandated by ADR-0020.
+
 Steps:
-1. ✅ Collapse the duplicated check_security_model / check_discovery_probe / check_engine_id functions into a shared, parameterised check.
-2. ✅ Introduce parameter-object newtypes bundling the shared security/scoped-PDU context, reducing dispatch_pdu_and_encode_response, verify_hmac, and decrypt_scoped_pdu below the 4-argument threshold and removing primitive-obsession smells.
-3. ✅ Extract IV/salt derivation and the decrypt step from decrypt_scoped_pdu into named helpers to bring it under 70 LoC. (Satisfied as side effect of step 2.)
-4. Refactor build_authpriv_frame (76 LoC, 7 args) and the authpriv decrypt test (94 LoC) to reduce Large Method and Excess Arguments smells in test code.
-5. Split the module along its natural responsibilities (security checks vs. PDU decode/dispatch vs. crypto) to raise cohesion, e.g. a dispatch/security.rs submodule alongside the existing report submodule. This targets the Low Cohesion (LCOM4=3) smell, likely the heaviest contributor to the score.
+1. DONE - Collapse the duplicated check_security_model / check_discovery_probe / check_engine_id functions into a shared, parameterised check.
+2. DONE - Introduce parameter-object newtypes bundling the shared security/scoped-PDU context, reducing dispatch_pdu_and_encode_response, verify_hmac, and decrypt_scoped_pdu below the 4-argument threshold and removing primitive-obsession smells.
+3. DONE - Extract IV/salt derivation and the decrypt step from decrypt_scoped_pdu into named helpers to bring it under 70 LoC. (Satisfied as side effect of step 2.)
+4. Refactor build_authpriv_frame (76 LoC, 7 args) and the 94-LoC authpriv round-trip test to clear the test-code Large Method and Excess Arguments smells: split frame construction into named phases behind a parameter struct, and extract response-decryption/assertion helpers.
+5. Add a thin run_dispatch scaffolding helper collapsing the mib/ctx/process_snmpv3_request boilerplate repeated across tests. Each test keeps its own frame construction, counter setup, assertions, and Verifies annotation — deliberately narrower than the scenario-parameterisation reverted in f3af9cf, so test readability and traceability are preserved.
+6. Decision point: re-measure dispatch.rs with CodeScene. If still below the 8.0 gate, decide with the user between relocating the test module to dispatch/tests.rs (the production file then scores on its own merits; tests.rs stays Yellow with the trade-off documented) and adjusting the gate to the measured ceiling. The remaining test-module smells (residual parallel-rejection-path duplication, Primitive Obsession in test builders, LCOM4, function count) are structural to a comprehensive inline test suite and not fixable without the readability/traceability costs already rejected.
 
-Test code duplication (19 functions, 10 groups) was evaluated and dropped as a step: the structural similarity is inherent to testing parallel rejection paths through the same pipeline, and reducing it would require sacrificing test readability or requirement traceability — neither acceptable trade-offs for a CodeScene score.
+Test code duplication (19 functions, 10 groups) was evaluated and dropped as a full-dedup step: the structural similarity is inherent to testing parallel rejection paths through the same pipeline, and reducing it beyond the step-5 scaffolding helper would require sacrificing test readability or requirement traceability — neither acceptable trade-offs for a CodeScene score.
 
-Hard gate: dispatch.rs code_health_score >= 8.0 (up from 6.24 baseline, currently 6.48 after steps 1-3). The business-case top-5% target (9.1) is a stretch goal, not a blocking criterion."""
+Hard gate: dispatch.rs code_health_score >= 8.0 (up from 6.24 baseline, currently 6.48 after steps 1-3), subject to re-evaluation at the step-6 decision point. The business-case top-5% target (9.1) is a stretch goal, not a blocking criterion."""
 
 [[content.acceptance_criteria]]
 text = "Duplicated check_security_model / check_discovery_probe / check_engine_id collapsed into a shared parameterised check (no Code Duplication smell among them)"
@@ -78,6 +81,16 @@ status = "pending"
 category = "changed"
 
 [[content.acceptance_criteria]]
-text = "Module split along natural responsibilities to improve cohesion (target LCOM4 < 3)"
+text = "authpriv round-trip test (given_correct_priv_key_when_process_authpriv_then_decrypts_and_responds) under 70 LoC via extracted response-decryption/assertion helpers"
 status = "pending"
 category = "changed"
+
+[[content.acceptance_criteria]]
+text = "Thin run_dispatch scaffolding helper collapses repeated mib/ctx/process boilerplate; per-test frame construction, counter setup, assertions, and Verifies annotations preserved"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "Step-6 decision point resolved with the user (test-module relocation vs gate adjustment) and the outcome recorded in this work item"
+status = "pending"
+category = "chore"
