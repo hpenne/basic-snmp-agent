@@ -23,10 +23,10 @@ Steps:
 2. DONE - Introduce parameter-object newtypes bundling the shared security/scoped-PDU context, reducing dispatch_pdu_and_encode_response, verify_hmac, and decrypt_scoped_pdu below the 4-argument threshold and removing primitive-obsession smells.
 3. DONE - Extract IV/salt derivation and the decrypt step from decrypt_scoped_pdu into named helpers to bring it under 70 LoC. (Satisfied as side effect of step 2.)
 4. Refactor build_authpriv_frame (76 LoC, 7 args) and the 94-LoC authpriv round-trip test to clear the test-code Large Method and Excess Arguments smells: split frame construction into named phases behind a parameter struct, and extract response-decryption/assertion helpers.
-5. Add a thin run_dispatch scaffolding helper collapsing the mib/ctx/process_snmpv3_request boilerplate repeated across tests. Each test keeps its own frame construction, counter setup, assertions, and Verifies annotation — deliberately narrower than the scenario-parameterisation reverted in f3af9cf, so test readability and traceability are preserved.
-6. Decision point: re-measure dispatch.rs with CodeScene. If still below the 8.0 gate, decide with the user between relocating the test module to dispatch/tests.rs (the production file then scores on its own merits; tests.rs stays Yellow with the trade-off documented) and adjusting the gate to the measured ceiling. The remaining test-module smells (residual parallel-rejection-path duplication, Primitive Obsession in test builders, LCOM4, function count) are structural to a comprehensive inline test suite and not fixable without the readability/traceability costs already rejected.
+5. Helper-heavy test refactor (scope widened 2026-06-11 at user direction): extract shared helpers across the whole test module — frame-construction helpers, a run_dispatch scaffolding helper collapsing the mib/ctx/process_snmpv3_request boilerplate, and common assertion helpers (USM counter checks, Report-varbind checks) — so each test body shrinks to roughly 6 lines or fewer. Constraints: every test keeps its own Verifies: REQ-xxxx annotation; each test's given/when/then intent must stay visible through precise helper naming (no opaque scenario parameterisation); helpers must not themselves trip the Large Method or Excess Arguments thresholds (use parameter structs/builders following the existing TestCtx pattern).
+6. Decision point: re-measure dispatch.rs with CodeScene after the widened step 5. If still below the 8.0 gate, decide with the user between relocating the test module to dispatch/tests.rs (the production file then scores on its own merits; tests.rs stays Yellow with the trade-off documented) and adjusting the gate to the measured ceiling.
 
-Test code duplication (19 functions, 10 groups) was evaluated and dropped as a full-dedup step: the structural similarity is inherent to testing parallel rejection paths through the same pipeline, and reducing it beyond the step-5 scaffolding helper would require sacrificing test readability or requirement traceability — neither acceptable trade-offs for a CodeScene score.
+Scope revision (2026-06-11): the earlier decision to drop full test dedup (19 functions, 10 clone groups) is reversed at the user's direction. The user prefers a helper-heavy test style with ~6-line test bodies as their readable baseline, which removes the readability objection behind the f3af9cf revert; traceability is preserved by the per-test Verifies constraint above. Expected effect: dissolves most duplication clone groups, clears the test-code Large Method smells, and may merge the LCOM4=3 components via shared helpers acting as connective tissue. Known risks: clone detection may still match short tests invoking the same helper sequence in the same order, and pushing parameters into helpers can relocate the Excess Arguments smell — both are measured at step 6, not assumed away.
 
 Hard gate: dispatch.rs code_health_score >= 8.0 (up from 6.24 baseline, currently 6.48 after steps 1-3), subject to re-evaluation at the step-6 decision point. The business-case top-5% target (9.1) is a stretch goal, not a blocking criterion."""
 
@@ -86,11 +86,16 @@ status = "pending"
 category = "changed"
 
 [[content.acceptance_criteria]]
-text = "Thin run_dispatch scaffolding helper collapses repeated mib/ctx/process boilerplate; per-test frame construction, counter setup, assertions, and Verifies annotations preserved"
-status = "pending"
-category = "changed"
-
-[[content.acceptance_criteria]]
 text = "Step-6 decision point resolved with the user (test-module relocation vs gate adjustment) and the outcome recorded in this work item"
 status = "pending"
 category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Test module refactored to shared helpers (frame construction, run_dispatch scaffolding, assertion helpers) with test bodies at roughly 6 lines or fewer; per-test Verifies annotations preserved and helpers stay under the Large Method and Excess Arguments thresholds"
+status = "pending"
+category = "changed"
+
+[[content.journal]]
+date = "2026-06-11"
+scope = "tests"
+content = "Widened step 5 from a thin run_dispatch scaffolding helper to a helper-heavy refactor of the whole test module targeting ~6-line test bodies, at the user's direction. This reverses the earlier decision to drop full test dedup: the user prefers helper-based tests as their readable baseline, removing the readability objection behind the f3af9cf revert. Per-test Verifies annotations and given/when/then intent via helper naming remain hard constraints; helpers must stay under Large Method and Excess Arguments thresholds. Effect on the score is measured at step 6."
