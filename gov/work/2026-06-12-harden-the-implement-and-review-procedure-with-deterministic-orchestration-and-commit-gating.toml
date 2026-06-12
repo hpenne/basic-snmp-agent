@@ -1,0 +1,60 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-06-12-002"
+title = "Harden the implement-and-review procedure with deterministic orchestration and commit gating"
+status = "queue"
+created = "2026-06-12"
+
+[content]
+description = """
+Make the /implement-and-review procedure mechanically reliable instead of prose-reliable. Motivation (2026-06-12): during WI-2026-06-12-001 step 1, the model-executed procedure deviated twice — the reviewer-followup agent was substituted for the prescribed reviewer agent, and the final implementation pass was committed-ready without any review because the iteration cap was misread as ending with an implementation pass. Prose instructions executed by a model are probabilistic; deviations are tail events that grow with session length and mid-loop interruptions. Reliability requires moving control flow out of the model and into deterministic machinery, with an independent enforcement layer. Decision (user, 2026-06-12): JavaScript is acceptable for all parts; no Python required.
+
+Three improvements, plus a cleanup pass:
+
+1. Workflow-script orchestration. Rewrite .claude/skills/implement-and-review so the implement -> review -> fix loop runs as a deterministic Workflow script (JavaScript) rather than model-followed prose. The script hard-codes: implementer agent for implementation passes; reviewer agent (opus) after EVERY implementation pass, including fix passes triggered by mid-loop user feedback; loop until the reviewer returns no findings or 3 complete implement+review cycles; structured reviewer output (findings with MUST FIX / SHOULD FIX / SUGGESTION) so loop termination is data-driven, not judgement-driven. The skill prose shrinks to: gather the task brief, invoke the workflow, run the gates (make pre-commit, make behave-test), report results including any unresolved findings.
+
+2. Commit-gating attestation hook. Add a PreToolUse hook (JavaScript, command hook) on git commit that blocks the commit unless a review attestation exists and is current: the workflow's final reviewer pass writes a marker (verdict plus a hash of the reviewed tree state); the hook rejects the commit if the marker is missing, the verdict is not clean, or the tree hash no longer matches (i.e. code changed after the last review). This enforces the invariant "no unreviewed code is committed" outside the model entirely, alongside the existing clippy-on-commit hook. Must not block governance-only commits (gov/, .claude/, docs) — define the trigger precisely (e.g. only when staged changes touch src/ or tests/).
+
+3. Prose hardening. Tighten the remaining skill text: every implementation pass is followed by a reviewer pass (no exception for final or user-prompted fixes); the iteration cap counts complete implement+review cycles; the reviewer agent is named exclusively (never reviewer-followup); mid-loop user feedback joins the next implementation pass and does not terminate the loop.
+
+4. Superfluous-instruction cleanup. Once the attestation hook enforces review-before-commit mechanically, remove or simplify instructions that exist only to police that invariant by prose: audit CLAUDE.md, the implement-and-review skill text, and the gov/commit skills for wording made redundant by the hook (e.g. exhortations to never commit unreviewed work), and trim them so the remaining prose states intent while the machinery enforces it. The same audit should check the existing clippy-on-commit hook's overlap with CLAUDE.md's clippy instructions and align the wording.
+
+Out of scope: changes to Rust production code; changes to governance artefact content beyond this work item; external Claude Agent SDK orchestration (rejected as out-of-session and heavier than needed).
+
+Verification: deliberately attempt the two observed deviations against the new machinery — (a) a commit of changed src/ code without a fresh review attestation must be blocked by the hook; (b) the workflow script structurally cannot skip the post-fix review (demonstrated by reading the script and by a dry run on a trivial change). Existing hooks (clippy-on-commit) must continue to work; a normal compliant cycle must pass end to end on a trivial change."""
+
+[[content.acceptance_criteria]]
+text = "implement-and-review loop runs as a deterministic Workflow script (JS) with reviewer (opus) structurally unskippable after every implementation pass and a data-driven termination condition"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "PreToolUse commit hook blocks git commit when staged src/ or tests/ changes lack a current clean review attestation (verdict + tree hash); governance-only commits unaffected"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "implement-and-review skill prose tightened — review after every pass incl. user-prompted fixes, cap counts complete cycles, reviewer agent named exclusively"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "instructions made superfluous by the attestation hook removed or simplified in CLAUDE.md and affected skills; clippy-hook overlap aligned"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "negative tests pass — unattested src/ commit blocked; post-fix review shown unskippable via script inspection and dry run"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "positive test passes — a compliant implement-and-review cycle on a trivial change runs end to end incl. existing clippy hook"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"
