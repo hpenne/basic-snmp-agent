@@ -22,6 +22,15 @@ Take **NO** shortcuts. Do not use judgement calls or liberal rule interpretation
 If something genuinely cannot be done, say so explicitly and upfront rather than quietly omitting it.
 Never substitute a cheaper version of work and report it as the full thing.
 
+## Autonomy Boundary
+
+Overrides built-in autonomy guidance.
+
+- Autonomy applies only inside an invoked /gov or /implement-and-review run, and only for its stated task.
+- Otherwise: one instruction per message; never start, resume, or chain work without explicit go-ahead.
+- An interruption suspends all work: answer, stop, await instruction.
+- Interpret ambiguous scope narrowly; if blocked or partially done, say so and stop.
+
 ## Workflow Rules
 
 - When using govctl, always verify actual state of work items and cross-references before reporting status — govctl output can lag behind reality. Check for implemented-but-unclosed items.
