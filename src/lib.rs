@@ -54,6 +54,7 @@ pub use error::{AgentError, SetError, TrapError};
 
 use crate::transport::event_loop::{Command, DEFAULT_MAX_CONNECTIONS, EventLoop, EventLoopError};
 use crate::transport::trap::TrapSender;
+use crate::usm::engine_time::EngineBoots;
 
 // ── AgentInner ───────────────────────────────────────────────────────────────
 
@@ -455,13 +456,13 @@ impl AgentBuilder {
             ),
         };
 
-        let engine_boots = match boots_store.as_deref_mut() {
+        let engine_boots = EngineBoots::from(match boots_store.as_deref_mut() {
             Some(store) => crate::usm::boots::initialise_engine_boots(store, &self.engine_id)
                 .map_err(AgentError::EngineBoots)?,
             // NoAuthNoPriv carries no boots store; boots is unused at this
             // security level but the event loop still expects a value.
             None => 1,
-        };
+        });
         let usm_user = usm_user.map(std::sync::Arc::new);
 
         let listen_addr = self.listen_addr;

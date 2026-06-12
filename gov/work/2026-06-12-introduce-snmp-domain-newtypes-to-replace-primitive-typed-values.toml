@@ -15,7 +15,7 @@ Motivation is type safety and aggregate codebase health, not CodeScene score cha
 
 Scope, in priority order (each step independently shippable via /implement-and-review):
 
-1. EngineBoots(u32) + EngineTime(u32). Strongest case: is_in_time_window in src/usm/time_window.rs takes four indistinguishable u32s (msg_boots, msg_time, engine_boots, engine_time); a transposition there is a security-relevant bug in RFC 3414 replay-window validation. Threads through ~15 signatures (dispatch context, trap sender, encode functions). EngineBoots carries the RFC 3414 ceiling (MAX_ENGINE_BOOTS / 0x7FFF_FFFF saturation) as behaviour instead of loose checks at use sites.
+1. DONE (2026-06-12) - EngineBoots(u32) + EngineTime(u32). Strongest case: is_in_time_window in src/usm/time_window.rs takes four indistinguishable u32s (msg_boots, msg_time, engine_boots, engine_time); a transposition there is a security-relevant bug in RFC 3414 replay-window validation. Threads through ~15 signatures (dispatch context, trap sender, encode functions). EngineBoots carries the RFC 3414 ceiling (MAX_ENGINE_BOOTS / 0x7FFF_FFFF saturation) as behaviour instead of loose checks at use sites.
 
 2. UsmStatsCounter(u32) saturating counter. DispatchInputs carries seven &mut u32 counter fields; every increment site repeats the saturating-add idiom and five counter_does_not_overflow tests exist purely to police it. A newtype with one tested saturating increment() puts the invariant in one place; the per-scenario overflow tests can then collapse onto the newtype's own unit tests where coverage is preserved.
 
@@ -35,7 +35,7 @@ Expected public API impact: additive newtype introductions plus type changes to 
 
 [[content.acceptance_criteria]]
 text = "EngineBoots and EngineTime newtypes replace bare u32 across time-window validation, dispatch context, trap sender, and encode paths; is_in_time_window signature no longer takes two same-typed value pairs"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]

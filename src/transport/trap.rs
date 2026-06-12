@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Instant;
 
 use crate::transport::request::{TrapPdu, build_wire_trap};
+use crate::usm::engine_time::EngineBoots;
 
 /// The UDP MTU cap for outbound trap datagrams (ADR-0008).
 const TRAP_MTU_BYTES: usize = 1500;
@@ -62,11 +63,11 @@ pub(crate) struct TrapSender {
     socket: Arc<UdpSocket>,
     start_time: Instant,
     engine_id: Vec<u8>,
-    engine_boots: u32,
+    engine_boots: EngineBoots,
     usm_user: Option<Arc<crate::usm::user::UsmUser>>,
 }
 
-// `Arc<UdpSocket>`, `Instant`, `Vec<u8>`, `u32`, and `Arc<UsmUser>` are all
+// `Arc<UdpSocket>`, `Instant`, `Vec<u8>`, `EngineBoots`, and `Arc<UsmUser>` are all
 // `Send + Sync`, so `TrapSender` inherits both. This assertion catches any
 // future field addition that would break the contract at compile time.
 const _: () = {
@@ -97,7 +98,7 @@ impl TrapSender {
     pub(crate) fn new(
         start_time: Instant,
         engine_id: Vec<u8>,
-        engine_boots: u32,
+        engine_boots: EngineBoots,
         usm_user: Option<Arc<crate::usm::user::UsmUser>>,
     ) -> io::Result<Self> {
         let socket = UdpSocket::bind("0.0.0.0:0")?;
@@ -160,7 +161,8 @@ impl TrapSender {
             // No USM user configured: fall back to SNMPv2c for backward compatibility.
             return crate::codec::encode_trap(wire_pdu);
         };
-        let engine_time = u32::try_from(self.start_time.elapsed().as_secs()).unwrap_or(u32::MAX);
+        let engine_time_secs =
+            u32::try_from(self.start_time.elapsed().as_secs()).unwrap_or(u32::MAX);
         let trap_auth = usm_user.auth_protocol().zip(usm_user.auth_key());
         let trap_priv = usm_user.priv_protocol().zip(usm_user.priv_key());
         crate::codec::encode_v3_trap(
@@ -168,8 +170,8 @@ impl TrapSender {
             &self.engine_id,
             usm_user.name().as_bytes(),
             b"",
-            self.engine_boots,
-            engine_time,
+            u32::from(self.engine_boots),
+            engine_time_secs,
             trap_auth,
             trap_priv,
             wire_pdu,
@@ -218,7 +220,7 @@ mod tests {
 
     // Empty engine_id is intentional: V2c mode (usm_user=None) does not use it.
     fn no_usm_sender() -> TrapSender {
-        TrapSender::new(Instant::now(), vec![], 0, None).unwrap()
+        TrapSender::new(Instant::now(), vec![], EngineBoots::ZERO, None).unwrap()
     }
 
     /// Verify that the HMAC embedded in `encoded_message` is correct.
@@ -500,7 +502,13 @@ mod tests {
                 .unwrap()
                 .into(),
         );
-        let sender = TrapSender::new(Instant::now(), engine_id, 1, Some(user)).unwrap();
+        let sender = TrapSender::new(
+            Instant::now(),
+            engine_id,
+            EngineBoots::from(1_u32),
+            Some(user),
+        )
+        .unwrap();
         let (receiver, dest) = loopback_receiver();
         receiver
             .set_read_timeout(Some(std::time::Duration::from_secs(2)))
@@ -564,7 +572,13 @@ mod tests {
             .unwrap()
             .into(),
         );
-        let sender = TrapSender::new(Instant::now(), engine_id, 2, Some(user)).unwrap();
+        let sender = TrapSender::new(
+            Instant::now(),
+            engine_id,
+            EngineBoots::from(2_u32),
+            Some(user),
+        )
+        .unwrap();
         let (receiver, dest) = loopback_receiver();
         receiver
             .set_read_timeout(Some(std::time::Duration::from_secs(2)))
@@ -609,7 +623,8 @@ mod tests {
 
         let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
         let user = Arc::new(UsmUser::no_auth_no_priv(UserName::new("public").unwrap()));
-        let sender = TrapSender::new(Instant::now(), engine_id, 0, Some(user)).unwrap();
+        let sender =
+            TrapSender::new(Instant::now(), engine_id, EngineBoots::ZERO, Some(user)).unwrap();
         let (receiver, dest) = loopback_receiver();
         receiver
             .set_read_timeout(Some(std::time::Duration::from_secs(2)))
@@ -651,7 +666,8 @@ mod tests {
 
         let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
         let user = std::sync::Arc::new(UsmUser::no_auth_no_priv(UserName::new("public").unwrap()));
-        let sender = TrapSender::new(Instant::now(), engine_id, 0, Some(user)).unwrap();
+        let sender =
+            TrapSender::new(Instant::now(), engine_id, EngineBoots::ZERO, Some(user)).unwrap();
         let (receiver, dest) = loopback_receiver();
         receiver
             .set_read_timeout(Some(std::time::Duration::from_secs(2)))

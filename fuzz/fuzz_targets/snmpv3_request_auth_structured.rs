@@ -49,8 +49,8 @@ fuzz_target!(|input: FuzzSnmpv3Auth| {
     // usm_user=Some with AuthNoPriv floor is always valid; unwrap is sound.
     let mut ctx = DispatchContext::new(DispatchInputs {
         engine_id,
-        engine_boots: 1,
-        engine_time: 0,
+        engine_boots: basic_snmp_agent::usm::engine_time::EngineBoots::from(1_u32),
+        engine_time: basic_snmp_agent::usm::engine_time::EngineTime::ZERO,
         unknown_engine_ids_counter: &mut unknown_engine_ids_counter,
         unknown_user_names_counter: &mut unknown_user_names_counter,
         unsupported_sec_levels_counter: &mut unsupported_sec_levels_counter,

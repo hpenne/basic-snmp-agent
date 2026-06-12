@@ -3,12 +3,16 @@
 //! # Requirements
 //! Implements: REQ-0094, REQ-0095, REQ-0096, REQ-0097
 
+use crate::usm::engine_time::EngineBoots;
+
 /// RFC 3414 §2.2 ceiling — once reached, no further authenticated communication
 /// is possible without engine reconfiguration.
 ///
+/// Delegates to [`EngineBoots::CEILING`] so the two constants cannot silently diverge.
+///
 /// # Requirements
 /// Implements: REQ-0097
-pub const MAX_ENGINE_BOOTS: u32 = 0x7FFF_FFFF;
+pub const MAX_ENGINE_BOOTS: u32 = EngineBoots::CEILING;
 
 // RFC 3411 §3.3 caps snmpEngineID at 32 bytes; used in FileEngineBootsStore::load
 // to reject absurd lengths from corrupted files before any arithmetic on the value.

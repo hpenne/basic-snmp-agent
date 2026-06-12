@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use mio::{Events, Interest, Poll, Token};
 
+use crate::usm::engine_time::{EngineBoots, EngineTime};
 // Implements: [[RFC-0009:C-FACADE]]
 use log::{debug, info};
 
@@ -302,7 +303,7 @@ pub(crate) struct EventLoop {
     engine_id: Vec<u8>,
     /// `snmpEngineBoots` counter, initialised at agent start-up.
     // Implements: REQ-0094
-    engine_boots: u32,
+    engine_boots: EngineBoots,
     /// Instant at which the engine started; used to compute `snmpEngineTime`.
     // Implements: REQ-0094
     engine_start: Instant,
@@ -362,7 +363,7 @@ impl EventLoop {
     pub(crate) fn new(
         addr: SocketAddr,
         engine_id: Vec<u8>,
-        engine_boots: u32,
+        engine_boots: EngineBoots,
         usm_user: Option<std::sync::Arc<crate::usm::user::UsmUser>>,
         minimum_security_level: crate::usm::user::SecurityLevel,
         max_connections: usize,
@@ -432,9 +433,10 @@ impl EventLoop {
     ///
     /// # Requirements
     /// Implements: REQ-0094
-    fn engine_time_seconds(&self) -> u32 {
+    fn engine_time_seconds(&self) -> EngineTime {
         // Saturate at u32::MAX rather than wrapping; `as_secs()` returns u64.
-        u32::try_from(self.engine_start.elapsed().as_secs()).unwrap_or(u32::MAX)
+        let secs = u32::try_from(self.engine_start.elapsed().as_secs()).unwrap_or(u32::MAX);
+        EngineTime::from(secs)
     }
 
     /// Run the event loop until [`Command::Shutdown`] is received.
@@ -838,7 +840,7 @@ mod tests {
         EventLoop::new(
             any_loopback(),
             test_engine_id(),
-            1,
+            EngineBoots::from(1_u32),
             None,
             crate::usm::user::SecurityLevel::NoAuthNoPriv,
             max_connections,
@@ -889,7 +891,7 @@ mod tests {
         let result = EventLoop::new(
             any_loopback(),
             test_engine_id(),
-            1,
+            EngineBoots::from(1_u32),
             None,
             crate::usm::user::SecurityLevel::AuthNoPriv,
             DEFAULT_MAX_CONNECTIONS,
@@ -1082,7 +1084,7 @@ mod tests {
             timeout_config: ConnectionTimeoutConfig::default(),
             store: crate::mib::Store::new(),
             engine_id: test_engine_id(),
-            engine_boots: 1,
+            engine_boots: EngineBoots::from(1_u32),
             engine_start: Instant::now(),
             unknown_engine_ids_counter: 0,
             unknown_user_names_counter: 0,
@@ -1800,7 +1802,7 @@ mod tests {
         let (event_loop, bound_addr, sender) = EventLoop::new(
             any_loopback(),
             test_engine_id(),
-            1,
+            EngineBoots::from(1_u32),
             None,
             crate::usm::user::SecurityLevel::NoAuthNoPriv,
             DEFAULT_MAX_CONNECTIONS,
@@ -1851,7 +1853,7 @@ mod tests {
         let (event_loop, bound_addr, sender) = EventLoop::new(
             any_loopback(),
             test_engine_id(),
-            1,
+            EngineBoots::from(1_u32),
             None,
             crate::usm::user::SecurityLevel::NoAuthNoPriv,
             max_conns,
@@ -1907,7 +1909,7 @@ mod tests {
         let (event_loop, bound_addr, sender) = EventLoop::new(
             any_loopback(),
             test_engine_id(),
-            1,
+            EngineBoots::from(1_u32),
             None,
             crate::usm::user::SecurityLevel::NoAuthNoPriv,
             DEFAULT_MAX_CONNECTIONS,
@@ -1976,7 +1978,7 @@ mod tests {
         let (event_loop, bound_addr, sender) = EventLoop::new(
             any_loopback(),
             test_engine_id(),
-            1,
+            EngineBoots::from(1_u32),
             None,
             crate::usm::user::SecurityLevel::NoAuthNoPriv,
             3, // max_connections: 1 connection + headroom(2) = 3 >= 3 -> pressure

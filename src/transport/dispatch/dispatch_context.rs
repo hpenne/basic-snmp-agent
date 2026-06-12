@@ -1,5 +1,7 @@
 //! Validated dispatch context and security-level policy for inbound frame processing.
 
+use crate::usm::engine_time::{EngineBoots, EngineTime};
+
 /// Named inputs for constructing a [`DispatchContext`].
 ///
 /// Bundles the per-frame engine state, USM statistics counters, configured user,
@@ -16,9 +18,9 @@ pub struct DispatchInputs<'a> {
     /// The agent's authoritative engine ID.
     pub engine_id: &'a [u8],
     /// Current `snmpEngineBoots` value.
-    pub engine_boots: u32,
+    pub engine_boots: EngineBoots,
     /// Current `snmpEngineTime` in seconds.
-    pub engine_time: u32,
+    pub engine_time: EngineTime,
     /// Counter for `usmStatsUnknownEngineIDs` (REQ-0093).
     pub unknown_engine_ids_counter: &'a mut u32,
     /// Counter for `usmStatsUnknownUserNames` (REQ-0078).

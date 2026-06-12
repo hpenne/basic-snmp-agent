@@ -108,8 +108,8 @@ pub(super) fn emit_report_response(
     crate::codec::encode_v3_report(
         msg_id,
         ctx.inputs.engine_id,
-        ctx.inputs.engine_boots,
-        ctx.inputs.engine_time,
+        u32::from(ctx.inputs.engine_boots),
+        u32::from(ctx.inputs.engine_time),
         counter_oid,
         counter_value,
     )

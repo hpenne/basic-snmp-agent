@@ -93,8 +93,8 @@ impl DispatchCounters {
         // always valid combinations; unwrap is sound for all seed call sites.
         DispatchContext::new(DispatchInputs {
             engine_id: ENGINE_ID,
-            engine_boots: 1,
-            engine_time: 0,
+            engine_boots: basic_snmp_agent::usm::engine_time::EngineBoots::from(1_u32),
+            engine_time: basic_snmp_agent::usm::engine_time::EngineTime::ZERO,
             unknown_engine_ids_counter: &mut self.unknown_engine_ids,
             unknown_user_names_counter: &mut self.unknown_user_names,
             unsupported_sec_levels_counter: &mut self.unsupported_sec_levels,

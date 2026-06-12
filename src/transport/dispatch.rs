@@ -15,6 +15,7 @@ use report::{
 
 use crate::transport::event_loop::{MAX_BULK_REPETITIONS, MAX_FRAME_SIZE};
 use crate::transport::request;
+use crate::usm::engine_time::{EngineBoots, EngineTime};
 // Implements: [[RFC-0009:C-FACADE]]
 use log::{debug, trace};
 /// Decode, validate, and dispatch a single RFC 3430 BER frame, returning
@@ -79,8 +80,8 @@ fn run_validation_pipeline(
                 msg_id: v3_msg.msg_id,
                 security_flags: v3_msg.usm.security_flags,
                 priv_params: &v3_msg.usm.priv_params,
-                auth_engine_boots: v3_msg.usm.auth_engine_boots,
-                auth_engine_time: v3_msg.usm.auth_engine_time,
+                auth_engine_boots: EngineBoots::from(v3_msg.usm.auth_engine_boots),
+                auth_engine_time: EngineTime::from(v3_msg.usm.auth_engine_time),
             },
             &ciphertext,
         )?,
@@ -247,8 +248,8 @@ fn check_time_window(
         return Ok(());
     }
     let in_time_window = crate::usm::time_window::is_in_time_window(
-        v3_msg.usm.auth_engine_boots,
-        v3_msg.usm.auth_engine_time,
+        EngineBoots::from(v3_msg.usm.auth_engine_boots),
+        EngineTime::from(v3_msg.usm.auth_engine_time),
         ctx.inputs.engine_boots,
         ctx.inputs.engine_time,
     );
@@ -332,8 +333,8 @@ fn dispatch_pdu_and_encode_response(
         ctx.inputs.engine_id,
         envelope.user_name,
         envelope.context_name,
-        ctx.inputs.engine_boots,
-        ctx.inputs.engine_time,
+        u32::from(ctx.inputs.engine_boots),
+        u32::from(ctx.inputs.engine_time),
         response_auth,
         response_priv,
         &response,
@@ -378,8 +379,8 @@ struct DecryptionParams<'a> {
     msg_id: i32,
     security_flags: u8,
     priv_params: &'a [u8],
-    auth_engine_boots: u32,
-    auth_engine_time: u32,
+    auth_engine_boots: EngineBoots,
+    auth_engine_time: EngineTime,
 }
 
 /// Decrypt an authPriv `ScopedPDU` ciphertext and decode the plaintext.
@@ -429,8 +430,8 @@ fn decrypt_scoped_pdu(
     // Implements: REQ-0109
     // IV = engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes) per RFC 3826 §2.2.
     let mut aes_iv = [0_u8; 16];
-    aes_iv[0..4].copy_from_slice(&decryption.auth_engine_boots.to_be_bytes());
-    aes_iv[4..8].copy_from_slice(&decryption.auth_engine_time.to_be_bytes());
+    aes_iv[0..4].copy_from_slice(&u32::from(decryption.auth_engine_boots).to_be_bytes());
+    aes_iv[4..8].copy_from_slice(&u32::from(decryption.auth_engine_time).to_be_bytes());
     aes_iv[8..16].copy_from_slice(decryption.priv_params);
 
     let Ok(scoped_pdu_bytes) = priv_protocol.decrypt(priv_key, &aes_iv, ciphertext) else {
@@ -938,8 +939,8 @@ mod tests {
         ) -> Result<DispatchContext<'a>, NoUserSecurityLevelError> {
             DispatchContext::new(DispatchInputs {
                 engine_id: test_engine_id(),
-                engine_boots: self.engine_boots,
-                engine_time: self.engine_time,
+                engine_boots: EngineBoots::from(self.engine_boots),
+                engine_time: EngineTime::from(self.engine_time),
                 unknown_engine_ids_counter: &mut self.unknown_engine_ids,
                 unknown_user_names_counter: &mut self.unknown_user_names,
                 unsupported_sec_levels_counter: &mut self.unsupported_sec_levels,
