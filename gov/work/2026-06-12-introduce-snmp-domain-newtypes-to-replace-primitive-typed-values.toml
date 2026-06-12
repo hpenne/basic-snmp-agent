@@ -3,8 +3,9 @@
 [govctl]
 id = "WI-2026-06-12-001"
 title = "Introduce SNMP domain newtypes to replace primitive-typed values"
-status = "queue"
+status = "active"
 created = "2026-06-12"
+started = "2026-06-12"
 
 [content]
 description = """
