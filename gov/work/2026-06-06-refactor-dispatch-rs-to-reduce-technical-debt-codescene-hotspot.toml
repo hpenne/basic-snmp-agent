@@ -1,0 +1,104 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-06-06-001"
+title = "Refactor dispatch.rs to reduce technical debt (CodeScene hotspot)"
+status = "done"
+created = "2026-06-06"
+started = "2026-06-06"
+completed = "2026-06-12"
+refs = ["ADR-0020"]
+
+[content]
+description = """
+Behaviour-preserving internal restructuring of src/transport/dispatch.rs to clear CodeScene-identified technical debt. The file is the project's top refactoring hotspot: code health 6.24 (Yellow) at baseline, the lowest in the codebase, with rising friction (0.349/month and climbing). It is the security-critical SNMPv3 message-processing pipeline, so debt here carries correctness risk as well as maintenance cost. The end goal is the aggregate code health of the codebase as a whole, not the score of any single file in isolation.
+
+Baseline CodeScene smells in production code: Low Cohesion (LCOM4=3); Code Duplication across the check_security_model / check_discovery_probe / check_engine_id functions; Large Method (decrypt_scoped_pdu, 70 LoC); Excess Number of Function Arguments (dispatch_pdu_and_encode_response = 7, decrypt_scoped_pdu = 7, verify_hmac = 5; threshold is 4); and Primitive Obsession (35% of functions take raw primitives).
+
+This is a pure restructuring covered by the existing dispatch pipeline decision (ADR-0020) — no new requirements, no RFC, no ADR. The work proceeded in small, independently shippable steps, each driven through /implement-and-review and verified with CodeScene before moving to the next.
+
+Measurement finding (2026-06-11, after steps 1-3): scoring the production half and the test module of dispatch.rs separately showed the production code at 10.0 with zero findings, while the test module alone scored 5.76 and carried every remaining smell. The originally planned module split along security/decode/crypto responsibilities was therefore dropped: it targeted code CodeScene already scores as optimal and would fragment the single sequential pipeline mandated by ADR-0020.
+
+Steps:
+1. DONE - Collapse the duplicated check_security_model / check_discovery_probe / check_engine_id functions into a shared, parameterised check.
+2. DONE - Introduce parameter-object newtypes bundling the shared security/scoped-PDU context, reducing dispatch_pdu_and_encode_response, verify_hmac, and decrypt_scoped_pdu below the 4-argument threshold and removing primitive-obsession smells.
+3. DONE - Extract IV/salt derivation and the decrypt step from decrypt_scoped_pdu into named helpers to bring it under 70 LoC. (Satisfied as side effect of step 2.)
+4. MERGED INTO STEP 5 (2026-06-12) - The build_authpriv_frame and authpriv round-trip refactor became constraints on step 5's outcome so the authPriv frame builder was designed as part of the shared helper vocabulary from the start.
+5. DONE (2026-06-12) - Helper-heavy test refactor: extracted shared helpers across the whole test module (frame-construction helpers incl. AuthPrivFrameParams builder, run_dispatch scaffolding, assertion helpers). All constraints held: per-test Verifies annotations preserved, given/when/then intent visible, helpers under 70 LoC / 4 args, 54 tests unchanged, full gate suite green. Score 6.48 -> 7.32; Large Method and Excess Arguments fully cleared.
+6. CLOSED (2026-06-12) - Decision: stop chasing the LCOM4/Low Cohesion score. An empirical investigation (synthetic probe files scored with the CodeScene CLI) established that CodeScene's Rust Low Cohesion check counts only direct free-function call edges: a 120-function connected call chain scores clean while the identical code split into two islands is flagged, and two clusters coupled solely through a shared struct's methods (constructor + method calls) are still flagged as disconnected — method calls create no cohesion edges. A size threshold (~between 60 fns/400 LoC and 120 fns/1800 LoC) hides this in small files. In dispatch.rs the flagged disconnection is the test-fixture impl blocks (impl TestCtx, reached only via method calls), i.e. exactly the parameter-object structs introduced at CodeScene's own urging to fix Excess Arguments and Primitive Obsession. The finding is a confirmed false positive of the analyser on idiomatic Rust builder/fixture patterns, not a design defect; "fixing" it would mean distorting the code (dissolving builders or planting artificial free-function calls). Test-module relocation to dispatch/tests.rs was also rejected (2026-06-12): the goal is aggregate codebase health, relocation removes no smells and breaks the inline #[cfg(test)] convention. Aggressive clone-family merging (option a) is likewise rejected: the surviving clone groups are short helper-based tests whose similarity is deliberate readability. The reproduction pair for the analyser defect (synth_chain_large.rs vs synth_struct_bridge_large.rs, identical scale, only the island split differing) is preserved under target/scratch/ and is suitable for a CodeScene bug report.
+
+Final state: dispatch.rs scores 7.32 (from 6.24 baseline). Production code scores 10.0 in isolation. Remaining whole-file findings are: Low Cohesion (confirmed analyser false positive, see step 6), Code Duplication (short helper-based tests sharing call sequences — deliberate, readable test style), and Primitive Obsession (52%, test-function dominated; production-code primitive obsession was cleared in step 2). The original >= 8.0 hard gate is withdrawn rather than adjusted: per the step-6 decision the team does not chase LCOM4-driven scores, and the measured 7.32 with documented false-positive context is accepted as the closing state. Follow-up work on Primitive Obsession across the wider codebase (SNMP domain newtypes) is tracked separately."""
+notes = [
+    "Test-module relocation to dispatch/tests.rs is rejected (2026-06-12): the goal is aggregate codebase health — relocation removes no smells, only redistributes them, and breaks the project-wide inline #[cfg(test)] convention. Do not propose it again.",
+    "Low Cohesion on dispatch.rs is a confirmed CodeScene Rust analyser false positive: only free-function call edges count, method calls create no cohesion edges, so test-fixture impl blocks (TestCtx) read as disconnected. Do not chase LCOM4 scores. Reproduction pair: target/scratch/synth_chain_large.rs vs synth_struct_bridge_large.rs.",
+]
+
+[[content.journal]]
+date = "2026-06-11"
+scope = "tests"
+content = "Widened step 5 from a thin run_dispatch scaffolding helper to a helper-heavy refactor of the whole test module targeting ~6-line test bodies, at the user's direction. This reverses the earlier decision to drop full test dedup: the user prefers helper-based tests as their readable baseline, removing the readability objection behind the f3af9cf revert. Per-test Verifies annotations and given/when/then intent via helper naming remain hard constraints; helpers must stay under Large Method and Excess Arguments thresholds. Effect on the score is measured at step 6."
+
+[[content.acceptance_criteria]]
+text = "Duplicated check_security_model / check_discovery_probe / check_engine_id collapsed into a shared parameterised check (no Code Duplication smell among them)"
+status = "done"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "dispatch_pdu_and_encode_response, verify_hmac, and decrypt_scoped_pdu each take 4 or fewer arguments via parameter-object newtypes (no Excess Number of Function Arguments smell)"
+status = "done"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "decrypt_scoped_pdu is under 70 LoC (no Large Method smell)"
+status = "done"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "CodeScene code_health_score for src/transport/dispatch.rs is >= 8.0"
+status = "cancelled"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "No Large Method, Excess Arguments, or Code Duplication smells remain in dispatch.rs production code"
+status = "done"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "No behavioural change — existing test suite passes unchanged in intent, with coverage preserved"
+status = "done"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Requirement traceability annotations preserved on all moved/renamed items"
+status = "done"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "make pre-commit passes (clippy -D warnings, tests, fuzz, traceability, format check)"
+status = "done"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "done"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "build_authpriv_frame refactored to under 70 LoC and 4 or fewer arguments"
+status = "done"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "authpriv round-trip test (given_correct_priv_key_when_process_authpriv_then_decrypts_and_responds) under 70 LoC via extracted response-decryption/assertion helpers"
+status = "done"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "Test module refactored to shared helpers (frame construction, run_dispatch scaffolding, assertion helpers) with test bodies at roughly 6 lines or fewer; per-test Verifies annotations preserved and helpers stay under the Large Method and Excess Arguments thresholds"
+status = "done"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "Step-6 decision point resolved with the user (clone-family merge vs gate adjustment; test-module relocation rejected 2026-06-12) and the outcome recorded in this work item"
+status = "done"
+category = "chore"

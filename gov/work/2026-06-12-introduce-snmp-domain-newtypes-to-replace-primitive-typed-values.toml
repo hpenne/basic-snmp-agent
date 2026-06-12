@@ -1,0 +1,83 @@
+#:schema ../schema/work.schema.json
+
+[govctl]
+id = "WI-2026-06-12-001"
+title = "Introduce SNMP domain newtypes to replace primitive-typed values"
+status = "queue"
+created = "2026-06-12"
+
+[content]
+description = """
+Introduce newtypes for SNMP/USM domain concepts currently passed around as raw primitives (u32, i32, Vec<u8>), per the project rule "Create newtypes for domain types instead of using basic types like integers". Behaviour-preserving refactor; no wire-format or semantic changes. Grounded in a codebase survey (2026-06-12) following the completion of WI-2026-06-06-001: the codebase already has good newtypes where past work demanded them (Oid, SecretKey, UserName, SecurityLevel, SecurityModel, ErrorStatus, the dispatch parameter objects), but identifiers and protocol scalars still travel as bare primitives, including through the public API.
+
+Motivation is type safety and aggregate codebase health, not CodeScene score chasing (see WI-2026-06-06-001 step 6): same-typed values that travel together can be transposed silently, and RFC-mandated invariants are enforced at scattered use sites instead of at construction.
+
+Scope, in priority order (each step independently shippable via /implement-and-review):
+
+1. EngineBoots(u32) + EngineTime(u32). Strongest case: is_in_time_window in src/usm/time_window.rs takes four indistinguishable u32s (msg_boots, msg_time, engine_boots, engine_time); a transposition there is a security-relevant bug in RFC 3414 replay-window validation. Threads through ~15 signatures (dispatch context, trap sender, encode functions). EngineBoots carries the RFC 3414 ceiling (MAX_ENGINE_BOOTS / 0x7FFF_FFFF saturation) as behaviour instead of loose checks at use sites.
+
+2. UsmStatsCounter(u32) saturating counter. DispatchInputs carries seven &mut u32 counter fields; every increment site repeats the saturating-add idiom and five counter_does_not_overflow tests exist purely to police it. A newtype with one tested saturating increment() puts the invariant in one place; the per-scenario overflow tests can then collapse onto the newtype's own unit tests where coverage is preserved.
+
+3. RequestId(i32) + MessageId(i32). Two same-typed identifiers with different RFC semantics co-existing in the dispatch path and encode functions (~12 and ~10 signatures); request_id is public via TrapPdu. MessageId absorbs the non-negativity masking currently done ad hoc at the trap msg-id counter (fetch_add & i32::MAX).
+
+4. EngineId(Vec<u8>) with RFC 3411 length invariant (5-32 octets) validated at construction. The most widely threaded raw value (~20 signatures: AgentBuilder, TrapSender, event loop, encode/decode, dispatch comparison against context_engine_id). Decision (user, 2026-06-12): the public EngineBootsStore trait signature (save(engine_id: &[u8], boots: u32)) stays as-is — the trait is a deliberate serialization boundary kept stable per ADR-0024; the newtype is converted to/from raw bytes at that boundary. No ADR change required.
+
+5. AuthenticationParams + PrivacySalt (Vec<u8> wrappers with length invariants). Security-sensitive wire fields: the AES privacy salt must be exactly 8 octets and the HMAC has a protocol-fixed truncated length; checks currently live at scattered use sites and move to construction-time validation at the codec boundary (~6 signatures each).
+
+Deferred / opportunistic only (not acceptance-gated): MsgMaxSize(i32) with the RFC 3412 >= 484 floor, MaxRepetitions/NonRepeaters, ErrorIndex(u32). Real semantics but few call sites with bounds already enforced at single points; adopt only when touching the surrounding code.
+
+Explicitly out of scope: context name (no semantics to encode), OID arcs (already inside Oid), timeouts (Duration is the right type), connection limits (plain capacity numbers), any change to the EngineBootsStore trait signature.
+
+Constraints: no behavioural change (existing unit, doc, and behave tests pass unchanged in intent); requirement traceability annotations preserved on all moved/renamed items; new newtypes documented with examples per the public-API documentation rule; std::error::Error implemented for any new validation error types; no new dependencies.
+
+Expected public API impact: additive newtype introductions plus type changes to TrapPdu.request_id and AgentBuilder::engine_id parameters. The library has no released stable API commitment recorded, but each public-surface change is flagged in review."""
+
+[[content.acceptance_criteria]]
+text = "EngineBoots and EngineTime newtypes replace bare u32 across time-window validation, dispatch context, trap sender, and encode paths; is_in_time_window signature no longer takes two same-typed value pairs"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "UsmStatsCounter newtype with a single tested saturating increment() replaces the seven raw &mut u32 counter fields in DispatchInputs"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "RequestId and MessageId newtypes replace bare i32 in PDU types, dispatch, and encode paths; MessageId construction enforces non-negativity"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "EngineId newtype with RFC 3411 5-32 octet validation replaces raw Vec<u8>/&[u8] everywhere except the EngineBootsStore trait signature, which stays unchanged"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "AuthenticationParams and PrivacySalt newtypes carry their length invariants, validated at the codec boundary"
+status = "pending"
+category = "changed"
+
+[[content.acceptance_criteria]]
+text = "No behavioural change — unit, doc, and behave tests pass unchanged in intent, coverage preserved"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "Requirement traceability annotations preserved on all touched items; new newtypes annotated where they implement requirements"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "New public newtypes documented with examples; validation error types implement std::error::Error"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "make pre-commit passes"
+status = "pending"
+category = "chore"
+
+[[content.acceptance_criteria]]
+text = "govctl check passes"
+status = "pending"
+category = "chore"

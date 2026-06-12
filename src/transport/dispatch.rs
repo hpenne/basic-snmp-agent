@@ -59,9 +59,7 @@ fn run_validation_pipeline(
         .inspect_err(|decode_error| debug!("failed to decode SNMPv3 message: {decode_error}"))
         .map_err(|_| Reject::Discard)?;
 
-    check_security_model(&v3_msg, ctx)?;
-    check_discovery_probe(&v3_msg, ctx)?;
-    check_engine_id(&v3_msg, ctx)?;
+    check_message_envelope(&v3_msg, ctx)?;
     check_user_name(&v3_msg, ctx)?;
     check_security_level(&v3_msg, ctx)?;
     verify_authentication(&v3_msg, ctx)?;
@@ -77,87 +75,75 @@ fn run_validation_pipeline(
         crate::codec::V3ScopedData::Plaintext(pdu) => (pdu, v3_msg.context_name),
         crate::codec::V3ScopedData::Encrypted(ciphertext) => decrypt_scoped_pdu(
             ctx,
-            v3_msg.msg_id,
-            v3_msg.usm.security_flags,
+            &DecryptionParams {
+                msg_id: v3_msg.msg_id,
+                security_flags: v3_msg.usm.security_flags,
+                priv_params: &v3_msg.usm.priv_params,
+                auth_engine_boots: v3_msg.usm.auth_engine_boots,
+                auth_engine_time: v3_msg.usm.auth_engine_time,
+            },
             &ciphertext,
-            &v3_msg.usm.priv_params,
-            v3_msg.usm.auth_engine_boots,
-            v3_msg.usm.auth_engine_time,
         )?,
     };
 
     dispatch_pdu_and_encode_response(
         ctx,
-        v3_msg.msg_id,
-        v3_msg.max_size,
-        &v3_msg.user_name,
+        &ResponseEnvelope {
+            msg_id: v3_msg.msg_id,
+            max_size: v3_msg.max_size,
+            user_name: &v3_msg.user_name,
+            context_name: &response_context_name,
+        },
         mib,
         inbound_pdu,
-        &response_context_name,
     )
     .ok_or(Reject::Discard)
 }
 
-// RFC 3412 §7.2 step 2: reject messages with unsupported security models.
-// Implements: REQ-0115
-fn check_security_model(
+// Pre-USM-user envelope checks: security model, discovery probe, and engine-ID.
+// These run in RFC 3412 §7.2 order before any per-user validation.
+// Implements: REQ-0115, REQ-0093, REQ-0104
+fn check_message_envelope(
     v3_msg: &crate::codec::V3InboundMessage<'_>,
     ctx: &mut DispatchContext<'_>,
 ) -> Result<(), Reject> {
-    if v3_msg.security_model.is_usm() {
-        return Ok(());
+    // RFC 3412 §7.2 step 2: reject messages with unsupported security models (REQ-0115).
+    if !v3_msg.security_model.is_usm() {
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.unknown_security_models_counter,
+            &UNKNOWN_SECURITY_MODELS_OID,
+            "unknown security model",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        ));
     }
-    Err(emit_report_response(
-        ctx,
-        |inputs| &mut inputs.unknown_security_models_counter,
-        &UNKNOWN_SECURITY_MODELS_OID,
-        "unknown security model",
-        v3_msg.msg_id,
-        v3_msg.usm.security_flags,
-    ))
-}
-
-// REQ-0093: engine-ID discovery probe — the manager sent an empty
-// msgAuthoritativeEngineID. Respond with a Report PDU carrying the
-// usmStatsUnknownEngineIDs counter and our authoritative engine state
-// so the manager can learn our engine ID, boots, and approximate time.
-// Implements: REQ-0093
-fn check_discovery_probe(
-    v3_msg: &crate::codec::V3InboundMessage<'_>,
-    ctx: &mut DispatchContext<'_>,
-) -> Result<(), Reject> {
-    if !v3_msg.usm.auth_engine_id.is_empty() {
-        return Ok(());
+    // REQ-0093: engine-ID discovery probe — the manager sent an empty
+    // msgAuthoritativeEngineID. The Report response carries the agent's
+    // authoritative engine state so the manager can learn the engine ID,
+    // boots, and approximate time.
+    if v3_msg.usm.auth_engine_id.is_empty() {
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.unknown_engine_ids_counter,
+            &UNKNOWN_ENGINE_IDS_OID,
+            "engine-ID discovery probe",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        ));
     }
-    Err(emit_report_response(
-        ctx,
-        |inputs| &mut inputs.unknown_engine_ids_counter,
-        &UNKNOWN_ENGINE_IDS_OID,
-        "engine-ID discovery probe",
-        v3_msg.msg_id,
-        v3_msg.usm.security_flags,
-    ))
-}
-
-// REQ-0104: contextEngineID mismatch — the ScopedPDU's contextEngineID does not
-// match the agent's snmpEngineID. Respond with a Report PDU carrying
-// usmStatsUnknownEngineIDs.
-// Implements: REQ-0104
-fn check_engine_id(
-    v3_msg: &crate::codec::V3InboundMessage<'_>,
-    ctx: &mut DispatchContext<'_>,
-) -> Result<(), Reject> {
-    if v3_msg.engine_id == ctx.inputs.engine_id {
-        return Ok(());
+    // REQ-0104: contextEngineID mismatch — the ScopedPDU's contextEngineID does not match the agent's snmpEngineID.
+    if v3_msg.engine_id != ctx.inputs.engine_id {
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.unknown_engine_ids_counter,
+            &UNKNOWN_ENGINE_IDS_OID,
+            "unknown engine ID",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        ));
     }
-    Err(emit_report_response(
-        ctx,
-        |inputs| &mut inputs.unknown_engine_ids_counter,
-        &UNKNOWN_ENGINE_IDS_OID,
-        "unknown engine ID",
-        v3_msg.msg_id,
-        v3_msg.usm.security_flags,
-    ))
+    Ok(())
 }
 
 // REQ-0078, REQ-0080: user-name lookup — discovery (above) runs before this check.
@@ -171,21 +157,21 @@ fn check_user_name(
     v3_msg: &crate::codec::V3InboundMessage<'_>,
     ctx: &mut DispatchContext<'_>,
 ) -> Result<(), Reject> {
-    if ctx
+    let name_matches = ctx
         .inputs
         .usm_user
-        .is_none_or(|user| v3_msg.user_name == user.name().as_bytes())
-    {
-        return Ok(());
+        .is_none_or(|user| v3_msg.user_name == user.name().as_bytes());
+    if !name_matches {
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.unknown_user_names_counter,
+            &UNKNOWN_USER_NAMES_OID,
+            "unknown user name",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        ));
     }
-    Err(emit_report_response(
-        ctx,
-        |inputs| &mut inputs.unknown_user_names_counter,
-        &UNKNOWN_USER_NAMES_OID,
-        "unknown user name",
-        v3_msg.msg_id,
-        v3_msg.usm.security_flags,
-    ))
+    Ok(())
 }
 
 // REQ-0079, REQ-0103, REQ-0130: security-level enforcement — runs after user-name lookup.
@@ -198,17 +184,17 @@ fn check_security_level(
     ctx: &mut DispatchContext<'_>,
 ) -> Result<(), Reject> {
     let msg_level = crate::usm::user::SecurityLevel::try_from(v3_msg.usm.security_flags);
-    if !ctx.inputs.should_reject_security_level(msg_level) {
-        return Ok(());
+    if ctx.inputs.should_reject_security_level(msg_level) {
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.unsupported_sec_levels_counter,
+            &UNSUPPORTED_SEC_LEVELS_OID,
+            "unsupported security level",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        ));
     }
-    Err(emit_report_response(
-        ctx,
-        |inputs| &mut inputs.unsupported_sec_levels_counter,
-        &UNSUPPORTED_SEC_LEVELS_OID,
-        "unsupported security level",
-        v3_msg.msg_id,
-        v3_msg.usm.security_flags,
-    ))
+    Ok(())
 }
 
 // REQ-0100, REQ-0102: HMAC verification for authenticated messages.
@@ -225,23 +211,26 @@ fn verify_authentication(
     let (Some(auth_protocol), Some(auth_key)) = (user.auth_protocol(), user.auth_key()) else {
         return Ok(());
     };
-    if verify_hmac(
+    let hmac_valid = verify_hmac(
         auth_protocol,
         auth_key,
-        v3_msg.raw_message,
-        &v3_msg.usm.auth_params,
-        v3_msg.auth_params_offset,
-    ) {
-        return Ok(());
+        &HmacInput {
+            raw_message: v3_msg.raw_message,
+            auth_params: &v3_msg.usm.auth_params,
+            auth_params_offset: v3_msg.auth_params_offset,
+        },
+    );
+    if !hmac_valid {
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.wrong_digests_counter,
+            &WRONG_DIGESTS_OID,
+            "wrong digest",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        ));
     }
-    Err(emit_report_response(
-        ctx,
-        |inputs| &mut inputs.wrong_digests_counter,
-        &WRONG_DIGESTS_OID,
-        "wrong digest",
-        v3_msg.msg_id,
-        v3_msg.usm.security_flags,
-    ))
+    Ok(())
 }
 
 // REQ-0098: time-window validation for authenticated messages.
@@ -257,22 +246,23 @@ fn check_time_window(
     if user.auth_protocol().is_none() {
         return Ok(());
     }
-    if crate::usm::time_window::is_in_time_window(
+    let in_time_window = crate::usm::time_window::is_in_time_window(
         v3_msg.usm.auth_engine_boots,
         v3_msg.usm.auth_engine_time,
         ctx.inputs.engine_boots,
         ctx.inputs.engine_time,
-    ) {
-        return Ok(());
+    );
+    if !in_time_window {
+        return Err(emit_report_response(
+            ctx,
+            |inputs| &mut inputs.not_in_time_windows_counter,
+            &NOT_IN_TIME_WINDOWS_OID,
+            "not-in-time-window",
+            v3_msg.msg_id,
+            v3_msg.usm.security_flags,
+        ));
     }
-    Err(emit_report_response(
-        ctx,
-        |inputs| &mut inputs.not_in_time_windows_counter,
-        &NOT_IN_TIME_WINDOWS_OID,
-        "not-in-time-window",
-        v3_msg.msg_id,
-        v3_msg.usm.security_flags,
-    ))
+    Ok(())
 }
 
 // Only the default (empty) context name is supported per REQ-0058.
@@ -287,6 +277,16 @@ fn check_context_name(v3_msg: &crate::codec::V3InboundMessage<'_>) -> Result<(),
     Err(Reject::Discard)
 }
 
+// Message-level fields needed for response encoding.
+#[derive(Debug)]
+struct ResponseEnvelope<'a> {
+    msg_id: i32,
+    max_size: i32,
+    user_name: &'a [u8],
+    // May come from the outer message (cleartext) or the decrypted ScopedPDU (authPriv).
+    context_name: &'a [u8],
+}
+
 /// Dispatch a decoded PDU to the appropriate request handler and encode the response.
 ///
 /// Called after all security checks pass. Determines the effective `max_size` for GETBULK
@@ -297,12 +297,9 @@ fn check_context_name(v3_msg: &crate::codec::V3InboundMessage<'_>) -> Result<(),
 /// Implements: REQ-0056, REQ-0066, REQ-0068, REQ-0107
 fn dispatch_pdu_and_encode_response(
     ctx: &DispatchContext<'_>,
-    msg_id: i32,
-    max_size: i32,
-    user_name: &[u8],
+    envelope: &ResponseEnvelope<'_>,
     mib: &crate::mib::Store,
     inbound_pdu: crate::codec::InboundPdu,
-    response_context_name: &[u8],
 ) -> Option<Vec<u8>> {
     let response = match inbound_pdu {
         crate::codec::InboundPdu::GetRequest(req) => request::handle_get(&req, mib),
@@ -312,7 +309,9 @@ fn dispatch_pdu_and_encode_response(
             // the agent's own frame limit, then convert to usize for size arithmetic.
             // max_size is validated >= 484 during decode (RFC 3412 §7.2 step 5), so
             // it is always positive; unwrap_or(0) is defence-in-depth only.
-            let effective_max_size = usize::try_from(max_size).unwrap_or(0).min(MAX_FRAME_SIZE);
+            let effective_max_size = usize::try_from(envelope.max_size)
+                .unwrap_or(0)
+                .min(MAX_FRAME_SIZE);
             request::handle_get_bulk(&req, mib, MAX_BULK_REPETITIONS, effective_max_size)
         }
         crate::codec::InboundPdu::SetRequest(req) => request::handle_set(&req),
@@ -329,10 +328,10 @@ fn dispatch_pdu_and_encode_response(
         .usm_user
         .and_then(|user| user.priv_protocol().zip(user.priv_key()));
     crate::codec::encode_v3_response(
-        msg_id,
+        envelope.msg_id,
         ctx.inputs.engine_id,
-        user_name,
-        response_context_name,
+        envelope.user_name,
+        envelope.context_name,
         ctx.inputs.engine_boots,
         ctx.inputs.engine_time,
         response_auth,
@@ -341,6 +340,14 @@ fn dispatch_pdu_and_encode_response(
     )
     .inspect_err(|encode_error| debug!("failed to encode SNMPv3 response: {encode_error}"))
     .ok()
+}
+
+// Bundles message-level fields for HMAC verification.
+#[derive(Debug)]
+struct HmacInput<'a> {
+    raw_message: &'a [u8],
+    auth_params: &'a [u8],
+    auth_params_offset: Option<usize>,
 }
 
 /// Verify the HMAC of an authenticated `SNMPv3` message.
@@ -353,18 +360,26 @@ fn dispatch_pdu_and_encode_response(
 fn verify_hmac(
     auth_protocol: crate::usm::auth::AuthProtocol,
     auth_key: &crate::usm::keys::SecretKey,
-    raw_message: &[u8],
-    auth_params: &[u8],
-    auth_params_offset: Option<usize>,
+    hmac: &HmacInput<'_>,
 ) -> bool {
-    let Some(offset) = auth_params_offset else {
+    let Some(offset) = hmac.auth_params_offset else {
         trace!("auth_params_offset absent, treating as HMAC failure");
         return false;
     };
-    let zeroed = zero_auth_params_in_message(raw_message, offset, auth_params.len());
+    let zeroed = zero_auth_params_in_message(hmac.raw_message, offset, hmac.auth_params.len());
     auth_protocol
-        .verify_mac(auth_key, &zeroed, auth_params)
+        .verify_mac(auth_key, &zeroed, hmac.auth_params)
         .is_ok()
+}
+
+// Bundles USM fields needed for decryption and error reporting.
+#[derive(Debug)]
+struct DecryptionParams<'a> {
+    msg_id: i32,
+    security_flags: u8,
+    priv_params: &'a [u8],
+    auth_engine_boots: u32,
+    auth_engine_time: u32,
 }
 
 /// Decrypt an authPriv `ScopedPDU` ciphertext and decode the plaintext.
@@ -379,12 +394,8 @@ fn verify_hmac(
 /// Implements: REQ-0101, REQ-0102, REQ-0104, REQ-0109
 fn decrypt_scoped_pdu(
     ctx: &mut DispatchContext<'_>,
-    msg_id: i32,
-    security_flags: u8,
+    decryption: &DecryptionParams<'_>,
     ciphertext: &[u8],
-    priv_params: &[u8],
-    auth_engine_boots: u32,
-    auth_engine_time: u32,
 ) -> Result<(crate::codec::InboundPdu, Vec<u8>), Reject> {
     // Security-level enforcement (REQ-0079) already verified the configured user
     // is authPriv, so priv_protocol/priv_key must be Some here.
@@ -399,25 +410,28 @@ fn decrypt_scoped_pdu(
     };
 
     // msgPrivacyParameters must be exactly 8 bytes (the AES salt per RFC 3826 §2.2).
-    if priv_params.len() != 8 {
-        debug!("msgPrivacyParameters length {} != 8", priv_params.len());
+    if decryption.priv_params.len() != 8 {
+        debug!(
+            "msgPrivacyParameters length {} != 8",
+            decryption.priv_params.len()
+        );
         // Implements: REQ-0101
         return Err(emit_report_response(
             ctx,
             |inputs| &mut inputs.decryption_errors_counter,
             &DECRYPTION_ERRORS_OID,
             "decryption error",
-            msg_id,
-            security_flags,
+            decryption.msg_id,
+            decryption.security_flags,
         ));
     }
 
     // Implements: REQ-0109
     // IV = engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes) per RFC 3826 §2.2.
     let mut aes_iv = [0_u8; 16];
-    aes_iv[0..4].copy_from_slice(&auth_engine_boots.to_be_bytes());
-    aes_iv[4..8].copy_from_slice(&auth_engine_time.to_be_bytes());
-    aes_iv[8..16].copy_from_slice(priv_params);
+    aes_iv[0..4].copy_from_slice(&decryption.auth_engine_boots.to_be_bytes());
+    aes_iv[4..8].copy_from_slice(&decryption.auth_engine_time.to_be_bytes());
+    aes_iv[8..16].copy_from_slice(decryption.priv_params);
 
     let Ok(scoped_pdu_bytes) = priv_protocol.decrypt(priv_key, &aes_iv, ciphertext) else {
         debug!("AES-CFB128 decryption failed");
@@ -427,8 +441,8 @@ fn decrypt_scoped_pdu(
             |inputs| &mut inputs.decryption_errors_counter,
             &DECRYPTION_ERRORS_OID,
             "decryption error",
-            msg_id,
-            security_flags,
+            decryption.msg_id,
+            decryption.security_flags,
         ));
     };
 
@@ -440,8 +454,8 @@ fn decrypt_scoped_pdu(
             |inputs| &mut inputs.decryption_errors_counter,
             &DECRYPTION_ERRORS_OID,
             "decryption error",
-            msg_id,
-            security_flags,
+            decryption.msg_id,
+            decryption.security_flags,
         ));
     };
 
@@ -454,8 +468,8 @@ fn decrypt_scoped_pdu(
             |inputs| &mut inputs.unknown_engine_ids_counter,
             &UNKNOWN_ENGINE_IDS_OID,
             "unknown engine ID",
-            msg_id,
-            security_flags,
+            decryption.msg_id,
+            decryption.security_flags,
         ));
     }
 
@@ -512,8 +526,329 @@ mod tests {
         &[1, 3, 6, 1, 2, 1, 1, 1, 0]
     }
 
-    /// Test helper that owns counter storage and produces a [`DispatchContext`],
-    /// eliminating the repeated boilerplate of five local `u32` declarations.
+    // Run dispatch with a single-shot context: build ctx from `tc` and `usm_user`,
+    // call `process_snmpv3_request`, then return the result. Eliminates the
+    // repeated { let mut ctx = tc.ctx(...); process_snmpv3_request(...) } block.
+    fn run_dispatch(
+        tc: &mut TestCtx,
+        usm_user: Option<&crate::usm::user::UsmUser>,
+        frame: &[u8],
+        mib: &crate::mib::Store,
+    ) -> Option<Vec<u8>> {
+        let mut ctx = tc.ctx(usm_user);
+        process_snmpv3_request(frame, &mut ctx, mib)
+    }
+
+    // Assert that a counter field stayed at `u32::MAX` (saturating, no overflow),
+    // and that the Report PDU in `response_bytes` carries the expected OID at that value.
+    fn assert_counter_saturates(counter_value: u32, response_bytes: &[u8], expected_oid: &str) {
+        assert_eq!(counter_value, u32::MAX, "counter must not overflow");
+        assert_report_pdu_varbind(response_bytes, expected_oid, u32::MAX);
+    }
+
+    // Assert that a dispatch result was silently discarded (None) and that the
+    // named counter was incremented by exactly one from zero.
+    fn assert_discarded_and_counter_incremented(result: Option<&Vec<u8>>, counter_value: u32) {
+        assert!(result.is_none(), "must be silently discarded");
+        assert_eq!(
+            counter_value, 1,
+            "counter must be incremented even when no Report is sent"
+        );
+    }
+
+    // Parameters for building an authPriv GetRequest frame.
+    // Only the fields that vary across tests are kept here; invariant values
+    // (protocol, OID, salt, flags) are constants inside build_authpriv_frame_inner.
+    struct AuthPrivFrameParams<'a> {
+        auth_key_bytes: &'a [u8],
+        // Override priv_key_bytes via with_priv_key to exercise wrong-key scenarios.
+        // Defaults to the first 16 bytes of auth_key_bytes (the convention throughout
+        // the dispatch tests).
+        priv_key_bytes: Option<&'a [u8]>,
+        boots: u32,
+        time: u32,
+    }
+
+    impl<'a> AuthPrivFrameParams<'a> {
+        fn new(auth_key_bytes: &'a [u8]) -> Self {
+            Self {
+                auth_key_bytes,
+                priv_key_bytes: None,
+                boots: 1,
+                time: 0,
+            }
+        }
+
+        fn with_priv_key(mut self, priv_key_bytes: &'a [u8]) -> Self {
+            self.priv_key_bytes = Some(priv_key_bytes);
+            self
+        }
+
+        fn with_boots_time(mut self, boots: u32, time: u32) -> Self {
+            self.boots = boots;
+            self.time = time;
+            self
+        }
+
+        fn build(&self) -> Vec<u8> {
+            build_authpriv_frame_inner(self)
+        }
+    }
+
+    // Holds the outer V3Message assembly context for an authPriv frame.
+    // privacy_parameters is Vec<u8> rather than [u8; 8] so that malformed-length
+    // test scenarios can supply a shorter salt without a separate helper.
+    struct AuthPrivAssembly {
+        boots: u32,
+        time: u32,
+        privacy_parameters: Vec<u8>,
+        msg_flags_byte: u8,
+        ciphertext: Vec<u8>,
+    }
+
+    // Build a complete authPriv GetRequest frame. Separated from AuthPrivFrameParams
+    // so the frame-assembly logic can be read top-down.
+    fn build_authpriv_frame_inner(params: &AuthPrivFrameParams<'_>) -> Vec<u8> {
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use rasn_snmp::v2::{GetRequest as RasnGetRequest, Pdu, VarBind, VarBindValue};
+        use rasn_snmp::v3::ScopedPdu;
+        use std::borrow::Cow;
+
+        // Invariant values shared by all standard authPriv test frames.
+        const SALT: [u8; 8] = [0x01_u8; 8];
+        const MSG_FLAGS: u8 = 0x07;
+
+        let engine_id = test_engine_id();
+        let rasn_oid =
+            rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(test_oid_arcs().to_vec()));
+        let scoped_pdu = ScopedPdu {
+            engine_id: engine_id.to_vec().into(),
+            name: vec![].into(),
+            data: rasn_snmp::v2::Pdus::GetRequest(RasnGetRequest(Pdu {
+                request_id: 1,
+                error_status: 0,
+                error_index: 0,
+                variable_bindings: vec![VarBind {
+                    name: rasn_oid,
+                    value: VarBindValue::Unspecified,
+                }],
+            })),
+        };
+        let scoped_pdu_ber = rasn::ber::encode(&scoped_pdu).unwrap();
+        let mut aes_iv = [0_u8; 16];
+        aes_iv[0..4].copy_from_slice(&params.boots.to_be_bytes());
+        aes_iv[4..8].copy_from_slice(&params.time.to_be_bytes());
+        aes_iv[8..16].copy_from_slice(&SALT);
+        // When no override key is supplied, derive from the first 16 bytes of auth_key_bytes.
+        let priv_key_slice = params
+            .priv_key_bytes
+            .unwrap_or(&params.auth_key_bytes[..16]);
+        let priv_key = SecretKey::new_from_exposed_slice(priv_key_slice);
+        let ciphertext = crate::usm::privacy::PrivProtocol::Aes128
+            .encrypt(&priv_key, &aes_iv, &scoped_pdu_ber)
+            .unwrap();
+        let mac_len = AuthProtocol::HmacSha256.mac_len();
+        splice_hmac_into_authpriv_frame(
+            params.auth_key_bytes,
+            mac_len,
+            engine_id,
+            &AuthPrivAssembly {
+                boots: params.boots,
+                time: params.time,
+                privacy_parameters: SALT.to_vec(),
+                msg_flags_byte: MSG_FLAGS,
+                ciphertext,
+            },
+        )
+    }
+
+    // Assemble the V3Message with zeroed auth_params, then compute and splice in the real HMAC.
+    fn splice_hmac_into_authpriv_frame(
+        auth_key_bytes: &[u8],
+        mac_len: usize,
+        engine_id: &[u8],
+        assembly: &AuthPrivAssembly,
+    ) -> Vec<u8> {
+        use rasn_snmp::v3::{
+            HeaderData, Message as V3Message, ScopedPduData, USMSecurityParameters,
+        };
+
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: engine_id.to_vec().into(),
+            authoritative_engine_boots: assembly.boots.into(),
+            authoritative_engine_time: assembly.time.into(),
+            user_name: b"alice".to_vec().into(),
+            authentication_parameters: vec![0_u8; mac_len].into(),
+            privacy_parameters: assembly.privacy_parameters.clone().into(),
+        };
+        let frame_with_zeros = rasn::ber::encode(&V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 1.into(),
+                max_size: 0xFFFF.into(),
+                flags: rasn::types::OctetString::from(vec![assembly.msg_flags_byte]),
+                security_model: 3.into(),
+            },
+            security_parameters: rasn::ber::encode(&usm_params).unwrap().into(),
+            scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(
+                assembly.ciphertext.clone(),
+            )),
+        })
+        .unwrap();
+        splice_hmac_into_frame(auth_key_bytes, frame_with_zeros)
+    }
+
+    // Compute HMAC-SHA-256 over frame_with_zeros and splice it in at the
+    // auth_params offset found by the BER envelope parser. Returns the
+    // authenticated frame.
+    fn splice_hmac_into_frame(auth_key_bytes: &[u8], frame_with_zeros: Vec<u8>) -> Vec<u8> {
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+
+        let mac_len = AuthProtocol::HmacSha256.mac_len();
+        let key = SecretKey::new_from_exposed_slice(auth_key_bytes);
+        let mac = AuthProtocol::HmacSha256
+            .compute_mac(&key, &frame_with_zeros)
+            .unwrap();
+        let auth_params_offset = crate::codec::ber::snmp::decode_v3_envelope(&frame_with_zeros)
+            .expect("frame must be a valid SNMPv3 envelope")
+            .auth_params_offset
+            .expect("authenticated frame must carry a non-empty auth_params field");
+        let mut frame = frame_with_zeros;
+        frame[auth_params_offset..auth_params_offset + mac_len].copy_from_slice(&mac);
+        frame
+    }
+
+    // Keys and expected engine state for verifying an authPriv response.
+    struct AuthPrivResponseParams<'a> {
+        auth_key_bytes: &'a [u8],
+        priv_key_bytes: &'a [u8],
+        expected_boots: u32,
+        expected_time: u32,
+    }
+
+    // Decrypt a response ScopedPdu and return it, verifying the HMAC over the
+    // encrypted response in the process.
+    fn decrypt_and_verify_authpriv_response(
+        response_bytes: &[u8],
+        params: &AuthPrivResponseParams<'_>,
+    ) -> rasn_snmp::v3::ScopedPdu {
+        use crate::usm::auth::AuthProtocol;
+        use crate::usm::keys::SecretKey;
+        use crate::usm::privacy::PrivProtocol;
+
+        let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(response_bytes)
+            .expect("response must be a valid SNMPv3 message");
+        let rasn_snmp::v3::ScopedPduData::EncryptedPdu(ciphertext) = v3_response.scoped_data else {
+            panic!("authPriv response must contain an encrypted ScopedPDU");
+        };
+        let usm_params: rasn_snmp::v3::USMSecurityParameters =
+            rasn::ber::decode(v3_response.security_parameters.as_ref())
+                .expect("response must have valid USM security parameters");
+        assert_eq!(
+            usm_params.privacy_parameters.len(),
+            8,
+            "response privacy_parameters must be 8 bytes"
+        );
+        let mut aes_iv = [0_u8; 16];
+        aes_iv[0..4].copy_from_slice(&params.expected_boots.to_be_bytes());
+        aes_iv[4..8].copy_from_slice(&params.expected_time.to_be_bytes());
+        aes_iv[8..16].copy_from_slice(usm_params.privacy_parameters.as_ref());
+        let derived_priv_key = SecretKey::new_from_exposed_slice(params.priv_key_bytes);
+        let plaintext = PrivProtocol::Aes128
+            .decrypt(&derived_priv_key, &aes_iv, ciphertext.as_ref())
+            .expect("response decryption must succeed");
+
+        // Verify HMAC over the encrypted response.
+        let auth_key_for_verify = SecretKey::new_from_exposed_slice(params.auth_key_bytes);
+        let embedded_mac = usm_params.authentication_parameters.to_vec();
+        let auth_params_offset = crate::codec::ber::snmp::decode_v3_envelope(response_bytes)
+            .expect("response must be a valid SNMPv3 envelope")
+            .auth_params_offset
+            .expect("authenticated response must carry a non-empty auth_params field");
+        let mut zeroed_response = response_bytes.to_vec();
+        zeroed_response[auth_params_offset..auth_params_offset + embedded_mac.len()].fill(0);
+        AuthProtocol::HmacSha256
+            .verify_mac(&auth_key_for_verify, &zeroed_response, &embedded_mac)
+            .expect("response HMAC must verify");
+
+        rasn::ber::decode(&plaintext).expect("decrypted bytes must be a valid ScopedPdu")
+    }
+
+    // Build an authPriv frame where privacy_parameters has a non-standard length,
+    // authenticated with the given key so dispatch proceeds past HMAC to the decryption arm.
+    fn build_authpriv_frame_with_short_priv_params(
+        auth_key_bytes: &[u8],
+        boots: u32,
+        time: u32,
+    ) -> Vec<u8> {
+        use crate::usm::auth::AuthProtocol;
+        // 4-byte salt (invalid — RFC 3826 §2.2 requires exactly 8 bytes)
+        splice_hmac_into_authpriv_frame(
+            auth_key_bytes,
+            AuthProtocol::HmacSha256.mac_len(),
+            test_engine_id(),
+            &AuthPrivAssembly {
+                boots,
+                time,
+                privacy_parameters: vec![0x01_u8; 4],
+                msg_flags_byte: 0x07,
+                ciphertext: b"fake-ciphertext".to_vec(),
+            },
+        )
+    }
+
+    // Build a no-reportable-flag authPriv frame with corrupted ciphertext, authenticated
+    // so that dispatch reaches the decryption arm and then fails to decode the ScopedPDU.
+    fn build_authpriv_frame_no_report_corrupted_ciphertext(auth_key_bytes: &[u8]) -> Vec<u8> {
+        use crate::usm::auth::AuthProtocol;
+        // flags 0x03 = authPriv, no reportableFlag
+        splice_hmac_into_authpriv_frame(
+            auth_key_bytes,
+            AuthProtocol::HmacSha256.mac_len(),
+            test_engine_id(),
+            &AuthPrivAssembly {
+                boots: 1,
+                time: 0,
+                privacy_parameters: [0x01_u8; 8].to_vec(),
+                msg_flags_byte: 0x03,
+                ciphertext: b"corrupted-ciphertext-that-wont-decode-as-scoped-pdu".to_vec(),
+            },
+        )
+    }
+
+    // Build a no-user authPriv frame (flags 0x07) carrying fake ciphertext.
+    fn build_no_user_authpriv_frame() -> Vec<u8> {
+        use rasn_snmp::v3::{
+            HeaderData, Message as V3Message, ScopedPduData, USMSecurityParameters,
+        };
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: test_engine_id().to_vec().into(),
+            authoritative_engine_boots: 1.into(),
+            authoritative_engine_time: 0.into(),
+            user_name: rasn::types::OctetString::from(vec![]),
+            authentication_parameters: rasn::types::OctetString::from(vec![]),
+            privacy_parameters: rasn::types::OctetString::from(vec![0xAA_u8; 8]),
+        };
+        rasn::ber::encode(&V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 5.into(),
+                max_size: 0xFFFF.into(),
+                flags: rasn::types::OctetString::from(vec![0x07_u8]),
+                security_model: 3.into(),
+            },
+            security_parameters: rasn::ber::encode(&usm_params).unwrap().into(),
+            scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(
+                b"fake-ciphertext-bytes".to_vec(),
+            )),
+        })
+        .unwrap()
+    }
+
+    // Test helper that owns counter storage and produces a DispatchContext,
+    // eliminating the repeated boilerplate of five local u32 declarations.
     struct TestCtx {
         unknown_engine_ids: u32,
         unknown_user_names: u32,
@@ -741,15 +1076,12 @@ mod tests {
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe();
         let mut tc = TestCtx::new().with_boots_time(3, 100);
-        let result = {
-            let mut ctx = tc.ctx(None);
-            process_snmpv3_request(&probe_frame, &mut ctx, &mib)
-        };
+        let response_bytes = run_dispatch(&mut tc, None, &probe_frame, &mib)
+            .expect("discovery probe must produce a Report response");
         assert_eq!(
             tc.unknown_engine_ids, 1,
             "counter must be incremented for discovery probe"
         );
-        let response_bytes = result.expect("discovery probe must produce a Report response");
         let v3_response = assert_report_pdu_varbind(
             &response_bytes,
             crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS,
@@ -766,14 +1098,8 @@ mod tests {
         let mut tc = TestCtx::new()
             .with_unknown_engine_ids(5)
             .with_boots_time(3, 100);
-        {
-            let mut ctx = tc.ctx(None);
-            let _response = process_snmpv3_request(&probe_frame, &mut ctx, &mib);
-        }
-        {
-            let mut ctx = tc.ctx(None);
-            let _response = process_snmpv3_request(&probe_frame, &mut ctx, &mib);
-        }
+        run_dispatch(&mut tc, None, &probe_frame, &mib);
+        run_dispatch(&mut tc, None, &probe_frame, &mib);
         assert_eq!(tc.unknown_engine_ids, 7);
     }
 
@@ -784,10 +1110,7 @@ mod tests {
         let oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
         let frame = snmpv3_frames::encode_get_request(test_engine_id(), b"", 1, 2, oid.as_slice());
         let mut tc = TestCtx::new();
-        {
-            let mut ctx = tc.ctx(None);
-            let _response = process_snmpv3_request(&frame, &mut ctx, &mib);
-        }
+        run_dispatch(&mut tc, None, &frame, &mib);
         assert_eq!(tc.unknown_engine_ids, 0);
     }
 
@@ -797,16 +1120,12 @@ mod tests {
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe();
         let mut tc = TestCtx::new().with_unknown_engine_ids(u32::MAX);
-        let response_bytes = {
-            let mut ctx = tc.ctx(None);
-            process_snmpv3_request(&probe_frame, &mut ctx, &mib)
-        }
-        .expect("discovery probe must produce a Report response even when counter is at max");
-        assert_eq!(tc.unknown_engine_ids, u32::MAX);
-        assert_report_pdu_varbind(
+        let response_bytes = run_dispatch(&mut tc, None, &probe_frame, &mib)
+            .expect("discovery probe must produce a Report response even when counter is at max");
+        assert_counter_saturates(
+            tc.unknown_engine_ids,
             &response_bytes,
             crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS,
-            u32::MAX,
         );
     }
 
@@ -816,10 +1135,7 @@ mod tests {
         let mib = crate::mib::Store::new();
         let probe_frame = snmpv3_frames::encode_discovery_probe_no_report();
         let mut tc = TestCtx::new().with_boots_time(3, 100);
-        let result = {
-            let mut ctx = tc.ctx(None);
-            process_snmpv3_request(&probe_frame, &mut ctx, &mib)
-        };
+        let result = run_dispatch(&mut tc, None, &probe_frame, &mib);
         assert!(
             result.is_none(),
             "probe without reportableFlag must be silently discarded"
@@ -837,7 +1153,7 @@ mod tests {
         // Verifies: REQ-0104
         let mib = crate::mib::Store::new();
         // A non-empty but wrong engine ID: not a discovery probe (auth_engine_id is non-empty),
-        // but the ScopedPDU's contextEngineID does not match the agent's engine ID.
+        // but the engine ID does not match the agent's.
         let frame = snmpv3_frames::encode_get_request(
             b"\x80\x00\x1f\x88\x04wrong",
             b"",
@@ -846,17 +1162,12 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new().with_boots_time(3, 100);
-        let result = {
-            let mut ctx = tc.ctx(None);
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let response_bytes = run_dispatch(&mut tc, None, &frame, &mib)
+            .expect("contextEngineID mismatch must produce a Report response");
         assert_eq!(
             tc.unknown_engine_ids, 1,
             "counter must be incremented on contextEngineID mismatch"
         );
-        let response_bytes =
-            result.expect("contextEngineID mismatch must produce a Report response");
-        // Verify Report PDU carries usmStatsUnknownEngineIDs.
         let v3_response = assert_report_pdu_varbind(
             &response_bytes,
             crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS,
@@ -880,18 +1191,8 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new();
-        let result = {
-            let mut ctx = tc.ctx(None);
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
-        assert!(
-            result.is_none(),
-            "contextEngineID mismatch without reportableFlag must be silently discarded"
-        );
-        assert_eq!(
-            tc.unknown_engine_ids, 1,
-            "counter must still be incremented even when no Report is sent"
-        );
+        let result = run_dispatch(&mut tc, None, &frame, &mib);
+        assert_discarded_and_counter_incremented(result.as_ref(), tc.unknown_engine_ids);
     }
 
     #[test]
@@ -906,18 +1207,13 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new().with_unknown_engine_ids(u32::MAX);
-        let response_bytes = {
-            let mut ctx = tc.ctx(None);
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        }
-        .expect(
+        let response_bytes = run_dispatch(&mut tc, None, &frame, &mib).expect(
             "contextEngineID mismatch must produce a Report response even when counter is at max",
         );
-        assert_eq!(tc.unknown_engine_ids, u32::MAX, "counter must not overflow");
-        assert_report_pdu_varbind(
+        assert_counter_saturates(
+            tc.unknown_engine_ids,
             &response_bytes,
             crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS,
-            u32::MAX,
         );
     }
 
@@ -934,16 +1230,12 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new();
-        let result = {
-            let mut ctx = tc.ctx(None);
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let response_bytes = run_dispatch(&mut tc, None, &frame, &mib).expect(
+            "contextEngineID mismatch must produce a Report response even when msgAuthoritativeEngineID matches"
+        );
         assert_eq!(
             tc.unknown_engine_ids, 1,
             "counter must be incremented on contextEngineID mismatch"
-        );
-        let response_bytes = result.expect(
-            "contextEngineID mismatch must produce a Report response even when msgAuthoritativeEngineID matches"
         );
         assert_report_pdu_varbind(
             &response_bytes,
@@ -958,16 +1250,11 @@ mod tests {
     fn given_no_usm_user_when_process_then_user_name_check_skipped() {
         // Verifies: REQ-0078 (None user → backward-compat skip)
         let mib = crate::mib::Store::new();
-        // Frame with empty user name; usm_user: None means no check is performed.
         let frame = snmpv3_frames::encode_get_request(test_engine_id(), b"", 1, 2, test_oid_arcs());
         let mut tc = TestCtx::new();
-        let result = {
-            let mut ctx = tc.ctx(None);
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let response_bytes = run_dispatch(&mut tc, None, &frame, &mib)
+            .expect("request must pass through when no USM user is configured");
         assert_eq!(tc.unknown_user_names, 0, "counter must not be incremented");
-        let response_bytes =
-            result.expect("request must pass through when no USM user is configured");
         assert_get_response(&response_bytes);
     }
 
@@ -985,16 +1272,12 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new();
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("matching user name must produce a response");
         assert_eq!(
             tc.unknown_user_names, 0,
             "counter must not be incremented on match"
         );
-        // A Report PDU would decode as Pdus::Report; a GetResponse decodes as Pdus::Response.
-        let response_bytes = result.expect("matching user name must produce a response");
         assert_get_response(&response_bytes);
     }
 
@@ -1013,15 +1296,12 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new();
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("mismatched user name must produce a Report response");
         assert_eq!(
             tc.unknown_user_names, 1,
             "counter must be incremented on mismatch"
         );
-        let response_bytes = result.expect("mismatched user name must produce a Report response");
         let v3_response = assert_report_pdu_varbind(
             &response_bytes,
             crate::usm::counters::USM_STATS_UNKNOWN_USER_NAMES,
@@ -1046,18 +1326,8 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new();
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
-        assert!(
-            result.is_none(),
-            "user-name mismatch without reportableFlag must be silently discarded"
-        );
-        assert_eq!(
-            tc.unknown_user_names, 1,
-            "counter must still be incremented even when no Report is sent"
-        );
+        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
+        assert_discarded_and_counter_incremented(result.as_ref(), tc.unknown_user_names);
     }
 
     #[test]
@@ -1074,16 +1344,13 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new().with_unknown_user_names(u32::MAX);
-        let response_bytes = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        }
-        .expect("user-name mismatch must produce a Report response even when counter is at max");
-        assert_eq!(tc.unknown_user_names, u32::MAX, "counter must not overflow");
-        assert_report_pdu_varbind(
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib).expect(
+            "user-name mismatch must produce a Report response even when counter is at max",
+        );
+        assert_counter_saturates(
+            tc.unknown_user_names,
             &response_bytes,
             crate::usm::counters::USM_STATS_UNKNOWN_USER_NAMES,
-            u32::MAX,
         );
     }
 
@@ -1104,15 +1371,12 @@ mod tests {
             test_oid_arcs(),
         );
         let mut tc = TestCtx::new();
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("matching security level must produce a response");
         assert_eq!(
             tc.unsupported_sec_levels, 0,
             "counter must not be incremented on match"
         );
-        let response_bytes = result.expect("matching security level must produce a response");
         assert_get_response(&response_bytes);
     }
 
@@ -1129,20 +1393,17 @@ mod tests {
             1,
             2,
             test_oid_arcs(),
-            0x05, // authFlag set, reportableFlag set → authNoPriv, reportable
+            0x05,
         );
         let mut tc = TestCtx::new();
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("ceiling violation must produce a Report response");
         assert_eq!(
             tc.unsupported_sec_levels, 1,
             "counter must be incremented on ceiling violation"
         );
-        // Verify the Report PDU contains the correct varbind (usmStatsUnsupportedSecLevels).
         let v3_response = assert_report_pdu_varbind(
-            &result.expect("ceiling violation must produce a Report response"),
+            &response_bytes,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
             1,
         );
@@ -1166,18 +1427,8 @@ mod tests {
             0x01,
         );
         let mut tc = TestCtx::new();
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
-        assert!(
-            result.is_none(),
-            "ceiling violation without reportableFlag must be silently discarded"
-        );
-        assert_eq!(
-            tc.unsupported_sec_levels, 1,
-            "counter must still be incremented even when no Report is sent"
-        );
+        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
+        assert_discarded_and_counter_incremented(result.as_ref(), tc.unsupported_sec_levels);
     }
 
     #[test]
@@ -1198,16 +1449,12 @@ mod tests {
             0x05,
         );
         let mut tc = TestCtx::new();
-        let result = {
-            let mut ctx = tc.ctx(None);
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let response_bytes = run_dispatch(&mut tc, None, &frame, &mib)
+            .expect("authNoPriv message with reportableFlag set must produce a Report response");
         assert_eq!(
             tc.unsupported_sec_levels, 1,
             "counter must be incremented for no-user auth/priv message (fail-closed)"
         );
-        let response_bytes = result
-            .expect("authNoPriv message with reportableFlag set must produce a Report response");
         assert_report_pdu_varbind(
             &response_bytes,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
@@ -1230,20 +1477,12 @@ mod tests {
             0x05,
         );
         let mut tc = TestCtx::new().with_unsupported_sec_levels(u32::MAX);
-        let response_bytes = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        }
-        .expect("ceiling violation must produce a Report response even when counter is at max");
-        assert_eq!(
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("ceiling violation must produce a Report response even when counter is at max");
+        assert_counter_saturates(
             tc.unsupported_sec_levels,
-            u32::MAX,
-            "counter must not overflow"
-        );
-        assert_report_pdu_varbind(
             &response_bytes,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
-            u32::MAX,
         );
     }
 
@@ -1264,12 +1503,8 @@ mod tests {
             0x06,
         );
         let mut tc = TestCtx::new();
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
-        let response_bytes =
-            result.expect("invalid msgFlags combination must produce a Report response");
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("invalid msgFlags combination must produce a Report response");
         assert_eq!(
             tc.unsupported_sec_levels, 1,
             "counter must be incremented for invalid msgFlags"
@@ -1297,17 +1532,14 @@ mod tests {
         );
         let mut tc =
             TestCtx::new().with_minimum_security_level(crate::usm::user::SecurityLevel::AuthNoPriv);
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("below-floor message must produce a Report response");
         assert_eq!(
             tc.unsupported_sec_levels, 1,
             "counter must be incremented for below-floor message"
         );
-        // Verify Report carries usmStatsUnsupportedSecLevels
         assert_report_pdu_varbind(
-            &result.expect("below-floor message must produce a Report response"),
+            &response_bytes,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
             1,
         );
@@ -1331,12 +1563,8 @@ mod tests {
         );
         let mut tc =
             TestCtx::new().with_minimum_security_level(crate::usm::user::SecurityLevel::AuthPriv);
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
-        let response_bytes =
-            result.expect("below-floor authNoPriv message must produce a Report response");
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("below-floor authNoPriv message must produce a Report response");
         assert_eq!(
             tc.unsupported_sec_levels, 1,
             "counter must be incremented for below-floor message"
@@ -1359,21 +1587,15 @@ mod tests {
         let frame = build_authenticated_frame(&auth_key_bytes);
         let mut tc =
             TestCtx::new().with_minimum_security_level(crate::usm::user::SecurityLevel::AuthNoPriv);
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
-        let response_bytes = result.expect(
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib).expect(
             "authNoPriv message must be accepted when user has authPriv capabilities and floor is authNoPriv"
         );
         assert_eq!(
             tc.unsupported_sec_levels, 0,
             "counter must not be incremented when message passes both floor and ceiling checks"
         );
-        // Verify the response is not a cleartext Report PDU (which would indicate a
-        // security-level rejection). An AuthPriv user responding to any authenticated
-        // request will produce an authPriv-encrypted response per REQ-0107, so the
-        // ScopedPduData will be EncryptedPdu.
+        // An AuthPriv user responding to any authenticated request will produce an authPriv-encrypted
+        // response per REQ-0107, so the ScopedPduData will be EncryptedPdu.
         let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
             .expect("response must be a valid SNMPv3 message");
         let rasn_snmp::v3::ScopedPduData::EncryptedPdu(_) = v3_response.scoped_data else {
@@ -1399,11 +1621,8 @@ mod tests {
         );
         let mut tc =
             TestCtx::new().with_minimum_security_level(crate::usm::user::SecurityLevel::AuthNoPriv);
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
-        let response_bytes = result.expect("ceiling violation must produce a Report response");
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("ceiling violation must produce a Report response");
         assert_eq!(
             tc.unsupported_sec_levels, 1,
             "counter must be incremented for ceiling violation"
@@ -1449,7 +1668,6 @@ mod tests {
         let mut ctx = tc
             .try_ctx(None)
             .expect("no-user with noAuthNoPriv floor is a valid configuration");
-        // Dispatch garbage bytes to prove the constructed context is functional.
         assert!(
             process_snmpv3_request(b"\x00\x01\x02", &mut ctx, &mib).is_none(),
             "garbage bytes must be silently discarded"
@@ -1466,7 +1684,6 @@ mod tests {
         let mut ctx = tc
             .try_ctx(Some(&alice))
             .expect("a configured user with AuthPriv floor is a valid configuration");
-        // Dispatch garbage bytes to prove the constructed context is functional.
         assert!(
             process_snmpv3_request(b"\x00\x01\x02", &mut ctx, &mib).is_none(),
             "garbage bytes must be silently discarded"
@@ -1476,20 +1693,18 @@ mod tests {
     #[test]
     fn given_garbage_bytes_when_process_snmpv3_request_then_returns_none() {
         // Verifies: REQ-0073 — garbage bytes are silently discarded
-        // This is the unit-test equivalent of the (removed) doctest.
         let mib = crate::mib::Store::new();
         let mut tc = TestCtx::new();
-        let mut ctx = tc.ctx(None);
-        let result = process_snmpv3_request(b"\x00\x01\x02", &mut ctx, &mib);
+        let result = run_dispatch(&mut tc, None, b"\x00\x01\x02", &mib);
         assert!(result.is_none(), "garbage bytes must be silently discarded");
     }
 
     // ── HMAC verification (REQ-0100, REQ-0102) ───────────────────────────────
 
-    /// Build a `GetRequest` frame authenticated with HMAC-SHA-256 using the given key bytes.
-    /// Uses boots=1 and time=0 to match the default `TestCtx::new()` engine state, ensuring
-    /// the time-window check passes for HMAC verification tests.
-    /// The frame is addressed to `test_engine_id()` with user "alice", flags 0x05 (authNoPriv + reportable).
+    // Build a `GetRequest` frame authenticated with HMAC-SHA-256 using the given key bytes.
+    // Uses boots=1 and time=0 to match the default `TestCtx::new()` engine state, ensuring
+    // the time-window check passes for HMAC verification tests.
+    // The frame is addressed to `test_engine_id()` with user "alice", flags 0x05 (authNoPriv + reportable).
     fn build_authenticated_frame(auth_key_bytes: &[u8]) -> Vec<u8> {
         // boots=1 matches TestCtx::new() engine_boots=1 so the time-window check passes.
         build_authenticated_frame_with_time(auth_key_bytes, 1, 0)
@@ -1501,18 +1716,14 @@ mod tests {
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
         let alice = test_auth_user("alice", &auth_key_bytes);
-        let authenticated_frame = build_authenticated_frame(&auth_key_bytes);
+        let frame = build_authenticated_frame(&auth_key_bytes);
         let mut tc = TestCtx::new();
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&authenticated_frame, &mut ctx, &mib)
-        };
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("correct HMAC must produce a normal response");
         assert_eq!(
             tc.wrong_digests, 0,
             "counter must not be incremented on correct HMAC"
         );
-        // Verify it's a GetResponse (not a Report)
-        let response_bytes = result.expect("correct HMAC must produce a normal response");
         assert_get_response(&response_bytes);
     }
 
@@ -1521,8 +1732,7 @@ mod tests {
         // Verifies: REQ-0100, REQ-0102
         let mib = crate::mib::Store::new();
         let alice = test_auth_user("alice", &[0x42_u8; 32]);
-        // Build frame with an incorrect MAC (all-0xBB bytes)
-        let frame_with_wrong_mac = snmpv3_frames::encode_get_request_with_auth_params(
+        let frame = snmpv3_frames::encode_get_request_with_auth_params(
             test_engine_id(),
             b"alice",
             b"",
@@ -1533,15 +1743,11 @@ mod tests {
             &[0xBB_u8; 24],
         );
         let mut tc = TestCtx::new();
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame_with_wrong_mac, &mut ctx, &mib)
-        };
+        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
         assert_eq!(
             tc.wrong_digests, 1,
             "counter must be incremented on wrong HMAC"
         );
-        // Verify the Report carries usmStatsWrongDigests
         assert_report_pdu_varbind(
             &result.expect("wrong HMAC must produce a Report response"),
             crate::usm::counters::USM_STATS_WRONG_DIGESTS,
@@ -1554,7 +1760,6 @@ mod tests {
         // Verifies: REQ-0100 — empty auth_params for an authenticated user is rejected
         let mib = crate::mib::Store::new();
         let alice = test_auth_user("alice", &[0x42_u8; 32]);
-        // Build frame with authFlag but empty auth_params (malformed)
         let frame = snmpv3_frames::encode_get_request_with_auth_params(
             test_engine_id(),
             b"alice",
@@ -1566,10 +1771,7 @@ mod tests {
             &[],
         );
         let mut tc = TestCtx::new();
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
         assert_eq!(
             tc.wrong_digests, 1,
             "counter must be incremented for empty auth_params"
@@ -1599,18 +1801,8 @@ mod tests {
             &[0xBB_u8; 24],
         );
         let mut tc = TestCtx::new();
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
-        assert!(
-            result.is_none(),
-            "wrong HMAC without reportableFlag must be silently discarded"
-        );
-        assert_eq!(
-            tc.wrong_digests, 1,
-            "counter must still be incremented even when no Report is sent"
-        );
+        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
+        assert_discarded_and_counter_incremented(result.as_ref(), tc.wrong_digests);
     }
 
     #[test]
@@ -1629,16 +1821,12 @@ mod tests {
             &[0xBB_u8; 24],
         );
         let mut tc = TestCtx::new().with_wrong_digests(u32::MAX);
-        let response_bytes = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        }
-        .expect("wrong HMAC must produce a Report response even when counter is at max");
-        assert_eq!(tc.wrong_digests, u32::MAX, "counter must not overflow");
-        assert_report_pdu_varbind(
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("wrong HMAC must produce a Report response even when counter is at max");
+        assert_counter_saturates(
+            tc.wrong_digests,
             &response_bytes,
             crate::usm::counters::USM_STATS_WRONG_DIGESTS,
-            u32::MAX,
         );
     }
 
@@ -1683,8 +1871,8 @@ mod tests {
 
     // ── Time-window validation (REQ-0098) ──────────────────────────────────────
 
-    /// Build an authenticated `GetRequest` frame with explicit USM boots, time, and msgFlags.
-    /// The frame is addressed to `test_engine_id()` with user "alice".
+    // Build an authenticated `GetRequest` frame with explicit USM boots, time, and msgFlags.
+    // The frame is addressed to `test_engine_id()` with user "alice".
     fn build_authenticated_frame_with_time_and_flags(
         auth_key_bytes: &[u8],
         boots: u32,
@@ -1692,43 +1880,26 @@ mod tests {
         msg_flags_byte: u8,
     ) -> Vec<u8> {
         use crate::usm::auth::AuthProtocol;
-        use crate::usm::keys::SecretKey;
 
         let mac_len = AuthProtocol::HmacSha256.mac_len();
-        let engine_id = test_engine_id();
-        let oid = test_oid_arcs();
-
-        let zeroed_auth_params = vec![0_u8; mac_len];
         let frame_with_zeros = snmpv3_frames::encode_get_request_with_auth_params_and_time(
-            engine_id,
+            test_engine_id(),
             b"alice",
             b"",
             1,
             2,
-            oid,
+            test_oid_arcs(),
             msg_flags_byte,
-            &zeroed_auth_params,
+            &vec![0_u8; mac_len],
             boots,
             time,
         );
-
-        let key = SecretKey::new_from_exposed_slice(auth_key_bytes);
-        let mac = AuthProtocol::HmacSha256
-            .compute_mac(&key, &frame_with_zeros)
-            .unwrap();
-
-        let auth_params_offset = crate::codec::ber::snmp::decode_v3_envelope(&frame_with_zeros)
-            .expect("frame must be a valid SNMPv3 envelope")
-            .auth_params_offset
-            .expect("authenticated frame must carry a non-empty auth_params field");
-        let mut frame = frame_with_zeros;
-        frame[auth_params_offset..auth_params_offset + mac_len].copy_from_slice(&mac);
-        frame
+        splice_hmac_into_frame(auth_key_bytes, frame_with_zeros)
     }
 
-    /// Build an authenticated `GetRequest` frame with explicit USM boots and time parameters.
-    /// Uses flags 0x05 (authNoPriv + reportable).
-    /// The frame is addressed to `test_engine_id()` with user "alice".
+    // Build an authenticated `GetRequest` frame with explicit USM boots and time parameters.
+    // Uses flags 0x05 (authNoPriv + reportable).
+    // The frame is addressed to `test_engine_id()` with user "alice".
     fn build_authenticated_frame_with_time(
         auth_key_bytes: &[u8],
         boots: u32,
@@ -1743,18 +1914,14 @@ mod tests {
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
         let alice = test_auth_user("alice", &auth_key_bytes);
-        // boots=1 matches engine_boots=1; time=0 matches engine_time=0 (within 150s window)
         let frame = build_authenticated_frame_with_time(&auth_key_bytes, 1, 0);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("in-window message must produce a normal response");
         assert_eq!(
             tc.not_in_time_windows, 0,
             "counter must not be incremented for in-window message"
         );
-        let response_bytes = result.expect("in-window message must produce a normal response");
         assert_get_response(&response_bytes);
     }
 
@@ -1767,15 +1934,12 @@ mod tests {
         // boots=2 does not match engine_boots=1 → out of window
         let frame = build_authenticated_frame_with_time(&auth_key_bytes, 2, 0);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("out-of-window message must produce a Report response");
         assert_eq!(
             tc.not_in_time_windows, 1,
             "counter must be incremented for out-of-window message"
         );
-        let response_bytes = result.expect("out-of-window message must produce a Report response");
         let v3_response = assert_report_pdu_varbind(
             &response_bytes,
             crate::usm::counters::USM_STATS_NOT_IN_TIME_WINDOWS,
@@ -1796,22 +1960,12 @@ mod tests {
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
         let alice = test_auth_user("alice", &auth_key_bytes);
-        // boots=2 does not match engine_boots=1 → out of window; flags=0x01 = authFlag only,
-        // reportableFlag cleared, so agent must discard silently (no Report sent).
+        // boots=2 does not match engine_boots=1 → out of window; flags=0x01 = authFlag only
+        // (no reportableFlag), so agent must discard silently.
         let frame = build_authenticated_frame_with_time_and_flags(&auth_key_bytes, 2, 0, 0x01);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
-        assert!(
-            result.is_none(),
-            "out-of-window without reportableFlag must be silently discarded"
-        );
-        assert_eq!(
-            tc.not_in_time_windows, 1,
-            "counter must still be incremented even when no Report is sent"
-        );
+        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
+        assert_discarded_and_counter_incremented(result.as_ref(), tc.not_in_time_windows);
     }
 
     #[test]
@@ -1824,20 +1978,12 @@ mod tests {
         let mut tc = TestCtx::new()
             .with_not_in_time_windows(u32::MAX)
             .with_boots_time(1, 0);
-        let response_bytes = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        }
-        .expect("out-of-window must produce a Report response even when counter is at max");
-        assert_eq!(
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("out-of-window must produce a Report response even when counter is at max");
+        assert_counter_saturates(
             tc.not_in_time_windows,
-            u32::MAX,
-            "counter must not overflow"
-        );
-        assert_report_pdu_varbind(
             &response_bytes,
             crate::usm::counters::USM_STATS_NOT_IN_TIME_WINDOWS,
-            u32::MAX,
         );
     }
 
@@ -1846,7 +1992,6 @@ mod tests {
         // Verifies: REQ-0098
         let mib = crate::mib::Store::new();
         let alice = test_no_auth_user("alice");
-        // noAuthNoPriv user: time-window check must be skipped regardless of boots/time
         let frame = snmpv3_frames::encode_get_request_with_user(
             test_engine_id(),
             b"alice",
@@ -1855,19 +2000,15 @@ mod tests {
             2,
             test_oid_arcs(),
         );
-        // engine_boots=5 but message has boots=0 (from encode_get_request_with_user default)
-        // If the check were applied, this would fail. It must be skipped.
+        // engine_boots=5 but message has boots=0 (from encode_get_request_with_user default).
+        // If the check were applied, this would fail; it must be skipped for noAuthNoPriv.
         let mut tc = TestCtx::new().with_boots_time(5, 100);
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("noAuthNoPriv message must pass through regardless of boots/time");
         assert_eq!(
             tc.not_in_time_windows, 0,
             "counter must not be incremented for noAuthNoPriv messages"
         );
-        let response_bytes =
-            result.expect("noAuthNoPriv message must pass through regardless of boots/time");
         assert_get_response(&response_bytes);
     }
 
@@ -1880,10 +2021,7 @@ mod tests {
         // boots=1 matches engine_boots=1, but msg_time=200, engine_time=0 → diff=200 > 150
         let frame = build_authenticated_frame_with_time(&auth_key_bytes, 1, 200);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
         assert_eq!(
             tc.not_in_time_windows, 1,
             "counter must be incremented for time-difference out-of-window message"
@@ -1900,60 +2038,22 @@ mod tests {
     #[test]
     fn given_encrypted_v3_message_with_no_user_when_process_then_rejected_with_report() {
         // Verifies: REQ-0079
-        // F1 fail-closed: an authPriv message (flags 0x07) with no configured user is now
+        // F1 fail-closed: an authPriv message (flags 0x07) with no configured user is
         // rejected at the security-level check before it ever reaches the Encrypted arm.
         // The agent has no credentials, so any message claiming auth or priv is rejected
-        // with a Report PDU carrying usmStatsUnsupportedSecLevels. Previously this message
-        // reached the Encrypted arm and was silently discarded; the fail-closed fix changes
-        // the outcome to a Report response (flags 0x07 includes reportableFlag).
-        use rasn_snmp::v3::{
-            HeaderData, Message as V3Message, ScopedPduData, USMSecurityParameters,
-        };
-
+        // with a Report PDU carrying usmStatsUnsupportedSecLevels (flags 0x07 includes
+        // reportableFlag).
         let mib = crate::mib::Store::new();
-        let fake_ciphertext = b"fake-ciphertext-bytes".to_vec();
-
-        let usm_params = USMSecurityParameters {
-            authoritative_engine_id: test_engine_id().to_vec().into(),
-            authoritative_engine_boots: 1.into(),
-            authoritative_engine_time: 0.into(),
-            user_name: rasn::types::OctetString::from(vec![]),
-            authentication_parameters: rasn::types::OctetString::from(vec![]),
-            privacy_parameters: rasn::types::OctetString::from(vec![0xAA_u8; 8]),
-        };
-        let security_params = rasn::ber::encode(&usm_params).unwrap();
-        let v3_msg = V3Message {
-            version: 3.into(),
-            global_data: HeaderData {
-                message_id: 5.into(),
-                max_size: 0xFFFF.into(),
-                // authPriv + reportable: 0x03 | 0x04 = 0x07
-                flags: rasn::types::OctetString::from(vec![0x07_u8]),
-                security_model: 3.into(),
-            },
-            security_parameters: security_params.into(),
-            scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(
-                fake_ciphertext,
-            )),
-        };
-        let encoded_frame = rasn::ber::encode(&v3_msg).unwrap();
-
+        let encoded_frame = build_no_user_authpriv_frame();
         let mut tc = TestCtx::new();
-        let result = {
-            let mut ctx = tc.ctx(None);
-            process_snmpv3_request(&encoded_frame, &mut ctx, &mib)
-        };
-
-        // F1: with no configured user the F1 guard fires at the security-level check,
-        // incrementing the counter and returning a Report PDU (reportableFlag is set).
+        let result = run_dispatch(&mut tc, None, &encoded_frame, &mib);
         assert_eq!(
             tc.unsupported_sec_levels, 1,
             "counter must be incremented for no-user authPriv message (fail-closed)"
         );
-        let response_bytes =
-            result.expect("authPriv message with reportableFlag and no user must produce a Report");
         assert_report_pdu_varbind(
-            &response_bytes,
+            &result
+                .expect("authPriv message with reportableFlag and no user must produce a Report"),
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
             1,
         );
@@ -1961,130 +2061,26 @@ mod tests {
 
     // ── authPriv decryption (REQ-0101) ───────────────────────────────────────────
 
-    /// Build a complete authPriv `GetRequest` frame (authenticated + encrypted).
-    ///
-    /// Uses `engine_id` = `test_engine_id()`, `user_name` = "alice",
-    /// `msgFlags` = 0x07 (authPriv + reportable), auth protocol = `HmacSha256` (24-byte MAC).
-    /// IV = `boots_be(4)` || `time_be(4)` || `salt(8)` per RFC 3826 §2.2.
-    fn build_authpriv_frame(
-        auth_key_bytes: &[u8],
-        priv_key_bytes: &[u8],
-        priv_protocol: crate::usm::privacy::PrivProtocol,
-        boots: u32,
-        time: u32,
-        oid_arcs: &[u32],
-        salt: [u8; 8],
-    ) -> Vec<u8> {
-        use crate::usm::auth::AuthProtocol;
-        use crate::usm::keys::SecretKey;
-        use rasn_snmp::v2::{GetRequest as RasnGetRequest, Pdu, VarBind, VarBindValue};
-        use rasn_snmp::v3::{
-            HeaderData, Message as V3Message, ScopedPdu, ScopedPduData, USMSecurityParameters,
-        };
-        use std::borrow::Cow;
-
-        let engine_id = test_engine_id();
-        let mac_len = AuthProtocol::HmacSha256.mac_len();
-
-        // Build and BER-encode the ScopedPdu.
-        let rasn_oid = rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(oid_arcs.to_vec()));
-        let get_request = RasnGetRequest(Pdu {
-            request_id: 1,
-            error_status: 0,
-            error_index: 0,
-            variable_bindings: vec![VarBind {
-                name: rasn_oid,
-                value: VarBindValue::Unspecified,
-            }],
-        });
-        let scoped_pdu = ScopedPdu {
-            engine_id: engine_id.to_vec().into(),
-            name: vec![].into(),
-            data: rasn_snmp::v2::Pdus::GetRequest(get_request),
-        };
-        let scoped_pdu_ber = rasn::ber::encode(&scoped_pdu).unwrap();
-
-        // Construct IV and encrypt the ScopedPdu.
-        let mut aes_iv = [0_u8; 16];
-        aes_iv[0..4].copy_from_slice(&boots.to_be_bytes());
-        aes_iv[4..8].copy_from_slice(&time.to_be_bytes());
-        aes_iv[8..16].copy_from_slice(&salt);
-        let priv_key = SecretKey::new_from_exposed_slice(priv_key_bytes);
-        let ciphertext = priv_protocol
-            .encrypt(&priv_key, &aes_iv, &scoped_pdu_ber)
-            .unwrap();
-
-        // Build the V3Message with zeroed auth_params.
-        let zeroed_auth_params = vec![0_u8; mac_len];
-        let usm_params = USMSecurityParameters {
-            authoritative_engine_id: engine_id.to_vec().into(),
-            authoritative_engine_boots: boots.into(),
-            authoritative_engine_time: time.into(),
-            user_name: b"alice".to_vec().into(),
-            authentication_parameters: zeroed_auth_params.into(),
-            privacy_parameters: salt.to_vec().into(),
-        };
-        let security_params = rasn::ber::encode(&usm_params).unwrap();
-        let v3_msg = V3Message {
-            version: 3.into(),
-            global_data: HeaderData {
-                message_id: 1.into(),
-                max_size: 0xFFFF.into(),
-                flags: rasn::types::OctetString::from(vec![0x07_u8]), // authPriv + reportable
-                security_model: 3.into(),
-            },
-            security_parameters: security_params.into(),
-            scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(ciphertext)),
-        };
-        let frame_with_zeros = rasn::ber::encode(&v3_msg).unwrap();
-
-        // Compute HMAC over frame with zeroed auth_params and splice it in.
-        let auth_key = SecretKey::new_from_exposed_slice(auth_key_bytes);
-        let mac = AuthProtocol::HmacSha256
-            .compute_mac(&auth_key, &frame_with_zeros)
-            .unwrap();
-        let auth_params_offset = crate::codec::ber::snmp::decode_v3_envelope(&frame_with_zeros)
-            .expect("frame must be a valid SNMPv3 envelope")
-            .auth_params_offset
-            .expect("authenticated frame must carry a non-empty auth_params field");
-        let mut frame = frame_with_zeros;
-        frame[auth_params_offset..auth_params_offset + mac_len].copy_from_slice(&mac);
-        frame
-    }
-
     #[test]
     fn given_correct_priv_key_when_process_authpriv_then_decrypts_and_responds() {
         // Verifies: REQ-0101, REQ-0107, REQ-0109
-        use crate::usm::auth::AuthProtocol;
-        use crate::usm::keys::SecretKey;
-        use crate::usm::privacy::PrivProtocol;
-
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
         let alice = test_authpriv_user("alice", &auth_key_bytes);
-        let frame = build_authpriv_frame(
-            &auth_key_bytes,
-            &auth_key_bytes[..16],
-            PrivProtocol::Aes128,
-            1,
-            0,
-            test_oid_arcs(),
-            [0x01_u8; 8],
-        );
+        let frame = AuthPrivFrameParams::new(&auth_key_bytes)
+            .with_boots_time(1, 0)
+            .build();
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("correct authPriv message must produce a response");
         assert_eq!(
             tc.decryption_errors, 0,
             "counter must not be incremented on success"
         );
-        let response_bytes = result.expect("correct authPriv message must produce a response");
+
+        // authPriv response must have flags 0x03 (auth + priv, no reportableFlag).
         let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(&response_bytes)
             .expect("response must be a valid SNMPv3 message");
-
-        // authPriv response must have flags 0x03 (auth + priv).
         let flags_byte = v3_response
             .global_data
             .flags
@@ -2093,32 +2089,16 @@ mod tests {
             .expect("msgFlags must not be empty in any SNMPv3 message");
         assert_eq!(flags_byte, 0x03, "authPriv response flags must be 0x03");
 
-        // Response ScopedPdu must be encrypted.
-        let rasn_snmp::v3::ScopedPduData::EncryptedPdu(ciphertext) = v3_response.scoped_data else {
-            panic!("authPriv response must contain an encrypted ScopedPDU");
-        };
-
-        // Privacy parameters must be an 8-byte salt.
-        let usm_params: rasn_snmp::v3::USMSecurityParameters =
-            rasn::ber::decode(v3_response.security_parameters.as_ref())
-                .expect("response must have valid USM security parameters");
-        assert_eq!(
-            usm_params.privacy_parameters.len(),
-            8,
-            "response privacy_parameters must be 8 bytes"
+        // Decrypt the response and verify the inner GetResponse PDU.
+        let scoped_pdu = decrypt_and_verify_authpriv_response(
+            &response_bytes,
+            &AuthPrivResponseParams {
+                auth_key_bytes: &auth_key_bytes,
+                priv_key_bytes: &auth_key_bytes[..16],
+                expected_boots: 1,
+                expected_time: 0,
+            },
         );
-
-        // Decrypt the response ScopedPdu using the same priv key and verify the inner PDU.
-        let mut aes_iv = [0_u8; 16];
-        aes_iv[0..4].copy_from_slice(&1_u32.to_be_bytes()); // engine_boots = 1
-        aes_iv[4..8].copy_from_slice(&0_u32.to_be_bytes()); // engine_time = 0
-        aes_iv[8..16].copy_from_slice(usm_params.privacy_parameters.as_ref());
-        let derived_priv_key = SecretKey::new_from_exposed_slice(&auth_key_bytes[..16]);
-        let plaintext = PrivProtocol::Aes128
-            .decrypt(&derived_priv_key, &aes_iv, ciphertext.as_ref())
-            .expect("response decryption must succeed");
-        let scoped_pdu: rasn_snmp::v3::ScopedPdu =
-            rasn::ber::decode(&plaintext).expect("decrypted bytes must be a valid ScopedPdu");
         let rasn_snmp::v2::Pdus::Response(response_pdu) = scoped_pdu.data else {
             panic!("decrypted ScopedPdu must contain a GetResponse");
         };
@@ -2130,7 +2110,6 @@ mod tests {
             response_pdu.0.error_status, 0,
             "error_status must be NoError (0)"
         );
-        // The MIB is empty, so the OID from the request produces a NoSuchObject varbind.
         assert_eq!(
             response_pdu.0.variable_bindings.len(),
             1,
@@ -2147,19 +2126,6 @@ mod tests {
         else {
             panic!("varbind value must be NoSuchObject when OID is not in MIB");
         };
-
-        // Verify the HMAC over the encrypted response is valid.
-        let auth_key_for_verify = SecretKey::new_from_exposed_slice(&auth_key_bytes);
-        let embedded_mac = usm_params.authentication_parameters.to_vec();
-        let auth_params_offset = crate::codec::ber::snmp::decode_v3_envelope(&response_bytes)
-            .expect("response must be a valid SNMPv3 envelope")
-            .auth_params_offset
-            .expect("authenticated response must carry a non-empty auth_params field");
-        let mut zeroed_response = response_bytes;
-        zeroed_response[auth_params_offset..auth_params_offset + embedded_mac.len()].fill(0);
-        AuthProtocol::HmacSha256
-            .verify_mac(&auth_key_for_verify, &zeroed_response, &embedded_mac)
-            .expect("response HMAC must verify");
     }
 
     #[test]
@@ -2168,26 +2134,16 @@ mod tests {
         // AES-CFB decryption with a wrong key produces garbage bytes. When we try to
         // BER-decode those bytes as a ScopedPDU, it fails — the counter is incremented
         // and a Report is returned.
-        use crate::usm::privacy::PrivProtocol;
-
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
         let alice = test_authpriv_user("alice", &auth_key_bytes);
         // Frame encrypted with a different key so the agent's derived key [0x42; 16] will not match.
-        let frame = build_authpriv_frame(
-            &auth_key_bytes,
-            &[0xAA_u8; 16],
-            PrivProtocol::Aes128,
-            1,
-            0,
-            test_oid_arcs(),
-            [0x01_u8; 8],
-        );
+        let frame = AuthPrivFrameParams::new(&auth_key_bytes)
+            .with_priv_key(&[0xAA_u8; 16])
+            .with_boots_time(1, 0)
+            .build();
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
         assert_eq!(
             tc.decryption_errors, 1,
             "counter must be incremented on decryption failure"
@@ -2203,65 +2159,12 @@ mod tests {
     fn given_invalid_priv_params_length_when_process_authpriv_then_returns_report_and_increments_counter()
      {
         // Verifies: REQ-0101 — msgPrivacyParameters of length != 8 must be rejected
-        use crate::usm::auth::AuthProtocol;
-        use crate::usm::keys::SecretKey;
-        use rasn_snmp::v3::{
-            HeaderData, Message as V3Message, ScopedPduData, USMSecurityParameters,
-        };
-
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
-        let mac_len = AuthProtocol::HmacSha256.mac_len();
-        let engine_id = test_engine_id();
-        let boots = 1_u32;
-        let time = 0_u32;
-
         let alice = test_authpriv_user("alice", &auth_key_bytes);
-
-        // Build a frame with privacy_parameters of length 4 (not 8) and fake ciphertext.
-        let zeroed_auth_params = vec![0_u8; mac_len];
-        let usm_params = USMSecurityParameters {
-            authoritative_engine_id: engine_id.to_vec().into(),
-            authoritative_engine_boots: boots.into(),
-            authoritative_engine_time: time.into(),
-            user_name: b"alice".to_vec().into(),
-            authentication_parameters: zeroed_auth_params.into(),
-            // 4-byte salt (invalid — RFC 3826 §2.2 requires exactly 8 bytes)
-            privacy_parameters: vec![0x01_u8; 4].into(),
-        };
-        let security_params = rasn::ber::encode(&usm_params).unwrap();
-        let v3_msg = V3Message {
-            version: 3.into(),
-            global_data: HeaderData {
-                message_id: 1.into(),
-                max_size: 0xFFFF.into(),
-                flags: rasn::types::OctetString::from(vec![0x07_u8]), // authPriv + reportable
-                security_model: 3.into(),
-            },
-            security_parameters: security_params.into(),
-            scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(
-                b"fake-ciphertext".to_vec(),
-            )),
-        };
-        let frame_with_zeros = rasn::ber::encode(&v3_msg).unwrap();
-
-        // Compute a valid HMAC so dispatch proceeds past authentication to the decryption arm.
-        let auth_key = SecretKey::new_from_exposed_slice(&auth_key_bytes);
-        let mac = AuthProtocol::HmacSha256
-            .compute_mac(&auth_key, &frame_with_zeros)
-            .unwrap();
-        let auth_params_offset = crate::codec::ber::snmp::decode_v3_envelope(&frame_with_zeros)
-            .expect("frame must be a valid SNMPv3 envelope")
-            .auth_params_offset
-            .expect("authenticated frame must carry a non-empty auth_params field");
-        let mut frame = frame_with_zeros;
-        frame[auth_params_offset..auth_params_offset + mac_len].copy_from_slice(&mac);
-
+        let frame = build_authpriv_frame_with_short_priv_params(&auth_key_bytes, 1, 0);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
+        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
         assert_eq!(
             tc.decryption_errors, 1,
             "decryption_errors counter must be incremented for invalid priv_params length"
@@ -2277,108 +2180,39 @@ mod tests {
     fn given_decryption_failure_without_reportable_flag_when_process_then_discarded_but_counter_incremented()
      {
         // Verifies: REQ-0101
-        // Builds an authPriv frame manually with flags = 0x03 (authPriv, no reportableFlag)
-        // and uses a wrong priv key so decryption produces garbage → ScopedPDU decode fails.
-        // Counter is incremented but no Report is sent.
-        use crate::usm::auth::AuthProtocol;
-        use crate::usm::keys::SecretKey;
-        use rasn_snmp::v3::{
-            HeaderData, Message as V3Message, ScopedPduData, USMSecurityParameters,
-        };
-
+        // Builds an authPriv frame with flags = 0x03 (authPriv, no reportableFlag) and
+        // corrupted ciphertext so the ScopedPDU decode fails. Counter is incremented but
+        // no Report is sent.
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
-        let mac_len = AuthProtocol::HmacSha256.mac_len();
-        let salt = [0x01_u8; 8];
-        let engine_id = test_engine_id();
-        let boots = 1_u32;
-        let time = 0_u32;
-
         let alice = test_authpriv_user("alice", &auth_key_bytes);
-
-        // Build frame with flags = 0x03 (authPriv, no reportableFlag) and corrupted ciphertext.
-        let fake_ciphertext = b"corrupted-ciphertext-that-wont-decode-as-scoped-pdu".to_vec();
-        let zeroed_auth_params = vec![0_u8; mac_len];
-        let usm_params = USMSecurityParameters {
-            authoritative_engine_id: engine_id.to_vec().into(),
-            authoritative_engine_boots: boots.into(),
-            authoritative_engine_time: time.into(),
-            user_name: b"alice".to_vec().into(),
-            authentication_parameters: zeroed_auth_params.into(),
-            privacy_parameters: salt.to_vec().into(),
-        };
-        let security_params = rasn::ber::encode(&usm_params).unwrap();
-        let v3_msg = V3Message {
-            version: 3.into(),
-            global_data: HeaderData {
-                message_id: 1.into(),
-                max_size: 0xFFFF.into(),
-                flags: rasn::types::OctetString::from(vec![0x03_u8]), // authPriv, no reportableFlag
-                security_model: 3.into(),
-            },
-            security_parameters: security_params.into(),
-            scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(
-                fake_ciphertext,
-            )),
-        };
-        let frame_with_zeros = rasn::ber::encode(&v3_msg).unwrap();
-        let auth_key = SecretKey::new_from_exposed_slice(&auth_key_bytes);
-        let mac = AuthProtocol::HmacSha256
-            .compute_mac(&auth_key, &frame_with_zeros)
-            .unwrap();
-        let auth_params_offset = crate::codec::ber::snmp::decode_v3_envelope(&frame_with_zeros)
-            .expect("frame must be a valid SNMPv3 envelope")
-            .auth_params_offset
-            .expect("authenticated frame must carry a non-empty auth_params field");
-        let mut frame = frame_with_zeros;
-        frame[auth_params_offset..auth_params_offset + mac_len].copy_from_slice(&mac);
-
+        let frame = build_authpriv_frame_no_report_corrupted_ciphertext(&auth_key_bytes);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        let result = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
-        assert!(
-            result.is_none(),
-            "decryption failure without reportableFlag must be silently discarded"
-        );
-        assert_eq!(
-            tc.decryption_errors, 1,
-            "counter must still be incremented even when no Report is sent"
-        );
+        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
+        assert_discarded_and_counter_incremented(result.as_ref(), tc.decryption_errors);
     }
 
     #[test]
     fn given_counter_at_max_when_decryption_fails_then_counter_does_not_overflow() {
         // Verifies: REQ-0101
-        use crate::usm::privacy::PrivProtocol;
-
         let mib = crate::mib::Store::new();
         let auth_key_bytes = [0x42_u8; 32];
         let alice = test_authpriv_user("alice", &auth_key_bytes);
         // Frame encrypted with a mismatched key to trigger decryption failure.
-        let frame = build_authpriv_frame(
-            &auth_key_bytes,
-            &[0xAA_u8; 16],
-            PrivProtocol::Aes128,
-            1,
-            0,
-            test_oid_arcs(),
-            [0x01_u8; 8],
-        );
+        let frame = AuthPrivFrameParams::new(&auth_key_bytes)
+            .with_priv_key(&[0xAA_u8; 16])
+            .with_boots_time(1, 0)
+            .build();
         let mut tc = TestCtx::new()
             .with_boots_time(1, 0)
             .with_decryption_errors(u32::MAX);
-        let response_bytes = {
-            let mut ctx = tc.ctx(Some(&alice));
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        }
-        .expect("decryption failure must produce a Report response even when counter is at max");
-        assert_eq!(tc.decryption_errors, u32::MAX, "counter must not overflow");
-        assert_report_pdu_varbind(
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib).expect(
+            "decryption failure must produce a Report response even when counter is at max",
+        );
+        assert_counter_saturates(
+            tc.decryption_errors,
             &response_bytes,
             crate::usm::counters::USM_STATS_DECRYPTION_ERRORS,
-            u32::MAX,
         );
     }
 
@@ -2386,18 +2220,11 @@ mod tests {
     fn given_security_model_not_usm_when_processed_then_returns_report_and_increments_counter() {
         // Verifies: REQ-0115
         let mib = crate::mib::Store::new();
-        // The reportable flag (0x04) is set by snmpv3_frames::encode_get_request,
-        // so patching security_model should produce a Report PDU response.
         let frame = build_frame_with_non_usm_security_model();
         let mut tc = TestCtx::new();
-        let response = {
-            let mut ctx = tc.ctx(None);
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
-        let report_bytes =
-            response.expect("should return a Report PDU for unsupported security model");
+        let report_bytes = run_dispatch(&mut tc, None, &frame, &mib)
+            .expect("should return a Report PDU for unsupported security model");
         assert_eq!(tc.unknown_security_models, 1);
-        // Verify the Report PDU carries the snmpUnknownSecurityModels OID.
         assert_report_pdu_varbind(&report_bytes, SNMP_UNKNOWN_SECURITY_MODELS_OID, 1);
     }
 
@@ -2405,19 +2232,11 @@ mod tests {
     fn given_security_model_not_usm_and_no_reportable_flag_when_processed_then_silent_discard() {
         // Verifies: REQ-0115
         let mib = crate::mib::Store::new();
-        // Start from the patched (non-USM) frame and also clear the reportable flag.
         let mut frame = build_frame_with_non_usm_security_model();
         clear_reportable_flag(&mut frame);
-
         let mut tc = TestCtx::new();
-        let response = {
-            let mut ctx = tc.ctx(None);
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        };
-        assert!(
-            response.is_none(),
-            "no reportable flag means silent discard"
-        );
+        let result = run_dispatch(&mut tc, None, &frame, &mib);
+        assert!(result.is_none(), "no reportable flag means silent discard");
         assert_eq!(
             tc.unknown_security_models, 1,
             "counter must still be incremented"
@@ -2468,18 +2287,15 @@ mod tests {
         // the same request with a large msgMaxSize, proving that max_size is plumbed
         // through dispatch into handle_get_bulk.
         let mut mib = crate::mib::Store::new();
-        // Populate 20 OIDs with 200-byte values so there is plenty to walk.
         for i in 0_u32..20 {
             mib.set(
                 format!("1.3.6.1.2.1.1.{i}.0").parse().unwrap(),
                 crate::codec::Value::OctetString(vec![0xAA; 200]),
             );
         }
-
         let engine_id = test_engine_id();
         let oid_arcs: &[u32] = &[1, 3, 6, 1, 2, 1, 1, 0, 0];
 
-        // Decode a GetBulk response and return the number of varbinds it contains.
         let count_response_varbinds = |response_bytes: &[u8]| -> usize {
             let v3_response = rasn::ber::decode::<rasn_snmp::v3::Message>(response_bytes)
                 .expect("response must be a valid SNMPv3 message");
@@ -2493,32 +2309,23 @@ mod tests {
             resp_pdu.0.variable_bindings.len()
         };
 
-        // Request with a generous size limit — all 20 repetitions should be returned
-        // (subject to the max_repetitions_cap, which is MAX_BULK_REPETITIONS).
         let large_frame = snmpv3_frames::encode_get_bulk_request_with_max_size(
             engine_id, b"", 1, 1, 0, 20, oid_arcs, 0x7FFF,
         );
         let full_varbind_count = {
             let mut tc = TestCtx::new();
-            let response_bytes = {
-                let mut ctx = tc.ctx(None);
-                process_snmpv3_request(&large_frame, &mut ctx, &mib)
-            }
-            .expect("large-limit GetBulk must produce a response");
+            let response_bytes = run_dispatch(&mut tc, None, &large_frame, &mib)
+                .expect("large-limit GetBulk must produce a response");
             count_response_varbinds(&response_bytes)
         };
 
-        // Request with a small size limit — the repeating section must be truncated.
         let small_frame = snmpv3_frames::encode_get_bulk_request_with_max_size(
             engine_id, b"", 2, 2, 0, 20, oid_arcs, 1500,
         );
         let truncated_varbind_count = {
             let mut tc = TestCtx::new();
-            let response_bytes = {
-                let mut ctx = tc.ctx(None);
-                process_snmpv3_request(&small_frame, &mut ctx, &mib)
-            }
-            .expect("small-limit GetBulk must produce a response");
+            let response_bytes = run_dispatch(&mut tc, None, &small_frame, &mib)
+                .expect("small-limit GetBulk must produce a response");
             count_response_varbinds(&response_bytes)
         };
 
@@ -2535,18 +2342,13 @@ mod tests {
         let mib = crate::mib::Store::new();
         let frame = build_frame_with_non_usm_security_model();
         let mut tc = TestCtx::new().with_unknown_security_models(u32::MAX);
-        let response_bytes = {
-            let mut ctx = tc.ctx(None);
-            process_snmpv3_request(&frame, &mut ctx, &mib)
-        }
-        .expect(
+        let response_bytes = run_dispatch(&mut tc, None, &frame, &mib).expect(
             "unsupported security model must produce a Report response even when counter is at max",
         );
-        assert_eq!(
+        assert_counter_saturates(
             tc.unknown_security_models,
-            u32::MAX,
-            "counter must not overflow"
+            &response_bytes,
+            SNMP_UNKNOWN_SECURITY_MODELS_OID,
         );
-        assert_report_pdu_varbind(&response_bytes, SNMP_UNKNOWN_SECURITY_MODELS_OID, u32::MAX);
     }
 }

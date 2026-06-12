@@ -92,7 +92,7 @@ mio, hmac, sha2, aes, cfb-mode, getrandom, log. No other external crates without
 - Language: Oxford English
 - Always prefer simple and elegant solutions.
 - Names should be descriptive and allow for local reasoning (code should be self-documenting through naming). Avoid generic names such as `bytes`, `buf`, `data`, `result`, `n`, or single letters — name variables after what they represent in the domain (e.g., `encoded_pdu`, `recv_buf`, `bytes_received`).
-- Code comments should focus on rationale (the "why", not the "how").
+- Code comments should focus on rationale (why things are implemented the way they are, not the "how"). Add references to ADRs when helpful.
 - Follow strict RFC compliance when implementing SNMP. Do not assume behavior — verify against the relevant RFC text. Wait for user confirmation before deviating from RFC specifications.
 - Use red/green TDD
 
@@ -138,20 +138,19 @@ Use `grep -r 'Implements: REQ-'` to find all implementation sites, `grep -r 'Ver
 
 ### Rust
 
-- No compiler warnings: Code must compile without warnings. Do not suppress warnings with `#[expect(...)]` unless there is a compelling reason; prefer fixing the underlying issue instead.
-- Use newtypes to wrap more basic types when this can have benefits
-- Document crate and module public APIs with clear and concise (but not too verbose)documentation. Add examples to external APIs.
+- No compiler warnings: Code must compile without warnings. Do not suppress warnings with `#[expect(...)]`; prefer fixing the underlying issue instead.
+- Create newtypes for domain types instead of using basic types like integers.
+- Document crate and module public APIs with clear and concise (but not too verbose)documentation. Add examples to public APIs.
 - Use "given-when-then" naming and structure for tests (except for simple tests that do not set up any state)
-- Tests may use the "mockall" crate for mocking when this makes tests easier to read.
 - Implement `std::error::Error` for all error types (including internal "kind" enums).
 - Place "impl" blocks immediately after the struct definition.
 - Keep trait implementations close to the data structure but after the "impl" block.
 - Order code top-down: callers above callees, so a reader encounters high-level intent before implementation details.
 - Avoid using "cfg" to write code that is only used for test support. Test using the existing public APIs instead.
 - Do not use "as" for conversion between integer types unless truncation is intended. Use "from" or "try_from" instead.
-- Do NOT use unwrap in production code, and avoid expect unless it is provable that it cannot be triggered (state why in a code comment).
-- Do NOT use unsafe without explicit user approval.
-- Minimise visibility: prefer private over `pub(crate)` over `pub`. Only make items as visible as they need to be.
+- Do NOT use unwrap in production code, and avoid `expect` unless it is provable that it cannot be triggered (state why in a code comment).
+- Do NOT use `unsafe` without explicit user approval.
+- Minimize visibility: prefer private over `pub(crate)` over `pub`. Only make items as visible as they need to be.
 - Prefer guard clauses and early returns over deeply nested if/else chains.
 - Tests should not use "is_ok" or "is_some" for verification (check the value properly)
 
