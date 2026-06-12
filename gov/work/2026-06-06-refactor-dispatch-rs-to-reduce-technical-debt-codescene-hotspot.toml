@@ -10,9 +10,9 @@ refs = ["ADR-0020"]
 
 [content]
 description = """
-Behaviour-preserving internal restructuring of src/transport/dispatch.rs to clear CodeScene-identified technical debt. The file is the project's top refactoring hotspot: code health 6.24 (Yellow) at baseline, the lowest in the codebase, with rising friction (0.349/month and climbing). It is the security-critical SNMPv3 message-processing pipeline, so debt here carries correctness risk as well as maintenance cost.
+Behaviour-preserving internal restructuring of src/transport/dispatch.rs to clear CodeScene-identified technical debt. The file is the project's top refactoring hotspot: code health 6.24 (Yellow) at baseline, the lowest in the codebase, with rising friction (0.349/month and climbing). It is the security-critical SNMPv3 message-processing pipeline, so debt here carries correctness risk as well as maintenance cost. The end goal is the aggregate code health of the codebase as a whole, not the score of any single file in isolation.
 
-Baseline CodeScene smells in production code: Low Cohesion (LCOM4=3); Code Duplication across the check_security_model / check_discovery_probe / check_engine_id functions; Large Method (decrypt_scoped_pdu, 70 LoC); Excess Number of Function Arguments (dispatch_pdu_and_encode_response = 7, decrypt_scoped_pdu = 7, verify_hmac = 5; threshold is 4); and Primitive Obsession (35% of functions take raw primitives).
+Baseline CodeScene smells in production code: Low Cohesion (LCOM4=3); Code Duplication across the check_security_model / check_discovery_probe / check_engine_id functions; Large Method (decrypt_scoped_pdu, 70 LoC); Excess Number of Function Arguments (dispatch_pdu_and_encode_response = 7, decrypt_scoped_pdu = 7, verify_hmac = 5; threshold is 4); and Primitive Obsession (35% of functions take raw primitives). Note (2026-06-12): the whole-file Primitive Obsession figure is now 57% because test functions dominate after the production cleanup; step 5's parameter-struct/builder constraint addresses this implicitly and it is checked explicitly at the step-6 measurement.
 
 This is a pure restructuring covered by the existing dispatch pipeline decision (ADR-0020) — no new requirements, no RFC, no ADR. The work proceeds in small, independently shippable steps, each driven through /implement-and-review (red/green TDD, clippy/test/traceability gates) and verified afterwards with the CodeScene code_health_score tool before moving to the next.
 
@@ -22,13 +22,19 @@ Steps:
 1. DONE - Collapse the duplicated check_security_model / check_discovery_probe / check_engine_id functions into a shared, parameterised check.
 2. DONE - Introduce parameter-object newtypes bundling the shared security/scoped-PDU context, reducing dispatch_pdu_and_encode_response, verify_hmac, and decrypt_scoped_pdu below the 4-argument threshold and removing primitive-obsession smells.
 3. DONE - Extract IV/salt derivation and the decrypt step from decrypt_scoped_pdu into named helpers to bring it under 70 LoC. (Satisfied as side effect of step 2.)
-4. Refactor build_authpriv_frame (76 LoC, 7 args) and the 94-LoC authpriv round-trip test to clear the test-code Large Method and Excess Arguments smells: split frame construction into named phases behind a parameter struct, and extract response-decryption/assertion helpers.
-5. Helper-heavy test refactor (scope widened 2026-06-11 at user direction): extract shared helpers across the whole test module — frame-construction helpers, a run_dispatch scaffolding helper collapsing the mib/ctx/process_snmpv3_request boilerplate, and common assertion helpers (USM counter checks, Report-varbind checks) — so each test body shrinks to roughly 6 lines or fewer. Constraints: every test keeps its own Verifies: REQ-xxxx annotation; each test's given/when/then intent must stay visible through precise helper naming (no opaque scenario parameterisation); helpers must not themselves trip the Large Method or Excess Arguments thresholds (use parameter structs/builders following the existing TestCtx pattern).
-6. Decision point: re-measure dispatch.rs with CodeScene after the widened step 5. If still below the 8.0 gate, decide with the user between relocating the test module to dispatch/tests.rs (the production file then scores on its own merits; tests.rs stays Yellow with the trade-off documented) and adjusting the gate to the measured ceiling.
+4. MERGED INTO STEP 5 (2026-06-12) - The build_authpriv_frame and authpriv round-trip refactor would be reshaped again when the module-wide helper vocabulary lands, so it is now a set of constraints on step 5's outcome rather than a separate pass: the authPriv frame builder is designed as part of the shared helper vocabulary from the start.
+5. Helper-heavy test refactor (scope widened 2026-06-11 at user direction; absorbed step 4 on 2026-06-12): extract shared helpers across the whole test module — frame-construction helpers (including the authPriv frame builder, replacing build_authpriv_frame's 76 LoC / 7 args with named phases behind a parameter struct), a run_dispatch scaffolding helper collapsing the mib/ctx/process_snmpv3_request boilerplate, and common assertion helpers (USM counter checks, Report-varbind checks, response-decryption helpers for the 94-LoC authpriv round-trip test) — so each test body shrinks to roughly 6 lines or fewer. Constraints: every test keeps its own Verifies: REQ-xxxx annotation; each test's given/when/then intent must stay visible through precise helper naming (no opaque scenario parameterisation); helpers must not themselves trip the Large Method or Excess Arguments thresholds (use parameter structs/builders following the existing TestCtx pattern).
+6. Decision point: re-measure dispatch.rs with CodeScene after step 5. Test-module relocation to dispatch/tests.rs was considered and rejected (2026-06-12): the goal is aggregate codebase health, and relocation removes no smells — it only redistributes them to another file while breaking the project-wide convention of inline #[cfg(test)] modules. If the file is still below the 8.0 gate, decide with the user between (a) merging the surviving clone families more aggressively — e.g. one well-named test per family member sharing a single scenario-runner helper, balanced against the no-opaque-parameterisation constraint and per-test Verifies annotations — and (b) accepting the measured ceiling and adjusting the gate to it, documenting the remaining duplication as deliberate test readability.
 
-Scope revision (2026-06-11): the earlier decision to drop full test dedup (19 functions, 10 clone groups) is reversed at the user's direction. The user prefers a helper-heavy test style with ~6-line test bodies as their readable baseline, which removes the readability objection behind the f3af9cf revert; traceability is preserved by the per-test Verifies constraint above. Expected effect: dissolves most duplication clone groups, clears the test-code Large Method smells, and may merge the LCOM4=3 components via shared helpers acting as connective tissue. Known risks: clone detection may still match short tests invoking the same helper sequence in the same order, and pushing parameters into helpers can relocate the Excess Arguments smell — both are measured at step 6, not assumed away.
+Scope revision (2026-06-11): the earlier decision to drop full test dedup (19 functions, 10 clone groups) is reversed at the user's direction. The user prefers a helper-heavy test style with ~6-line test bodies as their readable baseline, which removes the readability objection behind the f3af9cf revert; traceability is preserved by the per-test Verifies constraint above. Expected effect: dissolves most duplication clone groups, clears the test-code Large Method smells, and may merge the LCOM4=3 components via shared helpers acting as connective tissue. Known risks: clone detection may still match short tests invoking the same helper sequence in the same order (the five counter_does_not_overflow tests and the four without_reportable_flag tests are the likely survivors), and pushing parameters into helpers can relocate the Excess Arguments smell — both are measured at step 6, not assumed away.
 
 Hard gate: dispatch.rs code_health_score >= 8.0 (up from 6.24 baseline, currently 6.48 after steps 1-3), subject to re-evaluation at the step-6 decision point. The business-case top-5% target (9.1) is a stretch goal, not a blocking criterion."""
+notes = ["Test-module relocation to dispatch/tests.rs is rejected (2026-06-12): the goal is aggregate codebase health — relocation removes no smells, only redistributes them, and breaks the project-wide inline #[cfg(test)] convention. Do not propose it again."]
+
+[[content.journal]]
+date = "2026-06-11"
+scope = "tests"
+content = "Widened step 5 from a thin run_dispatch scaffolding helper to a helper-heavy refactor of the whole test module targeting ~6-line test bodies, at the user's direction. This reverses the earlier decision to drop full test dedup: the user prefers helper-based tests as their readable baseline, removing the readability objection behind the f3af9cf revert. Per-test Verifies annotations and given/when/then intent via helper naming remain hard constraints; helpers must stay under Large Method and Excess Arguments thresholds. Effect on the score is measured at step 6."
 
 [[content.acceptance_criteria]]
 text = "Duplicated check_security_model / check_discovery_probe / check_engine_id collapsed into a shared parameterised check (no Code Duplication smell among them)"
@@ -86,16 +92,11 @@ status = "pending"
 category = "changed"
 
 [[content.acceptance_criteria]]
-text = "Step-6 decision point resolved with the user (test-module relocation vs gate adjustment) and the outcome recorded in this work item"
-status = "pending"
-category = "chore"
-
-[[content.acceptance_criteria]]
 text = "Test module refactored to shared helpers (frame construction, run_dispatch scaffolding, assertion helpers) with test bodies at roughly 6 lines or fewer; per-test Verifies annotations preserved and helpers stay under the Large Method and Excess Arguments thresholds"
 status = "pending"
 category = "changed"
 
-[[content.journal]]
-date = "2026-06-11"
-scope = "tests"
-content = "Widened step 5 from a thin run_dispatch scaffolding helper to a helper-heavy refactor of the whole test module targeting ~6-line test bodies, at the user's direction. This reverses the earlier decision to drop full test dedup: the user prefers helper-based tests as their readable baseline, removing the readability objection behind the f3af9cf revert. Per-test Verifies annotations and given/when/then intent via helper naming remain hard constraints; helpers must stay under Large Method and Excess Arguments thresholds. Effect on the score is measured at step 6."
+[[content.acceptance_criteria]]
+text = "Step-6 decision point resolved with the user (clone-family merge vs gate adjustment; test-module relocation rejected 2026-06-12) and the outcome recorded in this work item"
+status = "pending"
+category = "chore"
