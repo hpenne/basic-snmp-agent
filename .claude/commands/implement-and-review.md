@@ -9,7 +9,6 @@ Follow this loop (max 3 iterations). Skipping steps is STRICTLY PROHIBITED:
 2. Use the **reviewer** subagent (opus) to review the result. For new or untracked files, tell the reviewer which files to read. For changes to tracked files, pass the specific `git diff` command to run to get the changes.
 3. If the reviewer returns comments, **resume** the implementer (using its agent ID) and pass only the exact reviewer feedback, addressing all MUST FIX, SHOULD FIX, and SUGGESTION items per CLAUDE.md. Do NOT scope-limit based on whether the finding touches code outside the original diff.
 4. Stop when there is nothing left that needs fixing, or after 3 iterations.
-5. **Before committing:** Run `make pre-commit` and `make behave-test` and fix any failures before recording the commit.
 
 If you encounter a situation where a design decision is unclear or the right approach requires trade-offs between alternatives, ask the user before proceeding.
 
