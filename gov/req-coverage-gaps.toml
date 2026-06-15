@@ -252,3 +252,8 @@ rationale = "GETBULK response size bounding requires sending a request with a sp
 req     = "REQ-0134"
 missing = ["behave_test"]
 rationale = "Row-boundary truncation of GETBULK repeating sections requires the same msgMaxSize control as REQ-0133. Verified by unit tests that assert exact varbind counts at row boundaries."
+
+[[gap]]
+req     = "REQ-0135"
+missing = ["behave_test"]
+rationale = "privFlag/ScopedPduData mismatch requires crafting a packet where the msgFlags privFlag disagrees with the ScopedPduData choice, which net-snmp CLI tools cannot produce (they always generate consistent messages). Verified by unit tests with hand-crafted BER frames."

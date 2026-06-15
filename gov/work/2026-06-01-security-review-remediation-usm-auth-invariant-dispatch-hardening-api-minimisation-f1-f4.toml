@@ -64,7 +64,7 @@ category = "chore"
 
 [[content.acceptance_criteria]]
 text = "reject messages where the msgFlags privFlag and the ScopedPduData wire form disagree (privFlag set if and only if payload is encrypted) per RFC 3414 section 3.2"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
@@ -74,20 +74,20 @@ category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "use checked arithmetic for the total frame size in parse_ber_length so a 4-octet length cannot overflow usize on 32-bit targets"
-status = "pending"
+status = "done"
 category = "fixed"
 
 [[content.acceptance_criteria]]
 text = "add red/green regression tests covering each of F1-F4"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "cargo test, cargo clippy, cargo fmt, and govctl check all pass"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "document that SHA-256 + AES-256 derives a privacy key identical to the localised auth key (overlap inherent to USM derivation); recommend SHA-512 + AES-256 where AES-256 is desired. No algorithm rejected, interop unchanged"
-status = "pending"
+status = "done"
 category = "chore"

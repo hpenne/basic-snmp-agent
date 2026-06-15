@@ -172,6 +172,15 @@ impl fmt::Display for InvalidMsgFlags {
 
 impl std::error::Error for InvalidMsgFlags {}
 
+/// The `privFlag` bit in the `msgFlags` byte (RFC 3412 §7.3.2).
+///
+/// Set when the `ScopedPDU` is encrypted. Used both here (when decoding `msgFlags`
+/// into a [`SecurityLevel`]) and in `transport::dispatch` (when validating that the
+/// flag agrees with the wire form of the `ScopedPduData`). A single definition
+/// prevents the two sites from drifting.
+// Implements: REQ-0079, REQ-0135
+pub(crate) const MSG_FLAGS_PRIV_BIT: u8 = 0x02;
+
 /// Shared error message for the no-user / security-level invariant, used by all three
 /// error-type Display impls so the message text stays consistent across layers.
 // Implements: REQ-0077, REQ-0079

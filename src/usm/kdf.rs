@@ -57,6 +57,25 @@ impl std::error::Error for KdfError {}
 /// bytes are effectively used: the cyclic repetition produces at most one
 /// full or partial copy of the password within the stream length.
 ///
+/// # Key length note — SHA-256 + AES-256
+///
+/// When `protocol` is [`AuthProtocol::HmacSha256`], `localise_key` produces
+/// a 32-byte output (the SHA-256 digest length). AES-256 also requires a
+/// 32-byte key, so the derived privacy key would be identical to the
+/// localised authentication key — both are the full 32-byte hash output with
+/// no truncation. This overlap is a direct consequence of the RFC 3414
+/// password-to-key design: the derivation is keyed only by the passphrase
+/// and the engine ID, not by the intended algorithm.
+///
+/// For deployments where AES-256 privacy is required, prefer
+/// [`AuthProtocol::HmacSha512`]: SHA-512 produces a 64-byte output,
+/// so the 32-byte authentication key and the 32-byte privacy key are
+/// drawn from different halves of the digest and are cryptographically
+/// independent. No algorithm is rejected and interoperability with
+/// existing SHA-256 + AES-128 deployments is unaffected (the mandatory
+/// profile uses AES-128, which requires only 16 bytes and leaves the
+/// remainder of the SHA-256 digest unused).
+///
 /// # Errors
 /// Returns [`KdfError::EmptyPassword`] if `password` is empty.
 /// Returns [`KdfError::PasswordTooShort`] if `password` is shorter than 8

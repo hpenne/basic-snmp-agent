@@ -35,7 +35,7 @@ use log::{debug, trace};
 /// `#[doc(hidden)]` keeps it off the advertised API. Not a supported public entry point — do not widen.
 ///
 /// # Requirements
-/// Implements: REQ-0056, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0077, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0102, REQ-0103, REQ-0104, REQ-0107, REQ-0109, REQ-0115, REQ-0130
+/// Implements: REQ-0056, REQ-0058, REQ-0066, REQ-0068, REQ-0073, REQ-0077, REQ-0078, REQ-0079, REQ-0080, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0102, REQ-0103, REQ-0104, REQ-0107, REQ-0109, REQ-0115, REQ-0130, REQ-0135
 #[doc(hidden)]
 #[must_use]
 pub fn process_snmpv3_request(
@@ -63,6 +63,7 @@ fn run_validation_pipeline(
     check_message_envelope(&v3_msg, ctx)?;
     check_user_name(&v3_msg, ctx)?;
     check_security_level(&v3_msg, ctx)?;
+    check_priv_flag_agreement(&v3_msg)?;
     verify_authentication(&v3_msg, ctx)?;
     check_time_window(&v3_msg, ctx)?;
     check_context_name(&v3_msg)?;
@@ -196,6 +197,26 @@ fn check_security_level(
         ));
     }
     Ok(())
+}
+
+// REQ-0135: privFlag/wire-form consistency check — runs after security-level check and
+// before authentication, because it validates the envelope structure independently of
+// whether the message is authentic. A mismatch has no valid interpretation and MUST be
+// silently discarded with no Report PDU per RFC 3414 §3.2 step 7 (ScopedPduData form
+// must agree with the privFlag in msgFlags per RFC 3412 §7.3.2).
+// Implements: REQ-0135
+fn check_priv_flag_agreement(v3_msg: &crate::codec::V3InboundMessage<'_>) -> Result<(), Reject> {
+    let priv_flag_set = v3_msg.usm.security_flags & crate::usm::user::MSG_FLAGS_PRIV_BIT != 0;
+    let payload_is_encrypted =
+        matches!(v3_msg.scoped_data, crate::codec::V3ScopedData::Encrypted(_));
+    if priv_flag_set == payload_is_encrypted {
+        return Ok(());
+    }
+    debug!(
+        "privFlag ({priv_flag_set}) disagrees with ScopedPduData wire form \
+         (encrypted={payload_is_encrypted}), discarding"
+    );
+    Err(Reject::Discard)
 }
 
 // REQ-0100, REQ-0102: HMAC verification for authenticated messages.
@@ -2128,6 +2149,240 @@ mod tests {
             .expect("security_model=3 must appear as the second 02 01 03 in the frame");
         frame[pos..pos + 3].copy_from_slice(security_model_patched);
         frame
+    }
+
+    // ── privFlag vs ScopedPduData agreement (REQ-0135) ──────────────────────
+
+    // Build a noAuthNoPriv frame with the given flags byte and an EncryptedPdu payload.
+    // This produces a structurally inconsistent message where privFlag is absent in flags
+    // but the wire form is Encrypted, for testing mismatch detection.
+    fn build_frame_with_priv_flag_clear_but_encrypted_payload() -> Vec<u8> {
+        use rasn_snmp::v3::{
+            HeaderData, Message as V3Message, ScopedPduData, USMSecurityParameters,
+        };
+
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: test_engine_id().to_vec().into(),
+            authoritative_engine_boots: 1.into(),
+            authoritative_engine_time: 0.into(),
+            user_name: b"alice".to_vec().into(),
+            authentication_parameters: rasn::types::OctetString::from(vec![]),
+            privacy_parameters: rasn::types::OctetString::from(vec![0x01_u8; 8]),
+        };
+        // flags=0x04: reportableFlag only → noAuthNoPriv, but payload is EncryptedPdu
+        rasn::ber::encode(&V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 7.into(),
+                max_size: 0xFFFF.into(),
+                flags: rasn::types::OctetString::from(vec![0x04_u8]),
+                security_model: 3.into(),
+            },
+            security_parameters: rasn::ber::encode(&usm_params).unwrap().into(),
+            scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(
+                b"fake-encrypted-content".to_vec(),
+            )),
+        })
+        .unwrap()
+    }
+
+    // Build a frame with flags=0x07 (authPriv) but a CleartextPdu payload.
+    // For this to reach the priv_flag_agreement check, the user must be authPriv so the
+    // security_level check passes. No valid HMAC is needed because the priv_flag check
+    // runs before authentication in the pipeline.
+    fn build_frame_with_priv_flag_set_but_cleartext_payload(engine_id: &[u8]) -> Vec<u8> {
+        use rasn_snmp::v3::{
+            HeaderData, Message as V3Message, ScopedPdu, ScopedPduData, USMSecurityParameters,
+        };
+        use std::borrow::Cow;
+
+        let rasn_oid =
+            rasn::types::ObjectIdentifier::new_unchecked(Cow::Owned(test_oid_arcs().to_vec()));
+        let scoped_pdu = ScopedPdu {
+            engine_id: engine_id.to_vec().into(),
+            name: vec![].into(),
+            data: rasn_snmp::v2::Pdus::GetRequest(rasn_snmp::v2::GetRequest(rasn_snmp::v2::Pdu {
+                request_id: 1,
+                error_status: 0,
+                error_index: 0,
+                variable_bindings: vec![rasn_snmp::v2::VarBind {
+                    name: rasn_oid,
+                    value: rasn_snmp::v2::VarBindValue::Unspecified,
+                }],
+            })),
+        };
+        let usm_params = USMSecurityParameters {
+            authoritative_engine_id: engine_id.to_vec().into(),
+            authoritative_engine_boots: 1.into(),
+            authoritative_engine_time: 0.into(),
+            user_name: b"alice".to_vec().into(),
+            authentication_parameters: rasn::types::OctetString::from(vec![]),
+            privacy_parameters: rasn::types::OctetString::from(vec![]),
+        };
+        // flags=0x07: authPriv + reportable, but payload is CleartextPdu
+        rasn::ber::encode(&V3Message {
+            version: 3.into(),
+            global_data: HeaderData {
+                message_id: 8.into(),
+                max_size: 0xFFFF.into(),
+                flags: rasn::types::OctetString::from(vec![0x07_u8]),
+                security_model: 3.into(),
+            },
+            security_parameters: rasn::ber::encode(&usm_params).unwrap().into(),
+            scoped_data: ScopedPduData::CleartextPdu(scoped_pdu),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn given_priv_flag_set_and_encrypted_payload_when_process_then_proceeds_to_next_check() {
+        // Verifies: REQ-0135 — privFlag set + EncryptedPdu is consistent; the priv_flag
+        // agreement check passes and the pipeline continues all the way to a successful
+        // decrypted GetResponse. If check_priv_flag_agreement wrongly discarded consistent
+        // authPriv messages, no response would be returned.
+        let mib = crate::mib::Store::new();
+        let auth_key_bytes = [0x42_u8; 32];
+        let alice = test_authpriv_user("alice", &auth_key_bytes);
+        // A well-formed authPriv frame: flags=0x07, EncryptedPdu, correct HMAC and priv key.
+        let frame = AuthPrivFrameParams::new(&auth_key_bytes)
+            .with_boots_time(1, 0)
+            .build();
+        let mut tc = TestCtx::new().with_boots_time(1, 0);
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("consistent authPriv frame must produce a decrypted GetResponse");
+        assert_eq!(
+            tc.decryption_errors.get(),
+            0,
+            "no decryption errors for a properly formed authPriv frame"
+        );
+        // Decrypt the response to confirm the pipeline reached the PDU dispatch step.
+        let scoped_pdu = decrypt_and_verify_authpriv_response(
+            &response_bytes,
+            &AuthPrivResponseParams {
+                auth_key_bytes: &auth_key_bytes,
+                priv_key_bytes: &auth_key_bytes[..16],
+                expected_boots: 1,
+                expected_time: 0,
+            },
+        );
+        let rasn_snmp::v2::Pdus::Response(_) = scoped_pdu.data else {
+            panic!("decrypted ScopedPdu must contain a GetResponse");
+        };
+    }
+
+    #[test]
+    fn given_priv_flag_clear_and_plaintext_payload_when_process_then_proceeds_to_next_check() {
+        // Verifies: REQ-0135 — privFlag clear + Plaintext is consistent; pipeline continues
+        let mib = crate::mib::Store::new();
+        let alice = test_no_auth_user("alice");
+        let frame = snmpv3_frames::encode_get_request_with_user(
+            test_engine_id(),
+            b"alice",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+        );
+        let mut tc = TestCtx::new();
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("consistent noAuthNoPriv frame must produce a response");
+        assert_get_response(&response_bytes);
+    }
+
+    #[test]
+    fn given_priv_flag_set_but_plaintext_payload_when_process_then_discarded() {
+        // Verifies: REQ-0135 — privFlag set but ScopedPduData is Plaintext: discarded with
+        // no Report PDU and no USM counter incremented (Reject::Discard, not Reject::Report).
+        let mib = crate::mib::Store::new();
+        let alice = test_authpriv_user("alice", &[0x42_u8; 32]);
+        // flags=0x07 (authPriv) but the ScopedPduData is CleartextPdu — inconsistent
+        let frame = build_frame_with_priv_flag_set_but_cleartext_payload(test_engine_id());
+        let mut tc = TestCtx::new();
+        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
+        assert!(
+            result.is_none(),
+            "privFlag/wire-form mismatch (priv set, cleartext) must be silently discarded"
+        );
+        // RFC 3414 §3.2: mismatch produces a silent discard with no Report and no counter change.
+        assert_eq!(
+            tc.unknown_engine_ids.get(),
+            0,
+            "unknown_engine_ids must be zero"
+        );
+        assert_eq!(
+            tc.unknown_user_names.get(),
+            0,
+            "unknown_user_names must be zero"
+        );
+        assert_eq!(
+            tc.unsupported_sec_levels.get(),
+            0,
+            "unsupported_sec_levels must be zero"
+        );
+        assert_eq!(tc.wrong_digests.get(), 0, "wrong_digests must be zero");
+        assert_eq!(
+            tc.not_in_time_windows.get(),
+            0,
+            "not_in_time_windows must be zero"
+        );
+        assert_eq!(
+            tc.decryption_errors.get(),
+            0,
+            "decryption_errors must be zero"
+        );
+        assert_eq!(
+            tc.unknown_security_models.get(),
+            0,
+            "unknown_security_models must be zero"
+        );
+    }
+
+    #[test]
+    fn given_priv_flag_clear_but_encrypted_payload_when_process_then_discarded() {
+        // Verifies: REQ-0135 — privFlag clear but ScopedPduData is EncryptedPdu: discarded with
+        // no Report PDU and no USM counter incremented (Reject::Discard, not Reject::Report).
+        let mib = crate::mib::Store::new();
+        let alice = test_no_auth_user("alice");
+        // flags=0x04 (noAuthNoPriv + reportable) but the ScopedPduData is EncryptedPdu — inconsistent
+        let frame = build_frame_with_priv_flag_clear_but_encrypted_payload();
+        let mut tc = TestCtx::new();
+        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
+        assert!(
+            result.is_none(),
+            "privFlag/wire-form mismatch (priv clear, encrypted) must be silently discarded"
+        );
+        // RFC 3414 §3.2: mismatch produces a silent discard with no Report and no counter change.
+        assert_eq!(
+            tc.unknown_engine_ids.get(),
+            0,
+            "unknown_engine_ids must be zero"
+        );
+        assert_eq!(
+            tc.unknown_user_names.get(),
+            0,
+            "unknown_user_names must be zero"
+        );
+        assert_eq!(
+            tc.unsupported_sec_levels.get(),
+            0,
+            "unsupported_sec_levels must be zero"
+        );
+        assert_eq!(tc.wrong_digests.get(), 0, "wrong_digests must be zero");
+        assert_eq!(
+            tc.not_in_time_windows.get(),
+            0,
+            "not_in_time_windows must be zero"
+        );
+        assert_eq!(
+            tc.decryption_errors.get(),
+            0,
+            "decryption_errors must be zero"
+        );
+        assert_eq!(
+            tc.unknown_security_models.get(),
+            0,
+            "unknown_security_models must be zero"
+        );
     }
 
     // ── GetBulk msgMaxSize plumbing (REQ-0133) ───────────────────────────────

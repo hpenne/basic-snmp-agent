@@ -650,8 +650,13 @@ impl EventLoop {
                 }
             };
 
-            let total_frame_bytes = 1 + length_field_bytes + content_length;
             // Implements: REQ-0117
+            let Some(total_frame_bytes) = total_frame_size(length_field_bytes, content_length)
+            else {
+                debug!("frame size overflows usize on token {token:?}, closing");
+                closed = true;
+                break;
+            };
             if total_frame_bytes > MAX_FRAME_SIZE {
                 // Reject oversized frames to prevent memory exhaustion.
                 debug!("oversized frame ({total_frame_bytes} bytes) on token {token:?}, closing");
@@ -775,6 +780,23 @@ impl EventLoop {
             }
         }
     }
+}
+
+/// Compute the total byte count of a BER frame: 1 (tag) + `length_field_bytes` + `content_length`.
+///
+/// Returns `None` when the addition overflows `usize`, which can occur when
+/// `content_length` is near `usize::MAX` due to a crafted 4-octet long-form
+/// BER length field. Callers should treat overflow the same as an oversized frame
+/// and close the connection.
+///
+/// # Requirements
+/// Implements: REQ-0117
+pub(crate) fn total_frame_size(length_field_bytes: usize, content_length: usize) -> Option<usize> {
+    // 1 accounts for the BER tag byte that precedes the length field.
+    // checked_add prevents a wrapped total from bypassing the MAX_FRAME_SIZE guard.
+    1_usize
+        .checked_add(length_field_bytes)
+        .and_then(|partial| partial.checked_add(content_length))
 }
 
 /// Parse a BER length field starting at `buf[0]`.
@@ -1234,6 +1256,29 @@ mod tests {
         assert_eq!(
             parse_ber_length(&[0x85, 0, 0, 0, 0, 1]),
             Err(BerLengthError)
+        );
+    }
+
+    #[test]
+    fn given_content_length_near_usize_max_when_total_frame_size_computed_then_overflow_detected() {
+        // Verifies: REQ-0117 — total_frame_size returns None to prevent a wrapped total
+        // from bypassing the MAX_FRAME_SIZE guard.
+        //
+        // On 64-bit hosts, parse_ber_length can return at most (0xFFFF_FFFF, 5) from
+        // a 4-octet long-form field. 1 + 5 + 0xFFFF_FFFF = 0x1_0000_0005, which fits
+        // in a 64-bit usize and is larger than MAX_FRAME_SIZE (0xFFFF), so the normal
+        // >MAX_FRAME_SIZE path catches it.
+        //
+        // To exercise the overflow branch on 64-bit, use values that sum past usize::MAX:
+        // content_length = usize::MAX - 1, length_field_bytes = 1.
+        // Without checked_add, (1 + 1 + (usize::MAX - 1)) wraps to 0 and slips past the
+        // MAX_FRAME_SIZE check. With checked_add, total_frame_size returns None.
+        let content_length = usize::MAX - 1;
+        let length_field_bytes = 1_usize;
+        let total = total_frame_size(length_field_bytes, content_length);
+        assert!(
+            total.is_none(),
+            "total_frame_size must return None when 1 + {length_field_bytes} + (usize::MAX - 1) overflows"
         );
     }
 
