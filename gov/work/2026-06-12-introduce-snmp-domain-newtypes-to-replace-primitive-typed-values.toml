@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-06-12-001"
 title = "Introduce SNMP domain newtypes to replace primitive-typed values"
-status = "active"
+status = "done"
 created = "2026-06-12"
 started = "2026-06-12"
+completed = "2026-06-15"
 
 [content]
 description = """
@@ -60,25 +61,25 @@ category = "changed"
 
 [[content.acceptance_criteria]]
 text = "No behavioural change — unit, doc, and behave tests pass unchanged in intent, coverage preserved"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "Requirement traceability annotations preserved on all touched items; new newtypes annotated where they implement requirements"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "New public newtypes documented with examples; validation error types implement std::error::Error"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "make pre-commit passes"
-status = "pending"
+status = "done"
 category = "chore"
 
 [[content.acceptance_criteria]]
 text = "govctl check passes"
-status = "pending"
+status = "done"
 category = "chore"
