@@ -3,11 +3,13 @@
 [govctl]
 id = "WI-2026-04-28-002"
 title = "Introduce params struct for encode_v3_response"
-status = "queue"
+status = "cancelled"
 created = "2026-04-28"
+completed = "2026-06-15"
 
 [content]
 description = "Refactor encode_v3_response (codec::pdu::encode) to accept a params struct instead of nine positional arguments. Improves readability at call sites and makes future parameter additions non-breaking."
+notes = ["Cancelled as failed. The params-struct refactor (V3ResponseParams + shared V3Envelope) removed the clippy too_many_arguments smells and improved call-site readability, but DEGRADED CodeScene Code Health on encode.rs (8.23 -> 7.83; quality gate failed): nesting the 8 envelope fields into a struct moved their names out of the signatures and into encode_v3_envelope's body as a destructure, tripping the Large Method threshold (86 > 70 lines) and introducing duplication findings. All code reverted to commit 88fae27. Reattempt once CodeScene fixes LCOM4 cohesion measurements."]
 
 [[content.acceptance_criteria]]
 text = "encode_v3_response takes a single params struct instead of positional arguments"
