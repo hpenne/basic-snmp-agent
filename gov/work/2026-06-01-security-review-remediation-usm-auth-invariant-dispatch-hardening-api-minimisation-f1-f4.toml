@@ -3,9 +3,10 @@
 [govctl]
 id = "WI-2026-06-01-001"
 title = "Security review remediation: USM auth invariant, dispatch hardening, API minimisation (F1-F4)"
-status = "active"
+status = "done"
 created = "2026-06-01"
 started = "2026-06-01"
+completed = "2026-06-15"
 
 [content]
 description = """
