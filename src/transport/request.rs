@@ -6,8 +6,8 @@
 //! test without spinning up a socket.
 
 use crate::codec::{
-    ErrorStatus, GetBulkRequest, GetNextRequest, GetRequest, GetResponse, Oid, SetRequest, Value,
-    Varbind, VarbindValue,
+    ErrorStatus, GetBulkRequest, GetNextRequest, GetRequest, GetResponse, Oid, RequestId,
+    SetRequest, Value, Varbind, VarbindValue,
 };
 use crate::mib::Store;
 use std::sync::LazyLock;
@@ -39,10 +39,10 @@ static SNMP_TRAP_OID_OID: LazyLock<Oid> =
 /// # Examples
 ///
 /// ```
-/// use basic_snmp_agent::TrapPdu;
+/// use basic_snmp_agent::{RequestId, TrapPdu};
 ///
 /// let pdu = TrapPdu {
-///     request_id: 1,
+///     request_id: RequestId::from(1),
 ///     trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
 ///     varbinds: vec![],
 /// };
@@ -50,7 +50,7 @@ static SNMP_TRAP_OID_OID: LazyLock<Oid> =
 #[derive(Clone, Debug)]
 pub struct TrapPdu {
     /// Request identifier for correlating notifications.
-    pub request_id: i32,
+    pub request_id: RequestId,
     /// The trap OID (`snmpTrapOID.0` value), identifying the notification type.
     pub trap_oid: Oid,
     /// Additional varbinds describing the trap payload.
@@ -383,7 +383,7 @@ mod tests {
         // Verifies: REQ-0021, REQ-0022, REQ-0066
         let store = store_with(&[("1.3.6.1.2.1.1.1.0", Value::OctetString(b"agent".to_vec()))]);
         let req = GetRequest {
-            request_id: 42,
+            request_id: RequestId::from(42),
             varbinds: vec![Varbind {
                 oid: oid("1.3.6.1.2.1.1.1.0"),
                 value: VarbindValue::Unspecified,
@@ -392,7 +392,7 @@ mod tests {
 
         let resp = handle_get(&req, &store);
 
-        assert_eq!(resp.request_id, 42);
+        assert_eq!(resp.request_id, RequestId::from(42));
         assert_eq!(resp.error_status, ErrorStatus::NoError);
         assert_eq!(resp.varbinds.len(), 1);
         assert_eq!(
@@ -406,7 +406,7 @@ mod tests {
         // Verifies: REQ-0023
         let store = Store::new();
         let req = GetRequest {
-            request_id: 1,
+            request_id: RequestId::from(1),
             varbinds: vec![Varbind {
                 oid: oid("1.3.6.1.2.1.1.1.0"),
                 value: VarbindValue::Unspecified,
@@ -423,7 +423,7 @@ mod tests {
         // Verifies: REQ-0021, REQ-0022, REQ-0023
         let store = store_with(&[("1.3.6.1.2.1.1.1.0", Value::Integer32(1))]);
         let req = GetRequest {
-            request_id: 5,
+            request_id: RequestId::from(5),
             varbinds: vec![
                 Varbind {
                     oid: oid("1.3.6.1.2.1.1.1.0"),
@@ -455,7 +455,7 @@ mod tests {
             ("1.3.6.1.2.1.1.2.0", Value::Integer32(2)),
         ]);
         let req = GetNextRequest {
-            request_id: 7,
+            request_id: RequestId::from(7),
             varbinds: vec![Varbind {
                 oid: oid("1.3.6.1.2.1.1.1.0"),
                 value: VarbindValue::Unspecified,
@@ -464,7 +464,7 @@ mod tests {
 
         let resp = handle_get_next(&req, &store);
 
-        assert_eq!(resp.request_id, 7);
+        assert_eq!(resp.request_id, RequestId::from(7));
         assert_eq!(resp.varbinds[0].oid, oid("1.3.6.1.2.1.1.2.0"));
         assert_eq!(
             resp.varbinds[0].value,
@@ -477,7 +477,7 @@ mod tests {
         // Verifies: REQ-0024, REQ-0025
         let store = store_with(&[("1.3.6.1.2.1.1.1.0", Value::Integer32(1))]);
         let req = GetNextRequest {
-            request_id: 3,
+            request_id: RequestId::from(3),
             varbinds: vec![Varbind {
                 oid: oid("1.3.6.1.2.1.1.1.0"),
                 value: VarbindValue::Unspecified,
@@ -500,7 +500,7 @@ mod tests {
             ("1.3.6.1.2.1.1.2.0", Value::Integer32(2)),
         ]);
         let req = GetBulkRequest {
-            request_id: 10,
+            request_id: RequestId::from(10),
             non_repeaters: 1,
             max_repetitions: 10,
             varbinds: vec![Varbind {
@@ -525,7 +525,7 @@ mod tests {
             ("1.3.6.1.2.1.1.3.0", Value::Integer32(3)),
         ]);
         let req = GetBulkRequest {
-            request_id: 11,
+            request_id: RequestId::from(11),
             non_repeaters: 0,
             max_repetitions: 3,
             varbinds: vec![Varbind {
@@ -553,7 +553,7 @@ mod tests {
             );
         }
         let req = GetBulkRequest {
-            request_id: 12,
+            request_id: RequestId::from(12),
             non_repeaters: 0,
             max_repetitions: 200,
             varbinds: vec![Varbind {
@@ -573,7 +573,7 @@ mod tests {
         // Verifies: REQ-0024, REQ-0026
         let store = store_with(&[("1.3.6.1.2.1.1.1.0", Value::Integer32(1))]);
         let req = GetBulkRequest {
-            request_id: 13,
+            request_id: RequestId::from(13),
             non_repeaters: 0,
             max_repetitions: 10,
             varbinds: vec![Varbind {
@@ -595,7 +595,7 @@ mod tests {
         // Verifies: REQ-0025
         let store = Store::new();
         let req = GetBulkRequest {
-            request_id: 1,
+            request_id: RequestId::from(1),
             non_repeaters: 0,
             max_repetitions: 3,
             varbinds: vec![Varbind {
@@ -616,7 +616,7 @@ mod tests {
         // Verifies: REQ-0027
         let store = store_with(&[("1.3.6.1.2.1.1.1.0", Value::Integer32(1))]);
         let req = GetBulkRequest {
-            request_id: 2,
+            request_id: RequestId::from(2),
             non_repeaters: 1,
             max_repetitions: 0,
             varbinds: vec![
@@ -644,7 +644,7 @@ mod tests {
         // .cargo/mutants.toml for the suppression rationale.
         let store = store_with(&[("1.3.6.1.2.1.1.1.0", Value::Integer32(1))]);
         let req = GetBulkRequest {
-            request_id: 3,
+            request_id: RequestId::from(3),
             non_repeaters: 0,
             max_repetitions: 0,
             varbinds: vec![Varbind {
@@ -669,7 +669,7 @@ mod tests {
     fn given_set_request_when_handled_then_returns_not_writable() {
         // Verifies: REQ-0032
         let req = SetRequest {
-            request_id: 99,
+            request_id: RequestId::from(99),
             varbinds: vec![Varbind {
                 oid: oid("1.3.6.1.2.1.1.1.0"),
                 value: VarbindValue::Value(Value::Integer32(1)),
@@ -678,7 +678,7 @@ mod tests {
 
         let resp = handle_set(&req);
 
-        assert_eq!(resp.request_id, 99);
+        assert_eq!(resp.request_id, RequestId::from(99));
         assert_eq!(resp.error_status, ErrorStatus::NotWritable);
         assert_eq!(resp.error_index, 1);
     }
@@ -689,7 +689,7 @@ mod tests {
     fn given_api_trap_pdu_when_built_then_prepends_sys_up_time_and_trap_oid() {
         // Verifies: REQ-0037, REQ-0038, REQ-0041, REQ-0046
         let api_pdu = TrapPdu {
-            request_id: 5,
+            request_id: RequestId::from(5),
             trap_oid: oid("1.3.6.1.6.3.1.1.5.1"),
             varbinds: vec![Varbind {
                 oid: oid("1.3.6.1.2.1.1.5.0"),
@@ -700,7 +700,7 @@ mod tests {
 
         let wire = build_wire_trap(&api_pdu, start);
 
-        assert_eq!(wire.request_id, 5);
+        assert_eq!(wire.request_id, RequestId::from(5));
         // First varbind must be sysUpTime.0.
         assert_eq!(wire.varbinds[0].oid, *SYS_UP_TIME_OID);
         // Second varbind must be snmpTrapOID.0 carrying the trap OID.
@@ -724,7 +724,7 @@ mod tests {
         // a field, every struct literal would fail to compile (missing field),
         // making the omission intentional and always visible.
         let _pdu = TrapPdu {
-            request_id: 1,
+            request_id: RequestId::from(1),
             trap_oid: oid("1.3.6.1.6.3.1.1.5.1"),
             varbinds: vec![],
         };
@@ -737,7 +737,7 @@ mod tests {
         // Verifies: REQ-0037
         let start = Instant::now().checked_sub(Duration::from_secs(5)).unwrap();
         let api_pdu = TrapPdu {
-            request_id: 1,
+            request_id: RequestId::from(1),
             trap_oid: oid("1.3.6.1.6.3.1.1.5.1"),
             varbinds: vec![],
         };
@@ -810,7 +810,7 @@ mod tests {
             );
         }
         let req = GetBulkRequest {
-            request_id: 1,
+            request_id: RequestId::from(1),
             non_repeaters: 0,
             max_repetitions: 10,
             varbinds: vec![Varbind {
@@ -849,7 +849,7 @@ mod tests {
             Value::OctetString(vec![0xDD; 1000]),
         );
         let req = GetBulkRequest {
-            request_id: 2,
+            request_id: RequestId::from(2),
             non_repeaters: 2,
             max_repetitions: 10,
             varbinds: vec![
@@ -900,7 +900,7 @@ mod tests {
             );
         }
         let req = GetBulkRequest {
-            request_id: 3,
+            request_id: RequestId::from(3),
             non_repeaters: 0,
             max_repetitions: 20,
             varbinds: vec![
@@ -941,7 +941,7 @@ mod tests {
             ("1.3.6.1.2.1.1.2.0", Value::Integer32(2)),
         ]);
         let req = GetBulkRequest {
-            request_id: 5,
+            request_id: RequestId::from(5),
             non_repeaters: 1,
             max_repetitions: 10,
             varbinds: vec![
@@ -1032,7 +1032,7 @@ mod tests {
             ("1.3.6.1.2.1.1.3.0", Value::Integer32(3)),
         ]);
         let req = GetBulkRequest {
-            request_id: 4,
+            request_id: RequestId::from(4),
             non_repeaters: 0,
             max_repetitions: 3,
             varbinds: vec![Varbind {

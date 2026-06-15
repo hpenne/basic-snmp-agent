@@ -30,8 +30,8 @@ use basic_snmp_agent::usm::keys::SecretKey;
 use basic_snmp_agent::usm::privacy::PrivProtocol;
 use basic_snmp_agent::usm::user::UserName;
 use basic_snmp_agent::{
-    AgentBuilder, AuthNoPrivUser, AuthPrivUser, Oid, SecurityConfig, TrapPdu, Value, Varbind,
-    VarbindValue,
+    AgentBuilder, AuthNoPrivUser, AuthPrivUser, Oid, RequestId, SecurityConfig, TrapPdu, Value,
+    Varbind, VarbindValue,
 };
 
 // ── NullStore ─────────────────────────────────────────────────────────────────
@@ -131,7 +131,7 @@ fn main() {
             .collect();
 
         let pdu = TrapPdu {
-            request_id: def.request_id,
+            request_id: RequestId::from(def.request_id),
             trap_oid,
             varbinds,
         };

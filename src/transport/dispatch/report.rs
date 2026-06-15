@@ -93,7 +93,7 @@ pub(super) fn emit_report_response(
     select_counter: impl for<'a> FnOnce(&'a mut DispatchInputs<'_>) -> &'a mut UsmStatsCounter,
     counter_oid: &Oid,
     description: &str,
-    msg_id: i32,
+    msg_id: crate::codec::MessageId,
     security_flags: u8,
 ) -> Reject {
     // Scope the closure call so the mutable borrow of ctx.inputs ends before

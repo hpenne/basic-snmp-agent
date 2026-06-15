@@ -16,7 +16,7 @@
 //! # Quick start
 //!
 //! ```no_run
-//! use basic_snmp_agent::{AgentBuilder, SecurityConfig, TrapPdu};
+//! use basic_snmp_agent::{AgentBuilder, RequestId, SecurityConfig, TrapPdu};
 //!
 //! let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
 //!     .listen_addr("0.0.0.0:10161".parse().unwrap())
@@ -24,7 +24,7 @@
 //!     .unwrap();
 //!
 //! let pdu = TrapPdu {
-//!     request_id: 1,
+//!     request_id: RequestId::from(1),
 //!     trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
 //!     varbinds: vec![],
 //! };
@@ -46,7 +46,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-pub use crate::codec::{Oid, Value, Varbind, VarbindValue};
+pub use crate::codec::{Oid, RequestId, Value, Varbind, VarbindValue};
 pub use crate::transport::event_loop::ConnectionTimeoutConfig;
 pub use crate::transport::{TrapPdu, TrapResult};
 pub use crate::usm::user::{AuthNoPrivUser, AuthPrivUser};
@@ -105,11 +105,11 @@ impl Drop for AgentInner {
 /// # Examples
 ///
 /// ```no_run
-/// use basic_snmp_agent::{AgentBuilder, SecurityConfig, TrapPdu};
+/// use basic_snmp_agent::{AgentBuilder, RequestId, SecurityConfig, TrapPdu};
 ///
 /// let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv).build().unwrap();
 /// let pdu = TrapPdu {
-///     request_id: 1,
+///     request_id: RequestId::from(1),
 ///     trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
 ///     varbinds: vec![],
 /// };
@@ -148,11 +148,11 @@ impl Agent {
     /// # Examples
     ///
     /// ```no_run
-    /// use basic_snmp_agent::{AgentBuilder, SecurityConfig, TrapPdu};
+    /// use basic_snmp_agent::{AgentBuilder, RequestId, SecurityConfig, TrapPdu};
     ///
     /// let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv).build().unwrap();
     /// let pdu = TrapPdu {
-    ///     request_id: 1,
+    ///     request_id: RequestId::from(1),
     ///     trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
     ///     varbinds: vec![],
     /// };
@@ -547,7 +547,7 @@ mod tests {
         // Verifies: REQ-0043
         let agent = test_agent();
         let pdu = TrapPdu {
-            request_id: 1,
+            request_id: RequestId::from(1),
             trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
             varbinds: vec![],
         };
@@ -564,7 +564,7 @@ mod tests {
         let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
         let dest = receiver.local_addr().unwrap();
         let pdu = TrapPdu {
-            request_id: 1,
+            request_id: RequestId::from(1),
             trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
             varbinds: vec![Varbind {
                 oid: "1.3.6.1.2.1.1.1.0".parse().unwrap(),
@@ -897,7 +897,7 @@ mod tests {
         let dest = receiver.local_addr().unwrap();
 
         let pdu = TrapPdu {
-            request_id: 1,
+            request_id: RequestId::from(1),
             trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
             varbinds: vec![],
         };
@@ -962,7 +962,7 @@ mod tests {
         let dest = receiver.local_addr().unwrap();
 
         let pdu = TrapPdu {
-            request_id: 2,
+            request_id: RequestId::from(2),
             trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
             varbinds: vec![],
         };

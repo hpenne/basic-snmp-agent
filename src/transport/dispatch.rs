@@ -281,7 +281,7 @@ fn check_context_name(v3_msg: &crate::codec::V3InboundMessage<'_>) -> Result<(),
 // Message-level fields needed for response encoding.
 #[derive(Debug)]
 struct ResponseEnvelope<'a> {
-    msg_id: i32,
+    msg_id: crate::codec::MessageId,
     max_size: i32,
     user_name: &'a [u8],
     // May come from the outer message (cleartext) or the decrypted ScopedPDU (authPriv).
@@ -376,7 +376,7 @@ fn verify_hmac(
 // Bundles USM fields needed for decryption and error reporting.
 #[derive(Debug)]
 struct DecryptionParams<'a> {
-    msg_id: i32,
+    msg_id: crate::codec::MessageId,
     security_flags: u8,
     priv_params: &'a [u8],
     auth_engine_boots: EngineBoots,

@@ -45,7 +45,7 @@ category = "changed"
 
 [[content.acceptance_criteria]]
 text = "RequestId and MessageId newtypes replace bare i32 in PDU types, dispatch, and encode paths; MessageId construction enforces non-negativity"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]

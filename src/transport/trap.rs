@@ -13,9 +13,10 @@
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::AtomicI32;
 use std::time::Instant;
 
+use crate::codec::MessageId;
 use crate::transport::request::{TrapPdu, build_wire_trap};
 use crate::usm::engine_time::EngineBoots;
 
@@ -27,13 +28,6 @@ const TRAP_MTU_BYTES: usize = 1500;
 // monotonically increasing IDs without requiring synchronisation beyond
 // a relaxed atomic increment.
 static TRAP_MSG_ID_COUNTER: AtomicI32 = AtomicI32::new(1);
-
-// Implements: REQ-0105
-fn next_trap_msg_id() -> i32 {
-    // Clear the sign bit so the counter wraps from i32::MAX back to 0
-    // rather than producing negative values that violate RFC 3412 §6.2.
-    TRAP_MSG_ID_COUNTER.fetch_add(1, Ordering::Relaxed) & i32::MAX
-}
 
 /// Per-destination outcome of a single trap send attempt.
 ///
@@ -166,7 +160,7 @@ impl TrapSender {
         let trap_auth = usm_user.auth_protocol().zip(usm_user.auth_key());
         let trap_priv = usm_user.priv_protocol().zip(usm_user.priv_key());
         crate::codec::encode_v3_trap(
-            next_trap_msg_id(),
+            MessageId::next_sequential(&TRAP_MSG_ID_COUNTER),
             &self.engine_id,
             usm_user.name().as_bytes(),
             b"",
@@ -196,7 +190,7 @@ fn encode_error_for_all(destinations: &[SocketAddr], message: &str) -> Vec<TrapR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::{Value, Varbind, VarbindValue};
+    use crate::codec::{RequestId, Value, Varbind, VarbindValue};
 
     fn trap_oid() -> crate::codec::Oid {
         "1.3.6.1.6.3.1.1.5.1".parse().unwrap()
@@ -204,7 +198,7 @@ mod tests {
 
     fn minimal_pdu() -> TrapPdu {
         TrapPdu {
-            request_id: 1,
+            request_id: RequestId::from(1),
             trap_oid: trap_oid(),
             varbinds: vec![],
         }
@@ -299,7 +293,7 @@ mod tests {
             .collect();
 
         let pdu = TrapPdu {
-            request_id: 2,
+            request_id: RequestId::from(2),
             trap_oid: trap_oid(),
             varbinds: large_varbinds,
         };
@@ -429,7 +423,7 @@ mod tests {
         let varbind_oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
 
         let candidate_pdu = TrapPdu {
-            request_id: 42,
+            request_id: RequestId::from(42),
             trap_oid: trap_oid(),
             varbinds: vec![Varbind {
                 oid: varbind_oid.clone(),
@@ -452,7 +446,7 @@ mod tests {
         let final_payload_size = candidate_payload_size + delta;
 
         let exact_mtu_pdu = TrapPdu {
-            request_id: 42,
+            request_id: RequestId::from(42),
             trap_oid: trap_oid(),
             varbinds: vec![Varbind {
                 oid: varbind_oid,
@@ -724,16 +718,22 @@ mod tests {
     }
 
     #[test]
-    fn given_counter_near_max_when_next_trap_msg_id_then_stays_non_negative() {
+    fn given_counter_near_max_when_next_sequential_then_stays_non_negative() {
         // Verifies: RFC 3412 §6.2
-        // Set the counter to i32::MAX - 1, then call next_trap_msg_id() several times
-        // and verify all returned values are non-negative.
-        TRAP_MSG_ID_COUNTER.store(i32::MAX - 1, Ordering::Relaxed);
-        for _ in 0..5 {
-            let msg_id = next_trap_msg_id();
-            assert!(msg_id >= 0, "msgID must never be negative, got {msg_id}");
-        }
-        // Reset counter to avoid affecting other tests
-        TRAP_MSG_ID_COUNTER.store(1, Ordering::Relaxed);
+        // Use a local counter to avoid racing with TRAP_MSG_ID_COUNTER used by
+        // other concurrent tests. The test exercises MessageId::next_sequential,
+        // which accepts any &AtomicI32.
+        let counter = AtomicI32::new(i32::MAX - 1);
+        assert_eq!(
+            MessageId::next_sequential(&counter),
+            MessageId::from(i32::MAX - 1)
+        );
+        assert_eq!(
+            MessageId::next_sequential(&counter),
+            MessageId::from(i32::MAX)
+        );
+        assert_eq!(MessageId::next_sequential(&counter), MessageId::from(0));
+        assert_eq!(MessageId::next_sequential(&counter), MessageId::from(1));
+        assert_eq!(MessageId::next_sequential(&counter), MessageId::from(2));
     }
 }

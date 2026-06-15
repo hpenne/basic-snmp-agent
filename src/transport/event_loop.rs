@@ -1363,7 +1363,7 @@ mod tests {
                     })
                     .collect();
                 crate::codec::GetResponse {
-                    request_id: inner.0.request_id,
+                    request_id: crate::codec::RequestId::from(inner.0.request_id),
                     error_status,
                     error_index: inner.0.error_index,
                     varbinds,
@@ -1394,7 +1394,7 @@ mod tests {
         // Then: a raw BER SNMPv3 response is received with the expected value.
         let response_frame = read_framed_response(&mut client);
         let response = decode_v3_response_payload(&response_frame);
-        assert_eq!(response.request_id, 1);
+        assert_eq!(response.request_id, crate::codec::RequestId::from(1));
         assert_eq!(response.error_status, crate::codec::ErrorStatus::NoError);
         assert_eq!(response.varbinds.len(), 1);
         assert_eq!(response.varbinds[0].oid, oid);
@@ -1438,7 +1438,7 @@ mod tests {
         // Then: a complete response is received despite the split delivery.
         let response_frame = read_framed_response(&mut client);
         let response = decode_v3_response_payload(&response_frame);
-        assert_eq!(response.request_id, 2);
+        assert_eq!(response.request_id, crate::codec::RequestId::from(2));
         assert_eq!(
             response.varbinds[0].value,
             crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(7))
@@ -1479,7 +1479,7 @@ mod tests {
             .expect("valid request write must succeed");
         let response_frame = read_framed_response(&mut client);
         let response = decode_v3_response_payload(&response_frame);
-        assert_eq!(response.request_id, 3);
+        assert_eq!(response.request_id, crate::codec::RequestId::from(3));
         assert_eq!(
             response.varbinds[0].value,
             crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(99))
@@ -1518,7 +1518,7 @@ mod tests {
             .expect("valid request write must succeed");
         let response_frame = read_framed_response(&mut client);
         let response = decode_v3_response_payload(&response_frame);
-        assert_eq!(response.request_id, 4);
+        assert_eq!(response.request_id, crate::codec::RequestId::from(4));
         assert_eq!(
             response.varbinds[0].value,
             crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(55))
@@ -1571,7 +1571,7 @@ mod tests {
             .expect("valid request write must succeed");
         let response_frame = read_framed_response(&mut client);
         let response = decode_v3_response_payload(&response_frame);
-        assert_eq!(response.request_id, 11);
+        assert_eq!(response.request_id, crate::codec::RequestId::from(11));
         assert_eq!(
             response.varbinds[0].value,
             crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(77))
@@ -1613,7 +1613,7 @@ mod tests {
             .expect("valid request write must succeed");
         let response_frame = read_framed_response(&mut client);
         let response = decode_v3_response_payload(&response_frame);
-        assert_eq!(response.request_id, 21);
+        assert_eq!(response.request_id, crate::codec::RequestId::from(21));
         assert_eq!(
             response.varbinds[0].value,
             crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(88))
@@ -1713,7 +1713,7 @@ mod tests {
             .expect("valid request write must succeed");
         let response_frame = read_framed_response(&mut client);
         let response = decode_v3_response_payload(&response_frame);
-        assert_eq!(response.request_id, 99);
+        assert_eq!(response.request_id, crate::codec::RequestId::from(99));
         assert_eq!(
             response.varbinds[0].value,
             crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(42))
@@ -1931,7 +1931,7 @@ mod tests {
             .expect("first request write must succeed");
         let first_response = read_framed_response(&mut client);
         let first = decode_v3_response_payload(&first_response);
-        assert_eq!(first.request_id, 50);
+        assert_eq!(first.request_id, crate::codec::RequestId::from(50));
 
         // Only wait 20 ms — well below the 500 ms normal timeout.
         thread::sleep(Duration::from_millis(20));
@@ -1944,7 +1944,8 @@ mod tests {
         let second_response = read_framed_response(&mut client);
         let second = decode_v3_response_payload(&second_response);
         assert_eq!(
-            second.request_id, 51,
+            second.request_id,
+            crate::codec::RequestId::from(51),
             "connection must remain open for an active client"
         );
 
