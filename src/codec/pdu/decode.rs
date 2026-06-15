@@ -193,17 +193,13 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
     // will fail time-window validation and trigger a Report PDU rather than panicking.
     let auth_engine_boots = u32::try_from(engine_boots).unwrap_or(u32::MAX);
     let auth_engine_time = u32::try_from(engine_time).unwrap_or(u32::MAX);
-    // Non-empty auth_params become Some(AuthenticationParams); empty → None (noAuthNoPriv).
-    let usm_auth_params = AuthenticationParams::try_from(auth_params).ok();
-    // Exactly-8-byte priv_params become Some(PrivacySalt); empty or malformed → None.
-    let usm_priv_params = PrivacySalt::try_from(priv_params).ok();
     let usm_fields = UsmSecurityFields {
         auth_engine_id: usm_engine_id.clone(),
         auth_engine_boots,
         auth_engine_time,
         security_flags,
-        auth_params: usm_auth_params,
-        priv_params: usm_priv_params,
+        auth_params: AuthenticationParams::try_from(auth_params).ok(),
+        priv_params: PrivacySalt::try_from(priv_params).ok(),
     };
 
     let (engine_id, context_name, scoped_data) = match envelope.scoped_data {
