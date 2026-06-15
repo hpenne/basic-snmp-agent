@@ -79,7 +79,7 @@ fn run_validation_pipeline(
             &DecryptionParams {
                 msg_id: v3_msg.msg_id,
                 security_flags: v3_msg.usm.security_flags,
-                priv_params: &v3_msg.usm.priv_params,
+                priv_params: v3_msg.usm.priv_params.as_ref(),
                 auth_engine_boots: EngineBoots::from(v3_msg.usm.auth_engine_boots),
                 auth_engine_time: EngineTime::from(v3_msg.usm.auth_engine_time),
             },
@@ -212,12 +212,19 @@ fn verify_authentication(
     let (Some(auth_protocol), Some(auth_key)) = (user.auth_protocol(), user.auth_key()) else {
         return Ok(());
     };
+    // None auth_params (noAuthNoPriv or missing field) is treated as an empty
+    // MAC, which will fail HMAC verification — fail-closed behaviour.
+    let auth_params_bytes = v3_msg
+        .usm
+        .auth_params
+        .as_ref()
+        .map_or(&[] as &[u8], AsRef::as_ref);
     let hmac_valid = verify_hmac(
         auth_protocol,
         auth_key,
         &HmacInput {
             raw_message: v3_msg.raw_message,
-            auth_params: &v3_msg.usm.auth_params,
+            auth_params: auth_params_bytes,
             auth_params_offset: v3_msg.auth_params_offset,
         },
     );
@@ -378,7 +385,9 @@ fn verify_hmac(
 struct DecryptionParams<'a> {
     msg_id: crate::codec::MessageId,
     security_flags: u8,
-    priv_params: &'a [u8],
+    // None when the wire value was empty or had a wrong length.
+    // Checked in decrypt_scoped_pdu; None → decryption-error Report PDU.
+    priv_params: Option<&'a crate::usm::security_params::PrivacySalt>,
     auth_engine_boots: EngineBoots,
     auth_engine_time: EngineTime,
 }
@@ -411,12 +420,10 @@ fn decrypt_scoped_pdu(
     };
 
     // msgPrivacyParameters must be exactly 8 bytes (the AES salt per RFC 3826 §2.2).
-    if decryption.priv_params.len() != 8 {
-        debug!(
-            "msgPrivacyParameters length {} != 8",
-            decryption.priv_params.len()
-        );
-        // Implements: REQ-0101
+    // None means the wire field was absent or malformed; treat both as a decryption error.
+    // Implements: REQ-0101
+    let Some(priv_salt) = decryption.priv_params else {
+        debug!("msgPrivacyParameters absent or malformed (not exactly 8 bytes)");
         return Err(emit_report_response(
             ctx,
             |inputs| &mut inputs.decryption_errors_counter,
@@ -425,14 +432,14 @@ fn decrypt_scoped_pdu(
             decryption.msg_id,
             decryption.security_flags,
         ));
-    }
+    };
 
     // Implements: REQ-0109
     // IV = engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes) per RFC 3826 §2.2.
     let mut aes_iv = [0_u8; 16];
     aes_iv[0..4].copy_from_slice(&u32::from(decryption.auth_engine_boots).to_be_bytes());
     aes_iv[4..8].copy_from_slice(&u32::from(decryption.auth_engine_time).to_be_bytes());
-    aes_iv[8..16].copy_from_slice(decryption.priv_params);
+    aes_iv[8..16].copy_from_slice(priv_salt.as_ref());
 
     let Ok(scoped_pdu_bytes) = priv_protocol.decrypt(priv_key, &aes_iv, ciphertext) else {
         debug!("AES-CFB128 decryption failed");

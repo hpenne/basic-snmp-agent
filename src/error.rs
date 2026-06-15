@@ -17,8 +17,6 @@ pub enum AgentError {
     UdpSocket(io::Error),
     /// The event loop thread could not be spawned.
     Spawn(io::Error),
-    /// The engine ID length is outside the RFC 3411 §5 range of 5–32 octets.
-    InvalidEngineId,
     /// The engine-boots counter could not be initialised (ceiling reached or store failed).
     ///
     /// # Requirements
@@ -43,10 +41,6 @@ impl fmt::Display for AgentError {
             Self::Socket(e) => write!(f, "failed to configure TCP listener: {e}"),
             Self::UdpSocket(e) => write!(f, "failed to create UDP trap socket: {e}"),
             Self::Spawn(e) => write!(f, "failed to spawn event loop thread: {e}"),
-            Self::InvalidEngineId => write!(
-                f,
-                "engine ID length is invalid: must be between 5 and 32 octets (RFC 3411 \u{a7}5)"
-            ),
             Self::EngineBoots(e) => write!(f, "engine-boots initialisation failed: {e}"),
             Self::SecurityLevelRequiresUser => {
                 f.write_str(crate::usm::user::SECURITY_LEVEL_REQUIRES_USER_MESSAGE)
@@ -60,7 +54,7 @@ impl std::error::Error for AgentError {
         match self {
             Self::Bind { source, .. } => Some(source),
             Self::Socket(e) | Self::UdpSocket(e) | Self::Spawn(e) => Some(e),
-            Self::InvalidEngineId | Self::SecurityLevelRequiresUser => None,
+            Self::SecurityLevelRequiresUser => None,
             Self::EngineBoots(e) => Some(e),
         }
     }
@@ -152,13 +146,6 @@ mod tests {
     }
 
     #[test]
-    fn agent_error_invalid_engine_id_display_mentions_rfc() {
-        let invalid_error = AgentError::InvalidEngineId;
-        let msg = invalid_error.to_string();
-        assert!(msg.contains('5') && msg.contains("32"), "{msg}");
-    }
-
-    #[test]
     fn agent_error_engine_boots_display_mentions_initialisation() {
         use crate::usm::boots::InitBootsError;
         let e = AgentError::EngineBoots(InitBootsError::BootsAtCeiling);
@@ -246,12 +233,6 @@ mod tests {
                 .to_string()
                 .contains("test")
         );
-    }
-
-    #[test]
-    fn agent_error_invalid_engine_id_source_returns_none() {
-        let invalid_error = AgentError::InvalidEngineId;
-        assert!(invalid_error.source().is_none());
     }
 
     // ── SetError Display ─────────────────────────────────────────────────

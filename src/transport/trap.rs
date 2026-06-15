@@ -56,7 +56,8 @@ pub struct TrapResult {
 pub(crate) struct TrapSender {
     socket: Arc<UdpSocket>,
     start_time: Instant,
-    engine_id: Vec<u8>,
+    // Implements: REQ-0055
+    engine_id: crate::usm::engine_id::EngineId,
     engine_boots: EngineBoots,
     usm_user: Option<Arc<crate::usm::user::UsmUser>>,
 }
@@ -91,7 +92,7 @@ impl TrapSender {
     /// Returns an error if the UDP socket cannot be bound.
     pub(crate) fn new(
         start_time: Instant,
-        engine_id: Vec<u8>,
+        engine_id: crate::usm::engine_id::EngineId,
         engine_boots: EngineBoots,
         usm_user: Option<Arc<crate::usm::user::UsmUser>>,
     ) -> io::Result<Self> {
@@ -161,7 +162,7 @@ impl TrapSender {
         let trap_priv = usm_user.priv_protocol().zip(usm_user.priv_key());
         crate::codec::encode_v3_trap(
             MessageId::next_sequential(&TRAP_MSG_ID_COUNTER),
-            &self.engine_id,
+            self.engine_id.as_ref(),
             usm_user.name().as_bytes(),
             b"",
             u32::from(self.engine_boots),
@@ -212,9 +213,19 @@ mod tests {
         (sock, addr)
     }
 
-    // Empty engine_id is intentional: V2c mode (usm_user=None) does not use it.
+    // V2c mode (usm_user=None) does not use the engine_id; a minimal valid
+    // placeholder satisfies the EngineId invariant without affecting behaviour.
     fn no_usm_sender() -> TrapSender {
-        TrapSender::new(Instant::now(), vec![], EngineBoots::ZERO, None).unwrap()
+        let placeholder_engine_id =
+            crate::usm::engine_id::EngineId::try_from(b"\x80\x00\x1f\x88\x04".to_vec())
+                .expect("5-byte placeholder is the minimum valid engine ID");
+        TrapSender::new(
+            Instant::now(),
+            placeholder_engine_id,
+            EngineBoots::ZERO,
+            None,
+        )
+        .unwrap()
     }
 
     /// Verify that the HMAC embedded in `encoded_message` is correct.
@@ -490,7 +501,9 @@ mod tests {
         let auth_key = SecretKey::new_from_exposed_slice(&[0x42_u8; 32]);
         let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42_u8; 32]);
         let auth_protocol = AuthProtocol::HmacSha256;
-        let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
+        let engine_id =
+            crate::usm::engine_id::EngineId::try_from(b"\x80\x00\x1f\x88\x04test".to_vec())
+                .unwrap();
         let user: Arc<UsmUser> = Arc::new(
             AuthNoPrivUser::new(UserName::new("trapauth").unwrap(), auth_protocol, auth_key)
                 .unwrap()
@@ -555,7 +568,9 @@ mod tests {
         use rasn_snmp::v3::{Message as V3Message, ScopedPduData, USMSecurityParameters};
 
         let auth_key = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
-        let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
+        let engine_id =
+            crate::usm::engine_id::EngineId::try_from(b"\x80\x00\x1f\x88\x04test".to_vec())
+                .unwrap();
         let user: Arc<UsmUser> = Arc::new(
             AuthPrivUser::new(
                 UserName::new("trappriv").unwrap(),
@@ -615,7 +630,9 @@ mod tests {
         use crate::usm::user::{UserName, UsmUser};
         use rasn_snmp::v3::{Message as V3Message, ScopedPduData};
 
-        let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
+        let engine_id =
+            crate::usm::engine_id::EngineId::try_from(b"\x80\x00\x1f\x88\x04test".to_vec())
+                .unwrap();
         let user = Arc::new(UsmUser::no_auth_no_priv(UserName::new("public").unwrap()));
         let sender =
             TrapSender::new(Instant::now(), engine_id, EngineBoots::ZERO, Some(user)).unwrap();
@@ -658,7 +675,9 @@ mod tests {
         use crate::usm::user::{UserName, UsmUser};
         use rasn_snmp::v3::Message as V3Message;
 
-        let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
+        let engine_id =
+            crate::usm::engine_id::EngineId::try_from(b"\x80\x00\x1f\x88\x04test".to_vec())
+                .unwrap();
         let user = std::sync::Arc::new(UsmUser::no_auth_no_priv(UserName::new("public").unwrap()));
         let sender =
             TrapSender::new(Instant::now(), engine_id, EngineBoots::ZERO, Some(user)).unwrap();

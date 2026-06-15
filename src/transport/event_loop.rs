@@ -301,7 +301,8 @@ pub(crate) struct EventLoop {
     store: crate::mib::Store,
     /// This agent's `SNMPv3` engine ID; inbound messages with a different engine
     /// ID are rejected with a Report PDU (REQ-0104).
-    engine_id: Vec<u8>,
+    // Implements: REQ-0055
+    engine_id: crate::usm::engine_id::EngineId,
     /// `snmpEngineBoots` counter, initialised at agent start-up.
     // Implements: REQ-0094
     engine_boots: EngineBoots,
@@ -363,7 +364,7 @@ impl EventLoop {
     ///
     pub(crate) fn new(
         addr: SocketAddr,
-        engine_id: Vec<u8>,
+        engine_id: crate::usm::engine_id::EngineId,
         engine_boots: EngineBoots,
         usm_user: Option<std::sync::Arc<crate::usm::user::UsmUser>>,
         minimum_security_level: crate::usm::user::SecurityLevel,
@@ -670,7 +671,7 @@ impl EventLoop {
             // so the unchecked variant is safe here and carries no Result or panic site.
             let mut dispatch_ctx = crate::transport::dispatch::DispatchContext::new_unchecked(
                 crate::transport::dispatch::DispatchInputs {
-                    engine_id: &self.engine_id,
+                    engine_id: self.engine_id.as_ref(),
                     engine_boots,
                     engine_time,
                     unknown_engine_ids_counter: &mut self.unknown_engine_ids_counter,
@@ -831,8 +832,10 @@ mod tests {
         "127.0.0.1:0".parse().unwrap()
     }
 
-    fn test_engine_id() -> Vec<u8> {
-        TEST_ENGINE_ID.to_vec()
+    fn test_engine_id() -> crate::usm::engine_id::EngineId {
+        // TEST_ENGINE_ID is 8 bytes (within the RFC 3411 §5 valid range).
+        crate::usm::engine_id::EngineId::try_from(TEST_ENGINE_ID.to_vec())
+            .expect("TEST_ENGINE_ID is 8 bytes, within the 5–32 octet valid range")
     }
 
     /// Create an event loop with default timeout config for tests that do not
@@ -1084,7 +1087,8 @@ mod tests {
             max_connections: DEFAULT_MAX_CONNECTIONS,
             timeout_config: ConnectionTimeoutConfig::default(),
             store: crate::mib::Store::new(),
-            engine_id: test_engine_id(),
+            engine_id: crate::usm::engine_id::EngineId::try_from(TEST_ENGINE_ID.to_vec())
+                .expect("TEST_ENGINE_ID is 8 bytes, within the 5–32 octet valid range"),
             engine_boots: EngineBoots::from(1_u32),
             engine_start: Instant::now(),
             unknown_engine_ids_counter: UsmStatsCounter::default(),

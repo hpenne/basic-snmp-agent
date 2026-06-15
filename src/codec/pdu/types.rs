@@ -409,14 +409,23 @@ pub struct UsmSecurityFields {
     /// Message flags byte: bit 0 = authFlag, bit 1 = privFlag, bit 2 = reportableFlag.
     pub security_flags: u8,
     /// `msgAuthenticationParameters` from the USM security parameters.
-    /// For authenticated messages, this is the received MAC (24 bytes for SHA-256,
-    /// 48 bytes for SHA-512). Empty for `noAuthNoPriv` messages.
-    /// Preserved here for HMAC verification in dispatch.
-    pub auth_params: Vec<u8>,
+    ///
+    /// `Some` for authenticated messages (MAC bytes, 24 bytes for SHA-256 or
+    /// 48 bytes for SHA-512 per RFC 7860); `None` for `noAuthNoPriv` messages
+    /// where `msgAuthenticationParameters` is empty on the wire.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0099, REQ-0100
+    pub auth_params: Option<crate::usm::security_params::AuthenticationParams>,
     /// `msgPrivacyParameters` from the USM security parameters.
-    /// For authPriv messages this is the 8-byte AES salt/IV material needed for decryption.
-    /// Empty for noAuthNoPriv and authNoPriv messages.
-    pub priv_params: Vec<u8>,
+    ///
+    /// `Some` for authPriv messages (exactly 8-byte AES salt per RFC 3826 §2.2);
+    /// `None` for noAuthNoPriv and authNoPriv messages where the field is empty
+    /// on the wire, or when the wire value is not exactly 8 bytes (malformed).
+    ///
+    /// # Requirements
+    /// Implements: REQ-0101, REQ-0109
+    pub priv_params: Option<crate::usm::security_params::PrivacySalt>,
 }
 
 /// A decoded inbound `SNMPv3` message, containing the message-level fields

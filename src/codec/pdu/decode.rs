@@ -5,6 +5,7 @@ use super::types::{
 };
 use crate::codec::ber;
 use crate::codec::ber::{TAG_GET_NEXT_REQUEST, TAG_GET_REQUEST, TAG_SET_REQUEST};
+use crate::usm::security_params::{AuthenticationParams, PrivacySalt};
 
 // Implements: REQ-0021, REQ-0068
 // Converts a [`ber::pdu::DecodedPdu`] into an [`InboundPdu`].
@@ -192,13 +193,21 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
     // will fail time-window validation and trigger a Report PDU rather than panicking.
     let auth_engine_boots = u32::try_from(engine_boots).unwrap_or(u32::MAX);
     let auth_engine_time = u32::try_from(engine_time).unwrap_or(u32::MAX);
+    // Non-empty auth_params become Some(AuthenticationParams); empty → None (noAuthNoPriv).
+    let usm_auth_params = AuthenticationParams::try_from(auth_params).ok();
+    // Non-empty, exactly-8-byte priv_params become Some(PrivacySalt); empty or malformed → None.
+    let usm_priv_params = if priv_params.is_empty() {
+        None
+    } else {
+        PrivacySalt::try_from(priv_params).ok()
+    };
     let usm_fields = UsmSecurityFields {
         auth_engine_id: usm_engine_id.clone(),
         auth_engine_boots,
         auth_engine_time,
         security_flags,
-        auth_params,
-        priv_params,
+        auth_params: usm_auth_params,
+        priv_params: usm_priv_params,
     };
 
     let (engine_id, context_name, scoped_data) = match envelope.scoped_data {
@@ -745,7 +754,8 @@ mod tests {
             "msg_id must be decoded correctly from the header"
         );
         assert_eq!(
-            msg.usm.priv_params, expected_priv_params,
+            msg.usm.priv_params.as_ref().map(AsRef::as_ref),
+            Some(expected_priv_params.as_slice()),
             "priv_params must be preserved from msgPrivacyParameters"
         );
     }
@@ -761,8 +771,8 @@ mod tests {
         let msg = decode_v3_message(&encoded).expect("must decode");
 
         assert!(
-            msg.usm.priv_params.is_empty(),
-            "noAuthNoPriv messages must have empty priv_params"
+            msg.usm.priv_params.is_none(),
+            "noAuthNoPriv messages must have no priv_params (empty on wire)"
         );
     }
 
@@ -988,8 +998,8 @@ mod tests {
         assert_eq!(msg.usm.auth_engine_time, 0);
         assert_eq!(msg.usm.security_flags, 0x04); // reportableFlag set by encode_get_request
         assert!(
-            msg.usm.auth_params.is_empty(),
-            "noAuthNoPriv messages must have empty auth_params"
+            msg.usm.auth_params.is_none(),
+            "noAuthNoPriv messages must have no auth_params (empty on wire)"
         );
     }
 
@@ -1049,7 +1059,8 @@ mod tests {
         let msg = decode_v3_message(&encoded).unwrap();
 
         assert_eq!(
-            msg.usm.auth_params, expected_auth_params,
+            msg.usm.auth_params.as_ref().map(AsRef::as_ref),
+            Some(expected_auth_params.as_slice()),
             "auth_params must be preserved from msgAuthenticationParameters"
         );
         assert_eq!(
