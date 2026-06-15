@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Common Commands
 
-When using `tail` with commands, ALWAYS use `tee` to a temporary file, to avoid having to run the command again if it fails. 
+When using filters (`tail`, `head`, `grep`, etc.) with commands, ALWAYS use `tee` to a temporary file, to avoid having to run the command again with different filters. 
 
 ```bash
 make test          # clippy + Rust unit/doc tests + Python + Behave
