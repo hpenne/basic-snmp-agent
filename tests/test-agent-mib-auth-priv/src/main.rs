@@ -13,7 +13,7 @@
 use basic_snmp_agent::usm::auth::AuthProtocol;
 use basic_snmp_agent::usm::privacy::PrivProtocol;
 use basic_snmp_agent::usm::user::UserName;
-use basic_snmp_agent::{AgentBuilder, AuthPrivUser, SecurityConfig};
+use basic_snmp_agent::{AgentBuilder, AuthPrivUser, EngineId, SecurityConfig};
 
 const ENGINE_ID: &[u8] = b"\x80\x00\x1f\x88\x04test-agent-priv";
 
@@ -45,7 +45,10 @@ fn main() {
         boots_store: Box::new(test_agent_mib_common::NullStore),
     })
     .listen_addr("0.0.0.0:10161".parse().expect("listen address is valid"))
-    .engine_id(ENGINE_ID.to_vec())
+    .engine_id(
+        EngineId::try_from(ENGINE_ID.to_vec())
+            .expect("ENGINE_ID is within the valid 5–32 octet range"),
+    )
     .build()
     .unwrap_or_else(|e| {
         eprintln!("error: failed to build agent: {e}");

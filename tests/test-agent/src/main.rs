@@ -30,8 +30,8 @@ use basic_snmp_agent::usm::keys::SecretKey;
 use basic_snmp_agent::usm::privacy::PrivProtocol;
 use basic_snmp_agent::usm::user::UserName;
 use basic_snmp_agent::{
-    AgentBuilder, AuthNoPrivUser, AuthPrivUser, Oid, RequestId, SecurityConfig, TrapPdu, Value,
-    Varbind, VarbindValue,
+    AgentBuilder, AuthNoPrivUser, AuthPrivUser, EngineId, Oid, RequestId, SecurityConfig, TrapPdu,
+    Value, Varbind, VarbindValue,
 };
 
 // ── NullStore ─────────────────────────────────────────────────────────────────
@@ -189,20 +189,24 @@ fn main() {
 ///
 /// Returns `None` when `USM_ENGINE_ID` is absent. Exits on partial or invalid
 /// configuration.
-fn parse_usm_env() -> Option<(Vec<u8>, SecurityConfig)> {
+fn parse_usm_env() -> Option<(EngineId, SecurityConfig)> {
     let engine_id_hex = std::env::var("USM_ENGINE_ID").ok()?;
     let security_level = std::env::var("USM_SECURITY_LEVEL").unwrap_or_else(|_| {
         eprintln!("error: USM_ENGINE_ID set but USM_SECURITY_LEVEL missing");
         process::exit(1);
     });
 
-    let engine_id = decode_hex_engine_id(&engine_id_hex);
+    let engine_id_bytes = decode_hex_engine_id(&engine_id_hex);
+    let engine_id = EngineId::try_from(engine_id_bytes).unwrap_or_else(|e| {
+        eprintln!("error: USM_ENGINE_ID is invalid: {e}");
+        process::exit(1);
+    });
 
     let config = match security_level.as_str() {
         "noAuthNoPriv" => SecurityConfig::NoAuthNoPriv,
         "authNoPriv" => {
             let user_name = parse_user_name_env();
-            let (auth_protocol, localised_key) = parse_auth_env(&engine_id);
+            let (auth_protocol, localised_key) = parse_auth_env(engine_id.as_ref());
             let user =
                 AuthNoPrivUser::new(user_name, auth_protocol, localised_key).unwrap_or_else(|e| {
                     eprintln!("error: failed to create USM user: {e}");
@@ -215,7 +219,7 @@ fn parse_usm_env() -> Option<(Vec<u8>, SecurityConfig)> {
         }
         "authPriv" => {
             let user_name = parse_user_name_env();
-            let (auth_protocol, localised_key) = parse_auth_env(&engine_id);
+            let (auth_protocol, localised_key) = parse_auth_env(engine_id.as_ref());
             let priv_proto_name = std::env::var("USM_PRIV_PROTO").unwrap_or_else(|_| {
                 eprintln!("error: USM_SECURITY_LEVEL=authPriv but USM_PRIV_PROTO missing");
                 process::exit(1);
