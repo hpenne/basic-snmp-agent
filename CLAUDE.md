@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Common Commands
 
+When using `tail` with commands, ALWAYS use `tee` to a temporary file, to avoid having to run the command again if it fails. 
+
 ```bash
 make test          # clippy + Rust unit/doc tests + Python + Behave
 make pre-commit    # test + python-lint + fuzz + traceability + format check

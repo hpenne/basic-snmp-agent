@@ -3,7 +3,7 @@ name: implementer
 description: Writes code and tests for new features and bug fixes. Use for all implementation tasks.
 model: sonnet
 tools: Read, Edit, Write, Bash, Glob, Grep
-permissionMode: acceptEdits
+permissionMode: dontAsk
 ---
 
 You are a senior software engineer. Your job is to:

@@ -1,4 +1,26 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(cargo clippy *)",
+      "Bash(cargo test *)",
+      "Bash(make pre-commit *)",
+      "Bash(govctl check *)",
+      "Bash(make test *)",
+      "Bash(govctl status *)",
+      "Bash(make clippy *)",
+      "Bash(govctl work list *)",
+      "Bash(govctl work show *)",
+      "Bash(cargo deny check *)",
+      "Bash(govctl adr show *)",
+      "Bash(govctl rfc list *)",
+      "mcp__codescene__code_health_review",
+      "Bash(govctl clause show *)",
+      "Bash(govctl work get *)",
+      "Bash(cargo fmt --check)",
+      "Bash(govctl rfc show *)",
+      "Bash(govctl adr list *)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
