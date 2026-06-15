@@ -1,7 +1,93 @@
-//! OID constants for USM statistics counters.
+//! OID constants and counter type for USM statistics counters.
 //!
 //! # Requirements
-//! Implements: REQ-0093, REQ-0098, REQ-0099, REQ-0078, REQ-0079, REQ-0100, REQ-0101
+//! Implements: REQ-0078, REQ-0079, REQ-0093, REQ-0098, REQ-0099, REQ-0100, REQ-0101, REQ-0115
+
+/// A single RFC 3414 §5.1 USM statistics counter.
+///
+/// Wraps a `u32` and provides a `saturating_increment` method that advances
+/// the counter without overflowing at `u32::MAX`. All seven USM/SNMP-MPD
+/// counters that appear in Report PDU varbinds use this type so that the
+/// saturation invariant lives in one place rather than being repeated at every
+/// increment site.
+///
+/// # Examples
+///
+/// ```
+/// use basic_snmp_agent::usm::counters::UsmStatsCounter;
+///
+/// let mut counter = UsmStatsCounter::from(0_u32);
+/// counter.saturating_increment();
+/// assert_eq!(u32::from(counter), 1);
+///
+/// let mut at_max = UsmStatsCounter::from(u32::MAX);
+/// at_max.saturating_increment();
+/// assert_eq!(u32::from(at_max), u32::MAX);
+/// ```
+///
+/// # Requirements
+/// Implements: REQ-0078, REQ-0079, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0115
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UsmStatsCounter(u32);
+
+impl UsmStatsCounter {
+    /// Advance the counter by one, saturating at `u32::MAX`.
+    ///
+    /// Saturation matches RFC 3414 §5.1 semantics: counters are unsigned 32-bit
+    /// values and must not wrap. Once `u32::MAX` is reached the counter stays
+    /// there until the agent restarts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use basic_snmp_agent::usm::counters::UsmStatsCounter;
+    ///
+    /// let mut counter = UsmStatsCounter::from(0_u32);
+    /// counter.saturating_increment();
+    /// assert_eq!(u32::from(counter), 1);
+    ///
+    /// // Saturation at u32::MAX — the counter does not wrap.
+    /// let mut at_max = UsmStatsCounter::from(u32::MAX);
+    /// at_max.saturating_increment();
+    /// assert_eq!(u32::from(at_max), u32::MAX);
+    /// ```
+    ///
+    /// # Requirements
+    /// Implements: REQ-0078, REQ-0079, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0115
+    pub fn saturating_increment(&mut self) {
+        self.0 = self.0.saturating_add(1);
+    }
+
+    /// Return the current counter value.
+    ///
+    /// Used when encoding Report PDU varbinds, which carry the raw `u32`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use basic_snmp_agent::usm::counters::UsmStatsCounter;
+    ///
+    /// let counter = UsmStatsCounter::from(42_u32);
+    /// assert_eq!(counter.get(), 42);
+    /// ```
+    #[must_use]
+    pub fn get(&self) -> u32 {
+        self.0
+    }
+}
+
+impl From<u32> for UsmStatsCounter {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<UsmStatsCounter> for u32 {
+    fn from(counter: UsmStatsCounter) -> Self {
+        counter.0
+    }
+}
 
 /// OID for `usmStatsUnknownEngineIDs` (RFC 3414 §5.1).
 ///
@@ -61,6 +147,50 @@ pub const USM_STATS_DECRYPTION_ERRORS: &str = "1.3.6.1.6.3.15.1.1.6.0";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── UsmStatsCounter ──────────────────────────────────────────────────────
+
+    #[test]
+    fn given_zero_counter_when_saturating_increment_then_value_is_one() {
+        // Verifies: REQ-0078, REQ-0079, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0115
+        let mut counter = UsmStatsCounter::from(0_u32);
+        counter.saturating_increment();
+        assert_eq!(u32::from(counter), 1);
+    }
+
+    #[test]
+    fn given_nonzero_counter_when_saturating_increment_then_value_advances() {
+        // Verifies: REQ-0078, REQ-0079, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0115
+        let mut counter = UsmStatsCounter::from(41_u32);
+        counter.saturating_increment();
+        assert_eq!(u32::from(counter), 42);
+    }
+
+    #[test]
+    fn given_counter_at_max_when_saturating_increment_then_value_stays_at_max() {
+        // Verifies: REQ-0078, REQ-0079, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0115
+        // Saturation prevents u32 overflow; the invariant lives here so it does not
+        // need to be policed per call site.
+        let mut counter = UsmStatsCounter::from(u32::MAX);
+        counter.saturating_increment();
+        assert_eq!(u32::from(counter), u32::MAX);
+    }
+
+    #[test]
+    fn given_counter_when_get_then_returns_current_value() {
+        // Verifies: REQ-0078, REQ-0079, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0115
+        let counter = UsmStatsCounter::from(7_u32);
+        assert_eq!(counter.get(), 7);
+    }
+
+    #[test]
+    fn given_u32_when_from_then_counter_wraps_value() {
+        // Verifies: REQ-0078, REQ-0079, REQ-0093, REQ-0098, REQ-0100, REQ-0101, REQ-0115
+        let counter = UsmStatsCounter::from(99_u32);
+        assert_eq!(u32::from(counter), 99);
+    }
+
+    // ── OID constants ────────────────────────────────────────────────────────
 
     #[test]
     fn usm_stats_unknown_user_names_oid_is_correct() {

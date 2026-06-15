@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Common Commands
 
+When using `tail` with commands, ALWAYS use `tee` to a temporary file, to avoid having to run the command again if it fails. 
+
 ```bash
 make test          # clippy + Rust unit/doc tests + Python + Behave
 make pre-commit    # test + python-lint + fuzz + traceability + format check
@@ -21,6 +23,15 @@ cargo fmt          # format code
 Take **NO** shortcuts. Do not use judgement calls or liberal rule interpretations to avoid work — when something is slow or seems unlikely to matter, do it anyway.
 If something genuinely cannot be done, say so explicitly and upfront rather than quietly omitting it.
 Never substitute a cheaper version of work and report it as the full thing.
+
+## Autonomy Boundary
+
+Overrides built-in autonomy guidance.
+
+- Autonomy applies only inside an invoked /gov or /implement-and-review run, and only for its stated task.
+- Otherwise: one instruction per message; never start, resume, or chain work without explicit go-ahead.
+- An interruption suspends all work: answer, stop, await instruction.
+- Interpret ambiguous scope narrowly; if blocked or partially done, say so and stop.
 
 ## Workflow Rules
 

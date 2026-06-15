@@ -23,6 +23,8 @@ use std::time::{Duration, Instant};
 
 use mio::{Events, Interest, Poll, Token};
 
+use crate::usm::counters::UsmStatsCounter;
+use crate::usm::engine_time::{EngineBoots, EngineTime};
 // Implements: [[RFC-0009:C-FACADE]]
 use log::{debug, info};
 
@@ -299,35 +301,36 @@ pub(crate) struct EventLoop {
     store: crate::mib::Store,
     /// This agent's `SNMPv3` engine ID; inbound messages with a different engine
     /// ID are rejected with a Report PDU (REQ-0104).
-    engine_id: Vec<u8>,
+    // Implements: REQ-0055
+    engine_id: crate::usm::engine_id::EngineId,
     /// `snmpEngineBoots` counter, initialised at agent start-up.
     // Implements: REQ-0094
-    engine_boots: u32,
+    engine_boots: EngineBoots,
     /// Instant at which the engine started; used to compute `snmpEngineTime`.
     // Implements: REQ-0094
     engine_start: Instant,
     /// Counter for `usmStatsUnknownEngineIDs`; incremented for each discovery probe.
     // Implements: REQ-0093
-    unknown_engine_ids_counter: u32,
+    unknown_engine_ids_counter: UsmStatsCounter,
     /// Counter for `usmStatsUnknownUserNames`; incremented when user-name lookup fails.
     // Implements: REQ-0078
-    unknown_user_names_counter: u32,
+    unknown_user_names_counter: UsmStatsCounter,
     /// Counter for `usmStatsUnsupportedSecLevels`; incremented when security-level check fails.
     // Implements: REQ-0079
-    unsupported_sec_levels_counter: u32,
+    unsupported_sec_levels_counter: UsmStatsCounter,
     /// Counter for `usmStatsWrongDigests`; incremented when HMAC verification fails.
     // Implements: REQ-0100
-    wrong_digests_counter: u32,
+    wrong_digests_counter: UsmStatsCounter,
     /// Counter for `usmStatsNotInTimeWindows`; incremented when time-window check fails.
     // Implements: REQ-0098
-    not_in_time_windows_counter: u32,
+    not_in_time_windows_counter: UsmStatsCounter,
     /// Counter for `usmStatsDecryptionErrors`; incremented when decryption fails.
     // Implements: REQ-0101
-    decryption_errors_counter: u32,
+    decryption_errors_counter: UsmStatsCounter,
     /// Counter for `snmpUnknownSecurityModels`; incremented when an inbound message
     /// uses a security model other than USM (RFC 3412 §7.1).
     // Implements: REQ-0115
-    unknown_security_models_counter: u32,
+    unknown_security_models_counter: UsmStatsCounter,
     /// Configured USM user; `None` when no USM user is configured.
     // Implements: REQ-0076
     usm_user: Option<std::sync::Arc<crate::usm::user::UsmUser>>,
@@ -361,8 +364,8 @@ impl EventLoop {
     ///
     pub(crate) fn new(
         addr: SocketAddr,
-        engine_id: Vec<u8>,
-        engine_boots: u32,
+        engine_id: crate::usm::engine_id::EngineId,
+        engine_boots: EngineBoots,
         usm_user: Option<std::sync::Arc<crate::usm::user::UsmUser>>,
         minimum_security_level: crate::usm::user::SecurityLevel,
         max_connections: usize,
@@ -413,13 +416,13 @@ impl EventLoop {
             engine_id,
             engine_boots,
             engine_start: Instant::now(),
-            unknown_engine_ids_counter: 0,
-            unknown_user_names_counter: 0,
-            unsupported_sec_levels_counter: 0,
-            wrong_digests_counter: 0,
-            not_in_time_windows_counter: 0,
-            decryption_errors_counter: 0,
-            unknown_security_models_counter: 0,
+            unknown_engine_ids_counter: UsmStatsCounter::default(),
+            unknown_user_names_counter: UsmStatsCounter::default(),
+            unsupported_sec_levels_counter: UsmStatsCounter::default(),
+            wrong_digests_counter: UsmStatsCounter::default(),
+            not_in_time_windows_counter: UsmStatsCounter::default(),
+            decryption_errors_counter: UsmStatsCounter::default(),
+            unknown_security_models_counter: UsmStatsCounter::default(),
             usm_user,
             minimum_security_level,
         };
@@ -432,9 +435,10 @@ impl EventLoop {
     ///
     /// # Requirements
     /// Implements: REQ-0094
-    fn engine_time_seconds(&self) -> u32 {
+    fn engine_time_seconds(&self) -> EngineTime {
         // Saturate at u32::MAX rather than wrapping; `as_secs()` returns u64.
-        u32::try_from(self.engine_start.elapsed().as_secs()).unwrap_or(u32::MAX)
+        let secs = u32::try_from(self.engine_start.elapsed().as_secs()).unwrap_or(u32::MAX);
+        EngineTime::from(secs)
     }
 
     /// Run the event loop until [`Command::Shutdown`] is received.
@@ -667,7 +671,7 @@ impl EventLoop {
             // so the unchecked variant is safe here and carries no Result or panic site.
             let mut dispatch_ctx = crate::transport::dispatch::DispatchContext::new_unchecked(
                 crate::transport::dispatch::DispatchInputs {
-                    engine_id: &self.engine_id,
+                    engine_id: self.engine_id.as_ref(),
                     engine_boots,
                     engine_time,
                     unknown_engine_ids_counter: &mut self.unknown_engine_ids_counter,
@@ -828,8 +832,10 @@ mod tests {
         "127.0.0.1:0".parse().unwrap()
     }
 
-    fn test_engine_id() -> Vec<u8> {
-        TEST_ENGINE_ID.to_vec()
+    fn test_engine_id() -> crate::usm::engine_id::EngineId {
+        // TEST_ENGINE_ID is 8 bytes (within the RFC 3411 §5 valid range).
+        crate::usm::engine_id::EngineId::try_from(TEST_ENGINE_ID.to_vec())
+            .expect("TEST_ENGINE_ID is 8 bytes, within the 5–32 octet valid range")
     }
 
     /// Create an event loop with default timeout config for tests that do not
@@ -838,7 +844,7 @@ mod tests {
         EventLoop::new(
             any_loopback(),
             test_engine_id(),
-            1,
+            EngineBoots::from(1_u32),
             None,
             crate::usm::user::SecurityLevel::NoAuthNoPriv,
             max_connections,
@@ -889,7 +895,7 @@ mod tests {
         let result = EventLoop::new(
             any_loopback(),
             test_engine_id(),
-            1,
+            EngineBoots::from(1_u32),
             None,
             crate::usm::user::SecurityLevel::AuthNoPriv,
             DEFAULT_MAX_CONNECTIONS,
@@ -1081,16 +1087,17 @@ mod tests {
             max_connections: DEFAULT_MAX_CONNECTIONS,
             timeout_config: ConnectionTimeoutConfig::default(),
             store: crate::mib::Store::new(),
-            engine_id: test_engine_id(),
-            engine_boots: 1,
+            engine_id: crate::usm::engine_id::EngineId::try_from(TEST_ENGINE_ID.to_vec())
+                .expect("TEST_ENGINE_ID is 8 bytes, within the 5–32 octet valid range"),
+            engine_boots: EngineBoots::from(1_u32),
             engine_start: Instant::now(),
-            unknown_engine_ids_counter: 0,
-            unknown_user_names_counter: 0,
-            unsupported_sec_levels_counter: 0,
-            wrong_digests_counter: 0,
-            not_in_time_windows_counter: 0,
-            decryption_errors_counter: 0,
-            unknown_security_models_counter: 0,
+            unknown_engine_ids_counter: UsmStatsCounter::default(),
+            unknown_user_names_counter: UsmStatsCounter::default(),
+            unsupported_sec_levels_counter: UsmStatsCounter::default(),
+            wrong_digests_counter: UsmStatsCounter::default(),
+            not_in_time_windows_counter: UsmStatsCounter::default(),
+            decryption_errors_counter: UsmStatsCounter::default(),
+            unknown_security_models_counter: UsmStatsCounter::default(),
             usm_user: None,
             minimum_security_level: crate::usm::user::SecurityLevel::NoAuthNoPriv,
         };
@@ -1360,7 +1367,7 @@ mod tests {
                     })
                     .collect();
                 crate::codec::GetResponse {
-                    request_id: inner.0.request_id,
+                    request_id: crate::codec::RequestId::from(inner.0.request_id),
                     error_status,
                     error_index: inner.0.error_index,
                     varbinds,
@@ -1391,7 +1398,7 @@ mod tests {
         // Then: a raw BER SNMPv3 response is received with the expected value.
         let response_frame = read_framed_response(&mut client);
         let response = decode_v3_response_payload(&response_frame);
-        assert_eq!(response.request_id, 1);
+        assert_eq!(response.request_id, crate::codec::RequestId::from(1));
         assert_eq!(response.error_status, crate::codec::ErrorStatus::NoError);
         assert_eq!(response.varbinds.len(), 1);
         assert_eq!(response.varbinds[0].oid, oid);
@@ -1435,7 +1442,7 @@ mod tests {
         // Then: a complete response is received despite the split delivery.
         let response_frame = read_framed_response(&mut client);
         let response = decode_v3_response_payload(&response_frame);
-        assert_eq!(response.request_id, 2);
+        assert_eq!(response.request_id, crate::codec::RequestId::from(2));
         assert_eq!(
             response.varbinds[0].value,
             crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(7))
@@ -1476,7 +1483,7 @@ mod tests {
             .expect("valid request write must succeed");
         let response_frame = read_framed_response(&mut client);
         let response = decode_v3_response_payload(&response_frame);
-        assert_eq!(response.request_id, 3);
+        assert_eq!(response.request_id, crate::codec::RequestId::from(3));
         assert_eq!(
             response.varbinds[0].value,
             crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(99))
@@ -1515,7 +1522,7 @@ mod tests {
             .expect("valid request write must succeed");
         let response_frame = read_framed_response(&mut client);
         let response = decode_v3_response_payload(&response_frame);
-        assert_eq!(response.request_id, 4);
+        assert_eq!(response.request_id, crate::codec::RequestId::from(4));
         assert_eq!(
             response.varbinds[0].value,
             crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(55))
@@ -1568,7 +1575,7 @@ mod tests {
             .expect("valid request write must succeed");
         let response_frame = read_framed_response(&mut client);
         let response = decode_v3_response_payload(&response_frame);
-        assert_eq!(response.request_id, 11);
+        assert_eq!(response.request_id, crate::codec::RequestId::from(11));
         assert_eq!(
             response.varbinds[0].value,
             crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(77))
@@ -1610,7 +1617,7 @@ mod tests {
             .expect("valid request write must succeed");
         let response_frame = read_framed_response(&mut client);
         let response = decode_v3_response_payload(&response_frame);
-        assert_eq!(response.request_id, 21);
+        assert_eq!(response.request_id, crate::codec::RequestId::from(21));
         assert_eq!(
             response.varbinds[0].value,
             crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(88))
@@ -1710,7 +1717,7 @@ mod tests {
             .expect("valid request write must succeed");
         let response_frame = read_framed_response(&mut client);
         let response = decode_v3_response_payload(&response_frame);
-        assert_eq!(response.request_id, 99);
+        assert_eq!(response.request_id, crate::codec::RequestId::from(99));
         assert_eq!(
             response.varbinds[0].value,
             crate::codec::VarbindValue::Value(crate::codec::Value::Integer32(42))
@@ -1800,7 +1807,7 @@ mod tests {
         let (event_loop, bound_addr, sender) = EventLoop::new(
             any_loopback(),
             test_engine_id(),
-            1,
+            EngineBoots::from(1_u32),
             None,
             crate::usm::user::SecurityLevel::NoAuthNoPriv,
             DEFAULT_MAX_CONNECTIONS,
@@ -1851,7 +1858,7 @@ mod tests {
         let (event_loop, bound_addr, sender) = EventLoop::new(
             any_loopback(),
             test_engine_id(),
-            1,
+            EngineBoots::from(1_u32),
             None,
             crate::usm::user::SecurityLevel::NoAuthNoPriv,
             max_conns,
@@ -1907,7 +1914,7 @@ mod tests {
         let (event_loop, bound_addr, sender) = EventLoop::new(
             any_loopback(),
             test_engine_id(),
-            1,
+            EngineBoots::from(1_u32),
             None,
             crate::usm::user::SecurityLevel::NoAuthNoPriv,
             DEFAULT_MAX_CONNECTIONS,
@@ -1928,7 +1935,7 @@ mod tests {
             .expect("first request write must succeed");
         let first_response = read_framed_response(&mut client);
         let first = decode_v3_response_payload(&first_response);
-        assert_eq!(first.request_id, 50);
+        assert_eq!(first.request_id, crate::codec::RequestId::from(50));
 
         // Only wait 20 ms — well below the 500 ms normal timeout.
         thread::sleep(Duration::from_millis(20));
@@ -1941,7 +1948,8 @@ mod tests {
         let second_response = read_framed_response(&mut client);
         let second = decode_v3_response_payload(&second_response);
         assert_eq!(
-            second.request_id, 51,
+            second.request_id,
+            crate::codec::RequestId::from(51),
             "connection must remain open for an active client"
         );
 
@@ -1976,7 +1984,7 @@ mod tests {
         let (event_loop, bound_addr, sender) = EventLoop::new(
             any_loopback(),
             test_engine_id(),
-            1,
+            EngineBoots::from(1_u32),
             None,
             crate::usm::user::SecurityLevel::NoAuthNoPriv,
             3, // max_connections: 1 connection + headroom(2) = 3 >= 3 -> pressure

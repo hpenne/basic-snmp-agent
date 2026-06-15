@@ -20,9 +20,9 @@ pub use encode::{
 };
 pub use types::{
     DecodeError, DecodeErrorKind, DecodedScopedPdu, EncodeError, ErrorStatus, GetBulkRequest,
-    GetNextRequest, GetRequest, GetResponse, InboundPdu, InvalidErrorStatus, SecurityModel,
-    SetRequest, UsmSecurityFields, V3InboundMessage, V3ScopedData, Varbind, VarbindValue,
-    WireTrapPdu,
+    GetNextRequest, GetRequest, GetResponse, InboundPdu, InvalidErrorStatus, MessageId, RequestId,
+    SecurityModel, SetRequest, UsmSecurityFields, V3InboundMessage, V3ScopedData, Varbind,
+    VarbindValue, WireTrapPdu,
 };
 
 // Cross-module round-trip tests that exercise both encode and decode.
@@ -38,7 +38,7 @@ mod tests {
         use rasn_snmp::v2::{GetRequest as RasnGetRequest, Pdu};
 
         let pdu = GetResponse {
-            request_id: 100,
+            request_id: RequestId::from(100),
             error_status: ErrorStatus::NoError,
             error_index: 0,
             varbinds: vec![],
@@ -67,7 +67,7 @@ mod tests {
         let decode_result = decode_pdu(&raw_ber).unwrap();
         match decode_result {
             InboundPdu::GetRequest(req) => {
-                assert_eq!(req.request_id, 200);
+                assert_eq!(req.request_id, RequestId::from(200));
                 assert_eq!(req.varbinds.len(), 0);
             }
             other => panic!("expected GetRequest, got {other:?}"),
@@ -91,7 +91,7 @@ mod tests {
         for (i, value) in values.into_iter().enumerate() {
             let oid: Oid = format!("{oid_base}.{i}.0").parse().unwrap();
             let pdu = GetResponse {
-                request_id: i32::try_from(i).expect("loop index fits i32"),
+                request_id: RequestId::from(i32::try_from(i).expect("loop index fits i32")),
                 error_status: ErrorStatus::NoError,
                 error_index: 0,
                 varbinds: vec![Varbind {

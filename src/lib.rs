@@ -16,7 +16,7 @@
 //! # Quick start
 //!
 //! ```no_run
-//! use basic_snmp_agent::{AgentBuilder, SecurityConfig, TrapPdu};
+//! use basic_snmp_agent::{AgentBuilder, RequestId, SecurityConfig, TrapPdu};
 //!
 //! let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
 //!     .listen_addr("0.0.0.0:10161".parse().unwrap())
@@ -24,7 +24,7 @@
 //!     .unwrap();
 //!
 //! let pdu = TrapPdu {
-//!     request_id: 1,
+//!     request_id: RequestId::from(1),
 //!     trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
 //!     varbinds: vec![],
 //! };
@@ -46,14 +46,16 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-pub use crate::codec::{Oid, Value, Varbind, VarbindValue};
+pub use crate::codec::{Oid, RequestId, Value, Varbind, VarbindValue};
 pub use crate::transport::event_loop::ConnectionTimeoutConfig;
 pub use crate::transport::{TrapPdu, TrapResult};
+pub use crate::usm::engine_id::EngineId;
 pub use crate::usm::user::{AuthNoPrivUser, AuthPrivUser};
 pub use error::{AgentError, SetError, TrapError};
 
 use crate::transport::event_loop::{Command, DEFAULT_MAX_CONNECTIONS, EventLoop, EventLoopError};
 use crate::transport::trap::TrapSender;
+use crate::usm::engine_time::EngineBoots;
 
 // ── AgentInner ───────────────────────────────────────────────────────────────
 
@@ -104,11 +106,11 @@ impl Drop for AgentInner {
 /// # Examples
 ///
 /// ```no_run
-/// use basic_snmp_agent::{AgentBuilder, SecurityConfig, TrapPdu};
+/// use basic_snmp_agent::{AgentBuilder, RequestId, SecurityConfig, TrapPdu};
 ///
 /// let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv).build().unwrap();
 /// let pdu = TrapPdu {
-///     request_id: 1,
+///     request_id: RequestId::from(1),
 ///     trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
 ///     varbinds: vec![],
 /// };
@@ -147,11 +149,11 @@ impl Agent {
     /// # Examples
     ///
     /// ```no_run
-    /// use basic_snmp_agent::{AgentBuilder, SecurityConfig, TrapPdu};
+    /// use basic_snmp_agent::{AgentBuilder, RequestId, SecurityConfig, TrapPdu};
     ///
     /// let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv).build().unwrap();
     /// let pdu = TrapPdu {
-    ///     request_id: 1,
+    ///     request_id: RequestId::from(1),
     ///     trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
     ///     varbinds: vec![],
     /// };
@@ -316,7 +318,8 @@ pub struct AgentBuilder {
     listen_addr: SocketAddr,
     /// `SNMPv3` engine ID for this agent instance. Inbound requests with a
     /// different engine ID are rejected with a Report PDU (REQ-0104).
-    engine_id: Vec<u8>,
+    // Implements: REQ-0055
+    engine_id: EngineId,
     // Security configuration supplied at construction time.
     // Implements: REQ-0075, REQ-0076, REQ-0077, REQ-0129
     security: SecurityConfig,
@@ -351,7 +354,9 @@ impl AgentBuilder {
                 .expect("default listen address is valid"),
             // Default engine ID: enterprise OID format (0x80 = enterprise,
             // 0x00 0x1f 0x88 = enterprise number 8072, 0x04 = text format).
-            engine_id: b"\x80\x00\x1f\x88\x04basic-snmp-agent".to_vec(),
+            // 21 bytes — within the RFC 3411 §5 range; EngineId::try_from is infallible here.
+            engine_id: EngineId::try_from(b"\x80\x00\x1f\x88\x04basic-snmp-agent".to_vec())
+                .expect("default engine ID is 21 bytes, within the valid 5–32 octet range"),
             security,
             max_connections: DEFAULT_MAX_CONNECTIONS,
             timeout_config: ConnectionTimeoutConfig::default(),
@@ -372,10 +377,13 @@ impl AgentBuilder {
     /// The engine ID identifies this agent uniquely in the network. Inbound
     /// `SNMPv3` messages with a different engine ID are silently discarded.
     ///
+    /// Construct an [`EngineId`] with `EngineId::try_from(bytes)` to validate
+    /// the RFC 3411 §5 length constraint (5–32 octets) before passing it here.
+    ///
     /// # Requirements
     /// Implements: REQ-0055
     #[must_use]
-    pub fn engine_id(mut self, engine_id: Vec<u8>) -> Self {
+    pub fn engine_id(mut self, engine_id: EngineId) -> Self {
         self.engine_id = engine_id;
         self
     }
@@ -421,20 +429,17 @@ impl AgentBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an [`AgentError`] if the engine ID length is outside the RFC 3411 §5
-    /// range of 5–32 octets ([`AgentError::InvalidEngineId`]), the TCP listener
-    /// cannot be bound ([`AgentError::Bind`]), the event loop infrastructure cannot
-    /// be initialised ([`AgentError::Socket`]), the UDP trap socket cannot be created
+    /// Returns an [`AgentError`] if the TCP listener cannot be bound
+    /// ([`AgentError::Bind`]), the event loop infrastructure cannot be initialised
+    /// ([`AgentError::Socket`]), the UDP trap socket cannot be created
     /// ([`AgentError::UdpSocket`]), or the event loop thread cannot be spawned
     /// ([`AgentError::Spawn`]).
     ///
     /// Returns [`AgentError::EngineBoots`] if the `snmpEngineBoots` counter is at its ceiling
     /// (per RFC 3414 §2.2) or the backing store fails.
     pub fn build(self) -> Result<Agent, AgentError> {
-        // RFC 3411 §5: SnmpEngineID must be between 5 and 32 octets inclusive.
-        if self.engine_id.len() < 5 || self.engine_id.len() > 32 {
-            return Err(AgentError::InvalidEngineId);
-        }
+        // RFC 3411 §5 length invariant is enforced by EngineId::try_from at
+        // construction time, so no manual length check is needed here.
 
         // Implements: REQ-0077
         let minimum_security_level = match &self.security {
@@ -455,13 +460,17 @@ impl AgentBuilder {
             ),
         };
 
-        let engine_boots = match boots_store.as_deref_mut() {
-            Some(store) => crate::usm::boots::initialise_engine_boots(store, &self.engine_id)
-                .map_err(AgentError::EngineBoots)?,
+        let engine_boots = EngineBoots::from(match boots_store.as_deref_mut() {
+            // AsRef<[u8]> converts EngineId to &[u8] without cloning,
+            // keeping the EngineBootsStore boundary unchanged.
+            Some(store) => {
+                crate::usm::boots::initialise_engine_boots(store, self.engine_id.as_ref())
+                    .map_err(AgentError::EngineBoots)?
+            }
             // NoAuthNoPriv carries no boots store; boots is unused at this
             // security level but the event loop still expects a value.
             None => 1,
-        };
+        });
         let usm_user = usm_user.map(std::sync::Arc::new);
 
         let listen_addr = self.listen_addr;
@@ -546,7 +555,7 @@ mod tests {
         // Verifies: REQ-0043
         let agent = test_agent();
         let pdu = TrapPdu {
-            request_id: 1,
+            request_id: RequestId::from(1),
             trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
             varbinds: vec![],
         };
@@ -563,7 +572,7 @@ mod tests {
         let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
         let dest = receiver.local_addr().unwrap();
         let pdu = TrapPdu {
-            request_id: 1,
+            request_id: RequestId::from(1),
             trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
             varbinds: vec![Varbind {
                 oid: "1.3.6.1.2.1.1.1.0".parse().unwrap(),
@@ -581,7 +590,7 @@ mod tests {
     #[test]
     fn given_custom_engine_id_when_build_then_agent_starts() {
         // Verifies: REQ-0001, REQ-0002, REQ-0048, REQ-0049, REQ-0055
-        let custom_engine_id = b"\x80\x00\x1f\x88\x04custom".to_vec();
+        let custom_engine_id = EngineId::try_from(b"\x80\x00\x1f\x88\x04custom".to_vec()).unwrap();
         let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .engine_id(custom_engine_id)
@@ -591,39 +600,32 @@ mod tests {
     }
 
     #[test]
-    fn given_engine_id_too_short_when_build_then_invalid_engine_id_error() {
+    fn given_engine_id_too_short_when_try_from_then_invalid_engine_id_error() {
         // Verifies: REQ-0055
+        // Validation now happens at EngineId::try_from rather than AgentBuilder::build.
         let too_short = b"ab".to_vec(); // 2 bytes, below the 5-byte minimum
-        let result = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
-            .listen_addr("127.0.0.1:0".parse().unwrap())
-            .engine_id(too_short)
-            .build();
-        assert!(
-            matches!(result, Err(AgentError::InvalidEngineId)),
-            "expected InvalidEngineId error for too-short engine ID"
-        );
+        let result = EngineId::try_from(too_short);
+        assert!(result.is_err(), "expected Err for 2-byte input");
+        assert_eq!(result.unwrap_err().actual_len(), 2);
     }
 
     #[test]
-    fn given_engine_id_too_long_when_build_then_invalid_engine_id_error() {
+    fn given_engine_id_too_long_when_try_from_then_invalid_engine_id_error() {
         // Verifies: REQ-0055
+        // Validation now happens at EngineId::try_from rather than AgentBuilder::build.
         let too_long = vec![0_u8; 33]; // 33 bytes, above the 32-byte maximum
-        let result = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
-            .listen_addr("127.0.0.1:0".parse().unwrap())
-            .engine_id(too_long)
-            .build();
-        assert!(
-            matches!(result, Err(AgentError::InvalidEngineId)),
-            "expected InvalidEngineId error for too-long engine ID"
-        );
+        let result = EngineId::try_from(too_long);
+        assert!(result.is_err(), "expected Err for 33-byte input");
+        assert_eq!(result.unwrap_err().actual_len(), 33);
     }
 
     #[test]
     fn given_engine_id_exactly_5_bytes_when_build_then_succeeds() {
         // Verifies: REQ-0055
         // 5 bytes is the minimum valid length per RFC 3411 §5. The mutant
-        // `< with <=` would incorrectly reject this boundary value.
-        let min_valid = vec![0x80_u8, 0x00, 0x1f, 0x88, 0x01]; // exactly 5 bytes
+        // `< with <=` in EngineId::try_from would incorrectly reject this boundary value.
+        let min_valid =
+            EngineId::try_from(vec![0x80_u8, 0x00, 0x1f, 0x88, 0x01]).expect("5 bytes is valid");
         let result = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .engine_id(min_valid)
@@ -635,8 +637,8 @@ mod tests {
     fn given_engine_id_exactly_32_bytes_when_build_then_succeeds() {
         // Verifies: REQ-0055
         // 32 bytes is the maximum valid length per RFC 3411 §5. The mutant
-        // `> with >=` would incorrectly reject this boundary value.
-        let max_valid = vec![0xAA_u8; 32]; // exactly 32 bytes
+        // `> with >=` in EngineId::try_from would incorrectly reject this boundary value.
+        let max_valid = EngineId::try_from(vec![0xAA_u8; 32]).expect("32 bytes is valid");
         let result = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
             .listen_addr("127.0.0.1:0".parse().unwrap())
             .engine_id(max_valid)
@@ -896,7 +898,7 @@ mod tests {
         let dest = receiver.local_addr().unwrap();
 
         let pdu = TrapPdu {
-            request_id: 1,
+            request_id: RequestId::from(1),
             trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
             varbinds: vec![],
         };
@@ -961,7 +963,7 @@ mod tests {
         let dest = receiver.local_addr().unwrap();
 
         let pdu = TrapPdu {
-            request_id: 2,
+            request_id: RequestId::from(2),
             trap_oid: "1.3.6.1.6.3.1.1.5.1".parse().unwrap(),
             varbinds: vec![],
         };

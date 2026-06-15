@@ -1,5 +1,6 @@
 {
   "permissions": {
+    "defaultMode": "dontAsk",
     "allow": [
       "Bash(govctl status:*)",
       "Bash(govctl rfc:*)",
@@ -69,17 +70,26 @@
       "WebFetch(domain:www.itu.int)",
       "Bash(uv run *)",
       "WebFetch(domain:api.anthropic.com)",
-      "mcp__plugin_codescene_codescene__list_technical_debt_hotspots_for_project",
-      "mcp__plugin_codescene_codescene__list_technical_debt_goals_for_project",
-      "mcp__plugin_codescene_codescene__list_technical_debt_hotspots_for_project_file",
-      "mcp__plugin_codescene_codescene__code_health_score",
-      "mcp__plugin_codescene_codescene__code_health_review",
-      "mcp__plugin_codescene_codescene__code_health_refactoring_business_case",
-      "Bash(git stash *)"
+      "Bash(git stash *)",
+      "Bash(claude mcp *)",
+      "mcp__codescene__code_health_review",
+      "mcp__codescene__explain_code_health",
+      "mcp__codescene__code_health_score",
+      "mcp__codescene__analyze_change_set",
+      "mcp__codescene__pre_commit_code_health_safeguard",
+      "mcp__codescene__code_health_refactoring_business_case",
+      "mcp__codescene__explain_code_health_productivity",
+      "mcp__codescene__list_skills",
+      "mcp__codescene__get_config",
+      "mcp__codescene__list_technical_debt_hotspots_for_project",
+      "mcp__codescene__list_technical_debt_goals_for_project",
+      "mcp__codescene__list_technical_debt_hotspots_for_project_file",
+      "Edit(**)",
+      "Write(**)"
     ]
   },
   "sandbox": {
-    "enabled": false,
+    "enabled": true,
     "autoAllowBashIfSandboxed": true,
     "filesystem": {
       "allowWrite": [
@@ -87,9 +97,7 @@
       ]
     },
     "excludedCommands": [
-      "make",
-      "uv",
-      "cargo test"
+      "make behave-test"
     ]
   }
 }

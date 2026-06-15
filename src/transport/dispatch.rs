@@ -15,6 +15,7 @@ use report::{
 
 use crate::transport::event_loop::{MAX_BULK_REPETITIONS, MAX_FRAME_SIZE};
 use crate::transport::request;
+use crate::usm::engine_time::{EngineBoots, EngineTime};
 // Implements: [[RFC-0009:C-FACADE]]
 use log::{debug, trace};
 /// Decode, validate, and dispatch a single RFC 3430 BER frame, returning
@@ -78,9 +79,9 @@ fn run_validation_pipeline(
             &DecryptionParams {
                 msg_id: v3_msg.msg_id,
                 security_flags: v3_msg.usm.security_flags,
-                priv_params: &v3_msg.usm.priv_params,
-                auth_engine_boots: v3_msg.usm.auth_engine_boots,
-                auth_engine_time: v3_msg.usm.auth_engine_time,
+                priv_params: v3_msg.usm.priv_params.as_ref(),
+                auth_engine_boots: EngineBoots::from(v3_msg.usm.auth_engine_boots),
+                auth_engine_time: EngineTime::from(v3_msg.usm.auth_engine_time),
             },
             &ciphertext,
         )?,
@@ -211,12 +212,19 @@ fn verify_authentication(
     let (Some(auth_protocol), Some(auth_key)) = (user.auth_protocol(), user.auth_key()) else {
         return Ok(());
     };
+    // None auth_params (noAuthNoPriv or missing field) is treated as an empty
+    // MAC, which will fail HMAC verification — fail-closed behaviour.
+    let auth_params_bytes = v3_msg
+        .usm
+        .auth_params
+        .as_ref()
+        .map_or(&[] as &[u8], AsRef::as_ref);
     let hmac_valid = verify_hmac(
         auth_protocol,
         auth_key,
         &HmacInput {
             raw_message: v3_msg.raw_message,
-            auth_params: &v3_msg.usm.auth_params,
+            auth_params: auth_params_bytes,
             auth_params_offset: v3_msg.auth_params_offset,
         },
     );
@@ -247,8 +255,8 @@ fn check_time_window(
         return Ok(());
     }
     let in_time_window = crate::usm::time_window::is_in_time_window(
-        v3_msg.usm.auth_engine_boots,
-        v3_msg.usm.auth_engine_time,
+        EngineBoots::from(v3_msg.usm.auth_engine_boots),
+        EngineTime::from(v3_msg.usm.auth_engine_time),
         ctx.inputs.engine_boots,
         ctx.inputs.engine_time,
     );
@@ -280,7 +288,7 @@ fn check_context_name(v3_msg: &crate::codec::V3InboundMessage<'_>) -> Result<(),
 // Message-level fields needed for response encoding.
 #[derive(Debug)]
 struct ResponseEnvelope<'a> {
-    msg_id: i32,
+    msg_id: crate::codec::MessageId,
     max_size: i32,
     user_name: &'a [u8],
     // May come from the outer message (cleartext) or the decrypted ScopedPDU (authPriv).
@@ -332,8 +340,8 @@ fn dispatch_pdu_and_encode_response(
         ctx.inputs.engine_id,
         envelope.user_name,
         envelope.context_name,
-        ctx.inputs.engine_boots,
-        ctx.inputs.engine_time,
+        u32::from(ctx.inputs.engine_boots),
+        u32::from(ctx.inputs.engine_time),
         response_auth,
         response_priv,
         &response,
@@ -375,11 +383,13 @@ fn verify_hmac(
 // Bundles USM fields needed for decryption and error reporting.
 #[derive(Debug)]
 struct DecryptionParams<'a> {
-    msg_id: i32,
+    msg_id: crate::codec::MessageId,
     security_flags: u8,
-    priv_params: &'a [u8],
-    auth_engine_boots: u32,
-    auth_engine_time: u32,
+    // None when the wire value was empty or had a wrong length.
+    // Checked in decrypt_scoped_pdu; None → decryption-error Report PDU.
+    priv_params: Option<&'a crate::usm::security_params::PrivacySalt>,
+    auth_engine_boots: EngineBoots,
+    auth_engine_time: EngineTime,
 }
 
 /// Decrypt an authPriv `ScopedPDU` ciphertext and decode the plaintext.
@@ -410,12 +420,10 @@ fn decrypt_scoped_pdu(
     };
 
     // msgPrivacyParameters must be exactly 8 bytes (the AES salt per RFC 3826 §2.2).
-    if decryption.priv_params.len() != 8 {
-        debug!(
-            "msgPrivacyParameters length {} != 8",
-            decryption.priv_params.len()
-        );
-        // Implements: REQ-0101
+    // None means the wire field was absent or malformed; treat both as a decryption error.
+    // Implements: REQ-0101
+    let Some(priv_salt) = decryption.priv_params else {
+        debug!("msgPrivacyParameters absent or malformed (not exactly 8 bytes)");
         return Err(emit_report_response(
             ctx,
             |inputs| &mut inputs.decryption_errors_counter,
@@ -424,14 +432,14 @@ fn decrypt_scoped_pdu(
             decryption.msg_id,
             decryption.security_flags,
         ));
-    }
+    };
 
     // Implements: REQ-0109
     // IV = engineBoots (4 BE) || engineTime (4 BE) || salt (8 bytes) per RFC 3826 §2.2.
     let mut aes_iv = [0_u8; 16];
-    aes_iv[0..4].copy_from_slice(&decryption.auth_engine_boots.to_be_bytes());
-    aes_iv[4..8].copy_from_slice(&decryption.auth_engine_time.to_be_bytes());
-    aes_iv[8..16].copy_from_slice(decryption.priv_params);
+    aes_iv[0..4].copy_from_slice(&u32::from(decryption.auth_engine_boots).to_be_bytes());
+    aes_iv[4..8].copy_from_slice(&u32::from(decryption.auth_engine_time).to_be_bytes());
+    aes_iv[8..16].copy_from_slice(priv_salt.as_ref());
 
     let Ok(scoped_pdu_bytes) = priv_protocol.decrypt(priv_key, &aes_iv, ciphertext) else {
         debug!("AES-CFB128 decryption failed");
@@ -539,19 +547,16 @@ mod tests {
         process_snmpv3_request(frame, &mut ctx, mib)
     }
 
-    // Assert that a counter field stayed at `u32::MAX` (saturating, no overflow),
-    // and that the Report PDU in `response_bytes` carries the expected OID at that value.
-    fn assert_counter_saturates(counter_value: u32, response_bytes: &[u8], expected_oid: &str) {
-        assert_eq!(counter_value, u32::MAX, "counter must not overflow");
-        assert_report_pdu_varbind(response_bytes, expected_oid, u32::MAX);
-    }
-
     // Assert that a dispatch result was silently discarded (None) and that the
     // named counter was incremented by exactly one from zero.
-    fn assert_discarded_and_counter_incremented(result: Option<&Vec<u8>>, counter_value: u32) {
+    fn assert_discarded_and_counter_incremented(
+        result: Option<&Vec<u8>>,
+        counter: crate::usm::counters::UsmStatsCounter,
+    ) {
         assert!(result.is_none(), "must be silently discarded");
         assert_eq!(
-            counter_value, 1,
+            counter.get(),
+            1,
             "counter must be incremented even when no Report is sent"
         );
     }
@@ -848,15 +853,15 @@ mod tests {
     }
 
     // Test helper that owns counter storage and produces a DispatchContext,
-    // eliminating the repeated boilerplate of five local u32 declarations.
+    // eliminating the repeated boilerplate of seven local counter declarations.
     struct TestCtx {
-        unknown_engine_ids: u32,
-        unknown_user_names: u32,
-        unsupported_sec_levels: u32,
-        wrong_digests: u32,
-        not_in_time_windows: u32,
-        decryption_errors: u32,
-        unknown_security_models: u32,
+        unknown_engine_ids: crate::usm::counters::UsmStatsCounter,
+        unknown_user_names: crate::usm::counters::UsmStatsCounter,
+        unsupported_sec_levels: crate::usm::counters::UsmStatsCounter,
+        wrong_digests: crate::usm::counters::UsmStatsCounter,
+        not_in_time_windows: crate::usm::counters::UsmStatsCounter,
+        decryption_errors: crate::usm::counters::UsmStatsCounter,
+        unknown_security_models: crate::usm::counters::UsmStatsCounter,
         engine_boots: u32,
         engine_time: u32,
         minimum_security_level: crate::usm::user::SecurityLevel,
@@ -865,13 +870,13 @@ mod tests {
     impl TestCtx {
         fn new() -> Self {
             Self {
-                unknown_engine_ids: 0,
-                unknown_user_names: 0,
-                unsupported_sec_levels: 0,
-                wrong_digests: 0,
-                not_in_time_windows: 0,
-                decryption_errors: 0,
-                unknown_security_models: 0,
+                unknown_engine_ids: crate::usm::counters::UsmStatsCounter::default(),
+                unknown_user_names: crate::usm::counters::UsmStatsCounter::default(),
+                unsupported_sec_levels: crate::usm::counters::UsmStatsCounter::default(),
+                wrong_digests: crate::usm::counters::UsmStatsCounter::default(),
+                not_in_time_windows: crate::usm::counters::UsmStatsCounter::default(),
+                decryption_errors: crate::usm::counters::UsmStatsCounter::default(),
+                unknown_security_models: crate::usm::counters::UsmStatsCounter::default(),
                 engine_boots: 1,
                 engine_time: 0,
                 minimum_security_level: crate::usm::user::SecurityLevel::NoAuthNoPriv,
@@ -879,37 +884,7 @@ mod tests {
         }
 
         fn with_unknown_engine_ids(mut self, initial_count: u32) -> Self {
-            self.unknown_engine_ids = initial_count;
-            self
-        }
-
-        fn with_unknown_user_names(mut self, initial_count: u32) -> Self {
-            self.unknown_user_names = initial_count;
-            self
-        }
-
-        fn with_unsupported_sec_levels(mut self, initial_count: u32) -> Self {
-            self.unsupported_sec_levels = initial_count;
-            self
-        }
-
-        fn with_wrong_digests(mut self, initial_count: u32) -> Self {
-            self.wrong_digests = initial_count;
-            self
-        }
-
-        fn with_not_in_time_windows(mut self, initial_count: u32) -> Self {
-            self.not_in_time_windows = initial_count;
-            self
-        }
-
-        fn with_decryption_errors(mut self, initial_count: u32) -> Self {
-            self.decryption_errors = initial_count;
-            self
-        }
-
-        fn with_unknown_security_models(mut self, initial_count: u32) -> Self {
-            self.unknown_security_models = initial_count;
+            self.unknown_engine_ids = crate::usm::counters::UsmStatsCounter::from(initial_count);
             self
         }
 
@@ -938,8 +913,8 @@ mod tests {
         ) -> Result<DispatchContext<'a>, NoUserSecurityLevelError> {
             DispatchContext::new(DispatchInputs {
                 engine_id: test_engine_id(),
-                engine_boots: self.engine_boots,
-                engine_time: self.engine_time,
+                engine_boots: EngineBoots::from(self.engine_boots),
+                engine_time: EngineTime::from(self.engine_time),
                 unknown_engine_ids_counter: &mut self.unknown_engine_ids,
                 unknown_user_names_counter: &mut self.unknown_user_names,
                 unsupported_sec_levels_counter: &mut self.unsupported_sec_levels,
@@ -1079,7 +1054,8 @@ mod tests {
         let response_bytes = run_dispatch(&mut tc, None, &probe_frame, &mib)
             .expect("discovery probe must produce a Report response");
         assert_eq!(
-            tc.unknown_engine_ids, 1,
+            tc.unknown_engine_ids.get(),
+            1,
             "counter must be incremented for discovery probe"
         );
         let v3_response = assert_report_pdu_varbind(
@@ -1100,7 +1076,7 @@ mod tests {
             .with_boots_time(3, 100);
         run_dispatch(&mut tc, None, &probe_frame, &mib);
         run_dispatch(&mut tc, None, &probe_frame, &mib);
-        assert_eq!(tc.unknown_engine_ids, 7);
+        assert_eq!(tc.unknown_engine_ids.get(), 7);
     }
 
     #[test]
@@ -1111,22 +1087,7 @@ mod tests {
         let frame = snmpv3_frames::encode_get_request(test_engine_id(), b"", 1, 2, oid.as_slice());
         let mut tc = TestCtx::new();
         run_dispatch(&mut tc, None, &frame, &mib);
-        assert_eq!(tc.unknown_engine_ids, 0);
-    }
-
-    #[test]
-    fn given_counter_at_max_when_discovery_probe_then_counter_does_not_overflow() {
-        // Verifies: REQ-0093 — saturating_add prevents overflow
-        let mib = crate::mib::Store::new();
-        let probe_frame = snmpv3_frames::encode_discovery_probe();
-        let mut tc = TestCtx::new().with_unknown_engine_ids(u32::MAX);
-        let response_bytes = run_dispatch(&mut tc, None, &probe_frame, &mib)
-            .expect("discovery probe must produce a Report response even when counter is at max");
-        assert_counter_saturates(
-            tc.unknown_engine_ids,
-            &response_bytes,
-            crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS,
-        );
+        assert_eq!(tc.unknown_engine_ids.get(), 0);
     }
 
     #[test]
@@ -1141,7 +1102,8 @@ mod tests {
             "probe without reportableFlag must be silently discarded"
         );
         assert_eq!(
-            tc.unknown_engine_ids, 1,
+            tc.unknown_engine_ids.get(),
+            1,
             "counter must be incremented even for non-reportable probe"
         );
     }
@@ -1165,7 +1127,8 @@ mod tests {
         let response_bytes = run_dispatch(&mut tc, None, &frame, &mib)
             .expect("contextEngineID mismatch must produce a Report response");
         assert_eq!(
-            tc.unknown_engine_ids, 1,
+            tc.unknown_engine_ids.get(),
+            1,
             "counter must be incremented on contextEngineID mismatch"
         );
         let v3_response = assert_report_pdu_varbind(
@@ -1196,28 +1159,6 @@ mod tests {
     }
 
     #[test]
-    fn given_counter_at_max_when_wrong_context_engine_id_then_counter_does_not_overflow() {
-        // Verifies: REQ-0104 — saturating_add prevents overflow
-        let mib = crate::mib::Store::new();
-        let frame = snmpv3_frames::encode_get_request(
-            b"\x80\x00\x1f\x88\x04wrong",
-            b"",
-            1,
-            2,
-            test_oid_arcs(),
-        );
-        let mut tc = TestCtx::new().with_unknown_engine_ids(u32::MAX);
-        let response_bytes = run_dispatch(&mut tc, None, &frame, &mib).expect(
-            "contextEngineID mismatch must produce a Report response even when counter is at max",
-        );
-        assert_counter_saturates(
-            tc.unknown_engine_ids,
-            &response_bytes,
-            crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS,
-        );
-    }
-
-    #[test]
     fn given_matching_usm_engine_id_but_wrong_context_engine_id_when_process_then_returns_report() {
         // Verifies: REQ-0104 — checks contextEngineID specifically, not msgAuthoritativeEngineID
         let mib = crate::mib::Store::new();
@@ -1234,7 +1175,8 @@ mod tests {
             "contextEngineID mismatch must produce a Report response even when msgAuthoritativeEngineID matches"
         );
         assert_eq!(
-            tc.unknown_engine_ids, 1,
+            tc.unknown_engine_ids.get(),
+            1,
             "counter must be incremented on contextEngineID mismatch"
         );
         assert_report_pdu_varbind(
@@ -1254,7 +1196,11 @@ mod tests {
         let mut tc = TestCtx::new();
         let response_bytes = run_dispatch(&mut tc, None, &frame, &mib)
             .expect("request must pass through when no USM user is configured");
-        assert_eq!(tc.unknown_user_names, 0, "counter must not be incremented");
+        assert_eq!(
+            tc.unknown_user_names.get(),
+            0,
+            "counter must not be incremented"
+        );
         assert_get_response(&response_bytes);
     }
 
@@ -1275,7 +1221,8 @@ mod tests {
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("matching user name must produce a response");
         assert_eq!(
-            tc.unknown_user_names, 0,
+            tc.unknown_user_names.get(),
+            0,
             "counter must not be incremented on match"
         );
         assert_get_response(&response_bytes);
@@ -1299,7 +1246,8 @@ mod tests {
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("mismatched user name must produce a Report response");
         assert_eq!(
-            tc.unknown_user_names, 1,
+            tc.unknown_user_names.get(),
+            1,
             "counter must be incremented on mismatch"
         );
         let v3_response = assert_report_pdu_varbind(
@@ -1330,30 +1278,6 @@ mod tests {
         assert_discarded_and_counter_incremented(result.as_ref(), tc.unknown_user_names);
     }
 
-    #[test]
-    fn given_counter_at_max_when_mismatched_user_name_then_counter_does_not_overflow() {
-        // Verifies: REQ-0078 — saturating_add prevents overflow
-        let mib = crate::mib::Store::new();
-        let alice = test_no_auth_user("alice");
-        let frame = snmpv3_frames::encode_get_request_with_user(
-            test_engine_id(),
-            b"eve",
-            b"",
-            1,
-            2,
-            test_oid_arcs(),
-        );
-        let mut tc = TestCtx::new().with_unknown_user_names(u32::MAX);
-        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib).expect(
-            "user-name mismatch must produce a Report response even when counter is at max",
-        );
-        assert_counter_saturates(
-            tc.unknown_user_names,
-            &response_bytes,
-            crate::usm::counters::USM_STATS_UNKNOWN_USER_NAMES,
-        );
-    }
-
     // ── Security-level enforcement (REQ-0077, REQ-0079, REQ-0103, REQ-0130) ───
 
     #[test]
@@ -1374,7 +1298,8 @@ mod tests {
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("matching security level must produce a response");
         assert_eq!(
-            tc.unsupported_sec_levels, 0,
+            tc.unsupported_sec_levels.get(),
+            0,
             "counter must not be incremented on match"
         );
         assert_get_response(&response_bytes);
@@ -1399,7 +1324,8 @@ mod tests {
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("ceiling violation must produce a Report response");
         assert_eq!(
-            tc.unsupported_sec_levels, 1,
+            tc.unsupported_sec_levels.get(),
+            1,
             "counter must be incremented on ceiling violation"
         );
         let v3_response = assert_report_pdu_varbind(
@@ -1452,37 +1378,14 @@ mod tests {
         let response_bytes = run_dispatch(&mut tc, None, &frame, &mib)
             .expect("authNoPriv message with reportableFlag set must produce a Report response");
         assert_eq!(
-            tc.unsupported_sec_levels, 1,
+            tc.unsupported_sec_levels.get(),
+            1,
             "counter must be incremented for no-user auth/priv message (fail-closed)"
         );
         assert_report_pdu_varbind(
             &response_bytes,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
             1,
-        );
-    }
-
-    #[test]
-    fn given_counter_at_max_when_ceiling_violation_then_counter_does_not_overflow() {
-        // Verifies: REQ-0130 — saturating_add prevents overflow
-        let mib = crate::mib::Store::new();
-        let alice = test_no_auth_user("alice");
-        let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
-            test_engine_id(),
-            b"alice",
-            b"",
-            1,
-            2,
-            test_oid_arcs(),
-            0x05,
-        );
-        let mut tc = TestCtx::new().with_unsupported_sec_levels(u32::MAX);
-        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
-            .expect("ceiling violation must produce a Report response even when counter is at max");
-        assert_counter_saturates(
-            tc.unsupported_sec_levels,
-            &response_bytes,
-            crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
         );
     }
 
@@ -1506,7 +1409,8 @@ mod tests {
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("invalid msgFlags combination must produce a Report response");
         assert_eq!(
-            tc.unsupported_sec_levels, 1,
+            tc.unsupported_sec_levels.get(),
+            1,
             "counter must be incremented for invalid msgFlags"
         );
         assert_report_pdu_varbind(
@@ -1535,7 +1439,8 @@ mod tests {
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("below-floor message must produce a Report response");
         assert_eq!(
-            tc.unsupported_sec_levels, 1,
+            tc.unsupported_sec_levels.get(),
+            1,
             "counter must be incremented for below-floor message"
         );
         assert_report_pdu_varbind(
@@ -1566,7 +1471,8 @@ mod tests {
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("below-floor authNoPriv message must produce a Report response");
         assert_eq!(
-            tc.unsupported_sec_levels, 1,
+            tc.unsupported_sec_levels.get(),
+            1,
             "counter must be incremented for below-floor message"
         );
         assert_report_pdu_varbind(
@@ -1591,7 +1497,8 @@ mod tests {
             "authNoPriv message must be accepted when user has authPriv capabilities and floor is authNoPriv"
         );
         assert_eq!(
-            tc.unsupported_sec_levels, 0,
+            tc.unsupported_sec_levels.get(),
+            0,
             "counter must not be incremented when message passes both floor and ceiling checks"
         );
         // An AuthPriv user responding to any authenticated request will produce an authPriv-encrypted
@@ -1624,7 +1531,8 @@ mod tests {
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("ceiling violation must produce a Report response");
         assert_eq!(
-            tc.unsupported_sec_levels, 1,
+            tc.unsupported_sec_levels.get(),
+            1,
             "counter must be incremented for ceiling violation"
         );
         assert_report_pdu_varbind(
@@ -1721,7 +1629,8 @@ mod tests {
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("correct HMAC must produce a normal response");
         assert_eq!(
-            tc.wrong_digests, 0,
+            tc.wrong_digests.get(),
+            0,
             "counter must not be incremented on correct HMAC"
         );
         assert_get_response(&response_bytes);
@@ -1745,7 +1654,8 @@ mod tests {
         let mut tc = TestCtx::new();
         let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
         assert_eq!(
-            tc.wrong_digests, 1,
+            tc.wrong_digests.get(),
+            1,
             "counter must be incremented on wrong HMAC"
         );
         assert_report_pdu_varbind(
@@ -1773,7 +1683,8 @@ mod tests {
         let mut tc = TestCtx::new();
         let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
         assert_eq!(
-            tc.wrong_digests, 1,
+            tc.wrong_digests.get(),
+            1,
             "counter must be incremented for empty auth_params"
         );
         assert_report_pdu_varbind(
@@ -1803,31 +1714,6 @@ mod tests {
         let mut tc = TestCtx::new();
         let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
         assert_discarded_and_counter_incremented(result.as_ref(), tc.wrong_digests);
-    }
-
-    #[test]
-    fn given_counter_at_max_when_wrong_hmac_then_counter_does_not_overflow() {
-        // Verifies: REQ-0100 — saturating_add prevents overflow
-        let mib = crate::mib::Store::new();
-        let alice = test_auth_user("alice", &[0x42_u8; 32]);
-        let frame = snmpv3_frames::encode_get_request_with_auth_params(
-            test_engine_id(),
-            b"alice",
-            b"",
-            1,
-            2,
-            test_oid_arcs(),
-            0x05,
-            &[0xBB_u8; 24],
-        );
-        let mut tc = TestCtx::new().with_wrong_digests(u32::MAX);
-        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
-            .expect("wrong HMAC must produce a Report response even when counter is at max");
-        assert_counter_saturates(
-            tc.wrong_digests,
-            &response_bytes,
-            crate::usm::counters::USM_STATS_WRONG_DIGESTS,
-        );
     }
 
     // ── zero_auth_params_in_message ──────────────────────────────────────────────
@@ -1919,7 +1805,8 @@ mod tests {
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("in-window message must produce a normal response");
         assert_eq!(
-            tc.not_in_time_windows, 0,
+            tc.not_in_time_windows.get(),
+            0,
             "counter must not be incremented for in-window message"
         );
         assert_get_response(&response_bytes);
@@ -1937,7 +1824,8 @@ mod tests {
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("out-of-window message must produce a Report response");
         assert_eq!(
-            tc.not_in_time_windows, 1,
+            tc.not_in_time_windows.get(),
+            1,
             "counter must be incremented for out-of-window message"
         );
         let v3_response = assert_report_pdu_varbind(
@@ -1969,25 +1857,6 @@ mod tests {
     }
 
     #[test]
-    fn given_counter_at_max_when_out_of_time_window_then_counter_does_not_overflow() {
-        // Verifies: REQ-0098
-        let mib = crate::mib::Store::new();
-        let auth_key_bytes = [0x42_u8; 32];
-        let alice = test_auth_user("alice", &auth_key_bytes);
-        let frame = build_authenticated_frame_with_time(&auth_key_bytes, 2, 0);
-        let mut tc = TestCtx::new()
-            .with_not_in_time_windows(u32::MAX)
-            .with_boots_time(1, 0);
-        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
-            .expect("out-of-window must produce a Report response even when counter is at max");
-        assert_counter_saturates(
-            tc.not_in_time_windows,
-            &response_bytes,
-            crate::usm::counters::USM_STATS_NOT_IN_TIME_WINDOWS,
-        );
-    }
-
-    #[test]
     fn given_no_auth_user_when_process_then_time_window_check_skipped() {
         // Verifies: REQ-0098
         let mib = crate::mib::Store::new();
@@ -2006,7 +1875,8 @@ mod tests {
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("noAuthNoPriv message must pass through regardless of boots/time");
         assert_eq!(
-            tc.not_in_time_windows, 0,
+            tc.not_in_time_windows.get(),
+            0,
             "counter must not be incremented for noAuthNoPriv messages"
         );
         assert_get_response(&response_bytes);
@@ -2023,7 +1893,8 @@ mod tests {
         let mut tc = TestCtx::new().with_boots_time(1, 0);
         let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
         assert_eq!(
-            tc.not_in_time_windows, 1,
+            tc.not_in_time_windows.get(),
+            1,
             "counter must be incremented for time-difference out-of-window message"
         );
         assert_report_pdu_varbind(
@@ -2048,7 +1919,8 @@ mod tests {
         let mut tc = TestCtx::new();
         let result = run_dispatch(&mut tc, None, &encoded_frame, &mib);
         assert_eq!(
-            tc.unsupported_sec_levels, 1,
+            tc.unsupported_sec_levels.get(),
+            1,
             "counter must be incremented for no-user authPriv message (fail-closed)"
         );
         assert_report_pdu_varbind(
@@ -2074,7 +1946,8 @@ mod tests {
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("correct authPriv message must produce a response");
         assert_eq!(
-            tc.decryption_errors, 0,
+            tc.decryption_errors.get(),
+            0,
             "counter must not be incremented on success"
         );
 
@@ -2145,7 +2018,8 @@ mod tests {
         let mut tc = TestCtx::new().with_boots_time(1, 0);
         let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
         assert_eq!(
-            tc.decryption_errors, 1,
+            tc.decryption_errors.get(),
+            1,
             "counter must be incremented on decryption failure"
         );
         assert_report_pdu_varbind(
@@ -2166,7 +2040,8 @@ mod tests {
         let mut tc = TestCtx::new().with_boots_time(1, 0);
         let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
         assert_eq!(
-            tc.decryption_errors, 1,
+            tc.decryption_errors.get(),
+            1,
             "decryption_errors counter must be incremented for invalid priv_params length"
         );
         assert_report_pdu_varbind(
@@ -2193,30 +2068,6 @@ mod tests {
     }
 
     #[test]
-    fn given_counter_at_max_when_decryption_fails_then_counter_does_not_overflow() {
-        // Verifies: REQ-0101
-        let mib = crate::mib::Store::new();
-        let auth_key_bytes = [0x42_u8; 32];
-        let alice = test_authpriv_user("alice", &auth_key_bytes);
-        // Frame encrypted with a mismatched key to trigger decryption failure.
-        let frame = AuthPrivFrameParams::new(&auth_key_bytes)
-            .with_priv_key(&[0xAA_u8; 16])
-            .with_boots_time(1, 0)
-            .build();
-        let mut tc = TestCtx::new()
-            .with_boots_time(1, 0)
-            .with_decryption_errors(u32::MAX);
-        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib).expect(
-            "decryption failure must produce a Report response even when counter is at max",
-        );
-        assert_counter_saturates(
-            tc.decryption_errors,
-            &response_bytes,
-            crate::usm::counters::USM_STATS_DECRYPTION_ERRORS,
-        );
-    }
-
-    #[test]
     fn given_security_model_not_usm_when_processed_then_returns_report_and_increments_counter() {
         // Verifies: REQ-0115
         let mib = crate::mib::Store::new();
@@ -2224,7 +2075,7 @@ mod tests {
         let mut tc = TestCtx::new();
         let report_bytes = run_dispatch(&mut tc, None, &frame, &mib)
             .expect("should return a Report PDU for unsupported security model");
-        assert_eq!(tc.unknown_security_models, 1);
+        assert_eq!(tc.unknown_security_models.get(), 1);
         assert_report_pdu_varbind(&report_bytes, SNMP_UNKNOWN_SECURITY_MODELS_OID, 1);
     }
 
@@ -2238,7 +2089,8 @@ mod tests {
         let result = run_dispatch(&mut tc, None, &frame, &mib);
         assert!(result.is_none(), "no reportable flag means silent discard");
         assert_eq!(
-            tc.unknown_security_models, 1,
+            tc.unknown_security_models.get(),
+            1,
             "counter must still be incremented"
         );
     }
@@ -2333,22 +2185,6 @@ mod tests {
             truncated_varbind_count < full_varbind_count,
             "small msgMaxSize ({truncated_varbind_count} varbinds) must yield fewer varbinds \
              than large msgMaxSize ({full_varbind_count} varbinds)"
-        );
-    }
-
-    #[test]
-    fn given_unknown_security_models_counter_at_max_when_incremented_then_does_not_overflow() {
-        // Verifies: REQ-0115
-        let mib = crate::mib::Store::new();
-        let frame = build_frame_with_non_usm_security_model();
-        let mut tc = TestCtx::new().with_unknown_security_models(u32::MAX);
-        let response_bytes = run_dispatch(&mut tc, None, &frame, &mib).expect(
-            "unsupported security model must produce a Report response even when counter is at max",
-        );
-        assert_counter_saturates(
-            tc.unknown_security_models,
-            &response_bytes,
-            SNMP_UNKNOWN_SECURITY_MODELS_OID,
         );
     }
 }

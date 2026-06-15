@@ -36,6 +36,7 @@ use std::path::Path;
 
 use arbitrary::Unstructured;
 use basic_snmp_agent::transport::dispatch::{DispatchContext, DispatchInputs};
+use basic_snmp_agent::usm::counters::UsmStatsCounter;
 
 #[path = "arbitrary_snmpv3.rs"]
 mod arbitrary_snmpv3;
@@ -62,25 +63,25 @@ const SYSDESCR_OID: &[u32] = &[1, 3, 6, 1, 2, 1, 1, 1, 0];
 /// Constructing one of these per seed call avoids repeating six variable
 /// declarations and the `DispatchContext` struct literal in each loop body.
 struct DispatchCounters {
-    unknown_engine_ids: u32,
-    unknown_user_names: u32,
-    unsupported_sec_levels: u32,
-    wrong_digests: u32,
-    not_in_time_windows: u32,
-    decryption_errors: u32,
-    unknown_security_models: u32,
+    unknown_engine_ids: UsmStatsCounter,
+    unknown_user_names: UsmStatsCounter,
+    unsupported_sec_levels: UsmStatsCounter,
+    wrong_digests: UsmStatsCounter,
+    not_in_time_windows: UsmStatsCounter,
+    decryption_errors: UsmStatsCounter,
+    unknown_security_models: UsmStatsCounter,
 }
 
 impl DispatchCounters {
     fn new() -> Self {
         Self {
-            unknown_engine_ids: 0,
-            unknown_user_names: 0,
-            unsupported_sec_levels: 0,
-            wrong_digests: 0,
-            not_in_time_windows: 0,
-            decryption_errors: 0,
-            unknown_security_models: 0,
+            unknown_engine_ids: UsmStatsCounter::default(),
+            unknown_user_names: UsmStatsCounter::default(),
+            unsupported_sec_levels: UsmStatsCounter::default(),
+            wrong_digests: UsmStatsCounter::default(),
+            not_in_time_windows: UsmStatsCounter::default(),
+            decryption_errors: UsmStatsCounter::default(),
+            unknown_security_models: UsmStatsCounter::default(),
         }
     }
 
@@ -93,8 +94,8 @@ impl DispatchCounters {
         // always valid combinations; unwrap is sound for all seed call sites.
         DispatchContext::new(DispatchInputs {
             engine_id: ENGINE_ID,
-            engine_boots: 1,
-            engine_time: 0,
+            engine_boots: basic_snmp_agent::usm::engine_time::EngineBoots::from(1_u32),
+            engine_time: basic_snmp_agent::usm::engine_time::EngineTime::ZERO,
             unknown_engine_ids_counter: &mut self.unknown_engine_ids,
             unknown_user_names_counter: &mut self.unknown_user_names,
             unsupported_sec_levels_counter: &mut self.unsupported_sec_levels,

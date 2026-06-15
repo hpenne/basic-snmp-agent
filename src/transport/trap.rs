@@ -13,10 +13,12 @@
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::AtomicI32;
 use std::time::Instant;
 
+use crate::codec::MessageId;
 use crate::transport::request::{TrapPdu, build_wire_trap};
+use crate::usm::engine_time::EngineBoots;
 
 /// The UDP MTU cap for outbound trap datagrams (ADR-0008).
 const TRAP_MTU_BYTES: usize = 1500;
@@ -26,13 +28,6 @@ const TRAP_MTU_BYTES: usize = 1500;
 // monotonically increasing IDs without requiring synchronisation beyond
 // a relaxed atomic increment.
 static TRAP_MSG_ID_COUNTER: AtomicI32 = AtomicI32::new(1);
-
-// Implements: REQ-0105
-fn next_trap_msg_id() -> i32 {
-    // Clear the sign bit so the counter wraps from i32::MAX back to 0
-    // rather than producing negative values that violate RFC 3412 §6.2.
-    TRAP_MSG_ID_COUNTER.fetch_add(1, Ordering::Relaxed) & i32::MAX
-}
 
 /// Per-destination outcome of a single trap send attempt.
 ///
@@ -61,12 +56,13 @@ pub struct TrapResult {
 pub(crate) struct TrapSender {
     socket: Arc<UdpSocket>,
     start_time: Instant,
-    engine_id: Vec<u8>,
-    engine_boots: u32,
+    // Implements: REQ-0055
+    engine_id: crate::usm::engine_id::EngineId,
+    engine_boots: EngineBoots,
     usm_user: Option<Arc<crate::usm::user::UsmUser>>,
 }
 
-// `Arc<UdpSocket>`, `Instant`, `Vec<u8>`, `u32`, and `Arc<UsmUser>` are all
+// `Arc<UdpSocket>`, `Instant`, `Vec<u8>`, `EngineBoots`, and `Arc<UsmUser>` are all
 // `Send + Sync`, so `TrapSender` inherits both. This assertion catches any
 // future field addition that would break the contract at compile time.
 const _: () = {
@@ -96,8 +92,8 @@ impl TrapSender {
     /// Returns an error if the UDP socket cannot be bound.
     pub(crate) fn new(
         start_time: Instant,
-        engine_id: Vec<u8>,
-        engine_boots: u32,
+        engine_id: crate::usm::engine_id::EngineId,
+        engine_boots: EngineBoots,
         usm_user: Option<Arc<crate::usm::user::UsmUser>>,
     ) -> io::Result<Self> {
         let socket = UdpSocket::bind("0.0.0.0:0")?;
@@ -160,16 +156,17 @@ impl TrapSender {
             // No USM user configured: fall back to SNMPv2c for backward compatibility.
             return crate::codec::encode_trap(wire_pdu);
         };
-        let engine_time = u32::try_from(self.start_time.elapsed().as_secs()).unwrap_or(u32::MAX);
+        let engine_time_secs =
+            u32::try_from(self.start_time.elapsed().as_secs()).unwrap_or(u32::MAX);
         let trap_auth = usm_user.auth_protocol().zip(usm_user.auth_key());
         let trap_priv = usm_user.priv_protocol().zip(usm_user.priv_key());
         crate::codec::encode_v3_trap(
-            next_trap_msg_id(),
-            &self.engine_id,
+            MessageId::next_sequential(&TRAP_MSG_ID_COUNTER),
+            self.engine_id.as_ref(),
             usm_user.name().as_bytes(),
             b"",
-            self.engine_boots,
-            engine_time,
+            u32::from(self.engine_boots),
+            engine_time_secs,
             trap_auth,
             trap_priv,
             wire_pdu,
@@ -194,7 +191,7 @@ fn encode_error_for_all(destinations: &[SocketAddr], message: &str) -> Vec<TrapR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::{Value, Varbind, VarbindValue};
+    use crate::codec::{RequestId, Value, Varbind, VarbindValue};
 
     fn trap_oid() -> crate::codec::Oid {
         "1.3.6.1.6.3.1.1.5.1".parse().unwrap()
@@ -202,7 +199,7 @@ mod tests {
 
     fn minimal_pdu() -> TrapPdu {
         TrapPdu {
-            request_id: 1,
+            request_id: RequestId::from(1),
             trap_oid: trap_oid(),
             varbinds: vec![],
         }
@@ -216,9 +213,19 @@ mod tests {
         (sock, addr)
     }
 
-    // Empty engine_id is intentional: V2c mode (usm_user=None) does not use it.
+    // V2c mode (usm_user=None) does not use the engine_id; a minimal valid
+    // placeholder satisfies the EngineId invariant without affecting behaviour.
     fn no_usm_sender() -> TrapSender {
-        TrapSender::new(Instant::now(), vec![], 0, None).unwrap()
+        let placeholder_engine_id =
+            crate::usm::engine_id::EngineId::try_from(b"\x80\x00\x1f\x88\x04".to_vec())
+                .expect("5-byte placeholder is the minimum valid engine ID");
+        TrapSender::new(
+            Instant::now(),
+            placeholder_engine_id,
+            EngineBoots::ZERO,
+            None,
+        )
+        .unwrap()
     }
 
     /// Verify that the HMAC embedded in `encoded_message` is correct.
@@ -297,7 +304,7 @@ mod tests {
             .collect();
 
         let pdu = TrapPdu {
-            request_id: 2,
+            request_id: RequestId::from(2),
             trap_oid: trap_oid(),
             varbinds: large_varbinds,
         };
@@ -427,7 +434,7 @@ mod tests {
         let varbind_oid: crate::codec::Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
 
         let candidate_pdu = TrapPdu {
-            request_id: 42,
+            request_id: RequestId::from(42),
             trap_oid: trap_oid(),
             varbinds: vec![Varbind {
                 oid: varbind_oid.clone(),
@@ -450,7 +457,7 @@ mod tests {
         let final_payload_size = candidate_payload_size + delta;
 
         let exact_mtu_pdu = TrapPdu {
-            request_id: 42,
+            request_id: RequestId::from(42),
             trap_oid: trap_oid(),
             varbinds: vec![Varbind {
                 oid: varbind_oid,
@@ -494,13 +501,21 @@ mod tests {
         let auth_key = SecretKey::new_from_exposed_slice(&[0x42_u8; 32]);
         let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42_u8; 32]);
         let auth_protocol = AuthProtocol::HmacSha256;
-        let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
+        let engine_id =
+            crate::usm::engine_id::EngineId::try_from(b"\x80\x00\x1f\x88\x04test".to_vec())
+                .unwrap();
         let user: Arc<UsmUser> = Arc::new(
             AuthNoPrivUser::new(UserName::new("trapauth").unwrap(), auth_protocol, auth_key)
                 .unwrap()
                 .into(),
         );
-        let sender = TrapSender::new(Instant::now(), engine_id, 1, Some(user)).unwrap();
+        let sender = TrapSender::new(
+            Instant::now(),
+            engine_id,
+            EngineBoots::from(1_u32),
+            Some(user),
+        )
+        .unwrap();
         let (receiver, dest) = loopback_receiver();
         receiver
             .set_read_timeout(Some(std::time::Duration::from_secs(2)))
@@ -553,7 +568,9 @@ mod tests {
         use rasn_snmp::v3::{Message as V3Message, ScopedPduData, USMSecurityParameters};
 
         let auth_key = SecretKey::new_from_exposed_slice(&[0xAA_u8; 32]);
-        let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
+        let engine_id =
+            crate::usm::engine_id::EngineId::try_from(b"\x80\x00\x1f\x88\x04test".to_vec())
+                .unwrap();
         let user: Arc<UsmUser> = Arc::new(
             AuthPrivUser::new(
                 UserName::new("trappriv").unwrap(),
@@ -564,7 +581,13 @@ mod tests {
             .unwrap()
             .into(),
         );
-        let sender = TrapSender::new(Instant::now(), engine_id, 2, Some(user)).unwrap();
+        let sender = TrapSender::new(
+            Instant::now(),
+            engine_id,
+            EngineBoots::from(2_u32),
+            Some(user),
+        )
+        .unwrap();
         let (receiver, dest) = loopback_receiver();
         receiver
             .set_read_timeout(Some(std::time::Duration::from_secs(2)))
@@ -607,9 +630,12 @@ mod tests {
         use crate::usm::user::{UserName, UsmUser};
         use rasn_snmp::v3::{Message as V3Message, ScopedPduData};
 
-        let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
+        let engine_id =
+            crate::usm::engine_id::EngineId::try_from(b"\x80\x00\x1f\x88\x04test".to_vec())
+                .unwrap();
         let user = Arc::new(UsmUser::no_auth_no_priv(UserName::new("public").unwrap()));
-        let sender = TrapSender::new(Instant::now(), engine_id, 0, Some(user)).unwrap();
+        let sender =
+            TrapSender::new(Instant::now(), engine_id, EngineBoots::ZERO, Some(user)).unwrap();
         let (receiver, dest) = loopback_receiver();
         receiver
             .set_read_timeout(Some(std::time::Duration::from_secs(2)))
@@ -649,9 +675,12 @@ mod tests {
         use crate::usm::user::{UserName, UsmUser};
         use rasn_snmp::v3::Message as V3Message;
 
-        let engine_id = b"\x80\x00\x1f\x88\x04test".to_vec();
+        let engine_id =
+            crate::usm::engine_id::EngineId::try_from(b"\x80\x00\x1f\x88\x04test".to_vec())
+                .unwrap();
         let user = std::sync::Arc::new(UsmUser::no_auth_no_priv(UserName::new("public").unwrap()));
-        let sender = TrapSender::new(Instant::now(), engine_id, 0, Some(user)).unwrap();
+        let sender =
+            TrapSender::new(Instant::now(), engine_id, EngineBoots::ZERO, Some(user)).unwrap();
         let (receiver, dest) = loopback_receiver();
         receiver
             .set_read_timeout(Some(std::time::Duration::from_secs(2)))
@@ -708,16 +737,22 @@ mod tests {
     }
 
     #[test]
-    fn given_counter_near_max_when_next_trap_msg_id_then_stays_non_negative() {
+    fn given_counter_near_max_when_next_sequential_then_stays_non_negative() {
         // Verifies: RFC 3412 §6.2
-        // Set the counter to i32::MAX - 1, then call next_trap_msg_id() several times
-        // and verify all returned values are non-negative.
-        TRAP_MSG_ID_COUNTER.store(i32::MAX - 1, Ordering::Relaxed);
-        for _ in 0..5 {
-            let msg_id = next_trap_msg_id();
-            assert!(msg_id >= 0, "msgID must never be negative, got {msg_id}");
-        }
-        // Reset counter to avoid affecting other tests
-        TRAP_MSG_ID_COUNTER.store(1, Ordering::Relaxed);
+        // Use a local counter to avoid racing with TRAP_MSG_ID_COUNTER used by
+        // other concurrent tests. The test exercises MessageId::next_sequential,
+        // which accepts any &AtomicI32.
+        let counter = AtomicI32::new(i32::MAX - 1);
+        assert_eq!(
+            MessageId::next_sequential(&counter),
+            MessageId::from(i32::MAX - 1)
+        );
+        assert_eq!(
+            MessageId::next_sequential(&counter),
+            MessageId::from(i32::MAX)
+        );
+        assert_eq!(MessageId::next_sequential(&counter), MessageId::from(0));
+        assert_eq!(MessageId::next_sequential(&counter), MessageId::from(1));
+        assert_eq!(MessageId::next_sequential(&counter), MessageId::from(2));
     }
 }

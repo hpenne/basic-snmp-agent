@@ -1,6 +1,135 @@
 use std::fmt;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::codec::{Oid, Value};
+
+// ── RequestId ─────────────────────────────────────────────────────────────────
+
+/// A PDU-level request identifier, carried in every inbound and outbound SNMP PDU.
+///
+/// The manager echoes the `request_id` from the inbound PDU in the corresponding
+/// response PDU so it can correlate replies to outstanding requests (RFC 3416 §3).
+/// The wire representation is an ASN.1 INTEGER (`i32`).
+///
+/// Distinct from [`MessageId`], which identifies the `SNMPv3` message envelope.
+/// The two identifiers co-exist in the dispatch path; using newtypes prevents
+/// silent transposition at call sites.
+///
+/// # Requirements
+/// Implements: REQ-0039, REQ-0040, REQ-0068, REQ-0069, REQ-0070
+///
+/// # Examples
+///
+/// ```
+/// use basic_snmp_agent::codec::RequestId;
+///
+/// let id = RequestId::from(42_i32);
+/// assert_eq!(i32::from(id), 42);
+/// ```
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RequestId(i32);
+
+impl RequestId {
+    /// A zero-valued `RequestId`.
+    ///
+    /// Used in outbound messages (e.g., traps and reports) where no inbound
+    /// request ID is available to echo.
+    pub const ZERO: Self = Self(0);
+}
+
+impl From<i32> for RequestId {
+    fn from(value: i32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<RequestId> for i32 {
+    fn from(id: RequestId) -> Self {
+        id.0
+    }
+}
+
+impl fmt::Display for RequestId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+// ── MessageId ─────────────────────────────────────────────────────────────────
+
+/// An `SNMPv3` message-level identifier from `HeaderData.msgID` (RFC 3412 §6.2).
+///
+/// The message ID identifies the `SNMPv3` message envelope, not the inner PDU.
+/// Managers use it to correlate responses and detect duplicates.
+///
+/// Per RFC 3412 §6.2, `msgID` must be in the range `[0, 2147483647]` (i.e.,
+/// non-negative). [`MessageId::next_sequential`] upholds this invariant by clearing
+/// the sign bit so the counter wraps from `i32::MAX` back to 0 rather than
+/// producing negative values. Values obtained via `From<i32>` are unconstrained —
+/// the agent must accept whatever value the manager sends on the wire.
+///
+/// Distinct from [`RequestId`], which is the PDU-level correlation identifier.
+///
+/// # Requirements
+/// Implements: REQ-0068, REQ-0069, REQ-0070, REQ-0105
+///
+/// # Examples
+///
+/// ```
+/// use basic_snmp_agent::codec::MessageId;
+/// use std::sync::atomic::AtomicI32;
+///
+/// let counter = AtomicI32::new(1);
+/// let id = MessageId::next_sequential(&counter);
+/// assert_eq!(i32::from(id), 1);
+/// ```
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MessageId(i32);
+
+impl MessageId {
+    /// Atomically increment `counter` and return the next `MessageId`.
+    ///
+    /// Clears the sign bit of the raw counter value so the identifier is always
+    /// non-negative, as required by RFC 3412 §6.2. The counter wraps from
+    /// `i32::MAX` back to 0 without ever producing a negative value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use basic_snmp_agent::codec::MessageId;
+    /// use std::sync::atomic::AtomicI32;
+    ///
+    /// let counter = AtomicI32::new(i32::MAX - 1);
+    /// let a = MessageId::next_sequential(&counter);
+    /// let b = MessageId::next_sequential(&counter);
+    /// assert_eq!(i32::from(a), i32::MAX - 1);
+    /// assert_eq!(i32::from(b), i32::MAX);
+    /// ```
+    #[must_use]
+    pub fn next_sequential(counter: &AtomicI32) -> Self {
+        // Clear the sign bit so the value stays in [0, i32::MAX] and never
+        // violates the RFC 3412 §6.2 non-negativity requirement.
+        Self(counter.fetch_add(1, Ordering::Relaxed) & i32::MAX)
+    }
+}
+
+impl From<i32> for MessageId {
+    fn from(value: i32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<MessageId> for i32 {
+    fn from(id: MessageId) -> Self {
+        id.0
+    }
+}
+
+impl fmt::Display for MessageId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 // ── VarbindValue ─────────────────────────────────────────────────────────────
 
@@ -173,7 +302,7 @@ impl TryFrom<i32> for ErrorStatus {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GetRequest {
     /// PDU request identifier, echoed in the response.
-    pub request_id: i32,
+    pub request_id: RequestId,
     /// Variable bindings (values are [`VarbindValue::Unspecified`] on inbound requests).
     pub varbinds: Vec<Varbind>,
 }
@@ -182,7 +311,7 @@ pub struct GetRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GetNextRequest {
     /// PDU request identifier, echoed in the response.
-    pub request_id: i32,
+    pub request_id: RequestId,
     /// Variable bindings identifying the OIDs whose lexicographic successors are requested.
     pub varbinds: Vec<Varbind>,
 }
@@ -196,7 +325,7 @@ pub struct GetNextRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GetBulkRequest {
     /// PDU request identifier, echoed in the response.
-    pub request_id: i32,
+    pub request_id: RequestId,
     /// Number of varbinds at the start of the list to treat as `GetNext`
     /// (non-repeating).  This is an unchecked wire value; validate before use.
     pub non_repeaters: u32,
@@ -211,7 +340,7 @@ pub struct GetBulkRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SetRequest {
     /// PDU request identifier, echoed in the response.
-    pub request_id: i32,
+    pub request_id: RequestId,
     /// Variable bindings containing the OID/value pairs to set.
     pub varbinds: Vec<Varbind>,
 }
@@ -280,14 +409,23 @@ pub struct UsmSecurityFields {
     /// Message flags byte: bit 0 = authFlag, bit 1 = privFlag, bit 2 = reportableFlag.
     pub security_flags: u8,
     /// `msgAuthenticationParameters` from the USM security parameters.
-    /// For authenticated messages, this is the received MAC (24 bytes for SHA-256,
-    /// 48 bytes for SHA-512). Empty for `noAuthNoPriv` messages.
-    /// Preserved here for HMAC verification in dispatch.
-    pub auth_params: Vec<u8>,
+    ///
+    /// `Some` for authenticated messages (MAC bytes, 24 bytes for SHA-256 or
+    /// 48 bytes for SHA-512 per RFC 7860); `None` for `noAuthNoPriv` messages
+    /// where `msgAuthenticationParameters` is empty on the wire.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0099, REQ-0100
+    pub auth_params: Option<crate::usm::security_params::AuthenticationParams>,
     /// `msgPrivacyParameters` from the USM security parameters.
-    /// For authPriv messages this is the 8-byte AES salt/IV material needed for decryption.
-    /// Empty for noAuthNoPriv and authNoPriv messages.
-    pub priv_params: Vec<u8>,
+    ///
+    /// `Some` for authPriv messages (exactly 8-byte AES salt per RFC 3826 §2.2);
+    /// `None` for noAuthNoPriv and authNoPriv messages where the field is empty
+    /// on the wire, or when the wire value is not exactly 8 bytes (malformed).
+    ///
+    /// # Requirements
+    /// Implements: REQ-0101, REQ-0109
+    pub priv_params: Option<crate::usm::security_params::PrivacySalt>,
 }
 
 /// A decoded inbound `SNMPv3` message, containing the message-level fields
@@ -299,7 +437,7 @@ pub struct UsmSecurityFields {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct V3InboundMessage<'a> {
     /// Message ID from `HeaderData`; echoed in the `SNMPv3` response.
-    pub msg_id: i32,
+    pub msg_id: MessageId,
     /// Maximum message size the sender can accept (from `HeaderData`).
     ///
     /// Validated by the decoder to be at least 484 per RFC 3412 §6.6.
@@ -339,7 +477,7 @@ pub struct V3InboundMessage<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GetResponse {
     /// Request identifier copied from the corresponding inbound PDU.
-    pub request_id: i32,
+    pub request_id: RequestId,
     /// The error status for this response.
     pub error_status: ErrorStatus,
     /// 1-based index into `varbinds` of the first varbind that caused an error,
@@ -356,7 +494,7 @@ pub struct GetResponse {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WireTrapPdu {
     /// Request identifier for correlating notifications.
-    pub request_id: i32,
+    pub request_id: RequestId,
     /// Variable bindings describing the trap payload.
     pub varbinds: Vec<Varbind>,
 }
@@ -641,7 +779,7 @@ mod tests {
     fn get_response_construction() {
         let oid = sysname_oid();
         let resp = GetResponse {
-            request_id: 42,
+            request_id: RequestId::from(42),
             error_status: ErrorStatus::NoError,
             error_index: 0,
             varbinds: vec![Varbind {
@@ -649,7 +787,7 @@ mod tests {
                 value: VarbindValue::Value(Value::OctetString(b"myrouter".to_vec())),
             }],
         };
-        assert_eq!(resp.request_id, 42);
+        assert_eq!(resp.request_id, RequestId::from(42));
         assert_eq!(resp.error_status, ErrorStatus::NoError);
         assert_eq!(resp.error_index, 0);
         assert_eq!(resp.varbinds.len(), 1);
@@ -658,7 +796,7 @@ mod tests {
     #[test]
     fn get_response_with_error_status() {
         let resp = GetResponse {
-            request_id: 7,
+            request_id: RequestId::from(7),
             error_status: ErrorStatus::NoAccess,
             error_index: 1,
             varbinds: vec![],
@@ -729,6 +867,112 @@ mod tests {
     fn encode_error_is_std_error() {
         let encode_error = EncodeError::new("test");
         let _: &dyn std::error::Error = &encode_error;
+    }
+
+    // ── RequestId ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn request_id_zero_constant() {
+        // Verifies: REQ-0039, REQ-0040
+        assert_eq!(i32::from(RequestId::ZERO), 0);
+    }
+
+    #[test]
+    fn request_id_display() {
+        // Verifies: REQ-0039, REQ-0040
+        assert_eq!(RequestId::from(42).to_string(), "42");
+        assert_eq!(RequestId::from(-1).to_string(), "-1");
+        assert_eq!(RequestId::ZERO.to_string(), "0");
+    }
+
+    #[test]
+    fn request_id_from_i32_round_trips() {
+        // Verifies: REQ-0039, REQ-0040
+        let id = RequestId::from(99_i32);
+        assert_eq!(i32::from(id), 99);
+    }
+
+    #[test]
+    fn request_id_negative_value_preserved() {
+        // Verifies: REQ-0039, REQ-0040
+        // RFC 3416 does not constrain the sign of request-id; negative values are
+        // valid on the wire and must be preserved exactly.
+        let id = RequestId::from(-1_i32);
+        assert_eq!(i32::from(id), -1);
+    }
+
+    #[test]
+    fn request_id_equality_and_copy() {
+        // Verifies: REQ-0039, REQ-0040
+        let a = RequestId::from(7_i32);
+        let b = a;
+        assert_eq!(a, b);
+        assert_ne!(a, RequestId::from(8_i32));
+    }
+
+    // ── MessageId ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn message_id_display() {
+        // Verifies: REQ-0068, REQ-0105
+        assert_eq!(MessageId::from(7).to_string(), "7");
+        assert_eq!(MessageId::from(0).to_string(), "0");
+    }
+
+    #[test]
+    fn message_id_from_i32_round_trips() {
+        // Verifies: REQ-0068, REQ-0105
+        let id = MessageId::from(42_i32);
+        assert_eq!(i32::from(id), 42);
+    }
+
+    #[test]
+    fn message_id_next_sequential_wraps_at_max_without_going_negative() {
+        // Verifies: REQ-0068, REQ-0105 — RFC 3412 §6.2 non-negativity invariant.
+        // The counter starts at i32::MAX - 1. After i32::MAX overflows to i32::MIN,
+        // clearing the sign bit maps i32::MIN → 0, i32::MIN+1 → 1, etc.
+        use std::sync::atomic::AtomicI32;
+        let counter = AtomicI32::new(i32::MAX - 1);
+        assert_eq!(
+            MessageId::next_sequential(&counter),
+            MessageId::from(i32::MAX - 1)
+        );
+        assert_eq!(
+            MessageId::next_sequential(&counter),
+            MessageId::from(i32::MAX)
+        );
+        assert_eq!(MessageId::next_sequential(&counter), MessageId::from(0));
+        assert_eq!(MessageId::next_sequential(&counter), MessageId::from(1));
+        assert_eq!(MessageId::next_sequential(&counter), MessageId::from(2));
+    }
+
+    #[test]
+    fn message_id_next_sequential_produces_distinct_values() {
+        // Verifies: REQ-0068, REQ-0105
+        use std::sync::atomic::AtomicI32;
+        let counter = AtomicI32::new(1);
+        let a = MessageId::next_sequential(&counter);
+        let b = MessageId::next_sequential(&counter);
+        assert_eq!(a, MessageId::from(1));
+        assert_eq!(b, MessageId::from(2));
+    }
+
+    #[test]
+    fn message_id_negative_value_preserved() {
+        // Verifies: REQ-0068, REQ-0105
+        // From<i32> is unconstrained — the agent must echo whatever the manager sent,
+        // including values that violate the RFC 3412 §6.2 non-negativity requirement.
+        let id = MessageId::from(-1_i32);
+        assert_eq!(i32::from(id), -1);
+    }
+
+    #[test]
+    fn message_id_equality_and_copy() {
+        // Verifies: REQ-0068, REQ-0105
+        let a = MessageId::from(3_i32);
+        let b = a;
+        assert_eq!(a, b);
+        assert_ne!(a, MessageId::from(4_i32));
     }
 
     // ── SecurityModel ────────────────────────────────────────────────────────

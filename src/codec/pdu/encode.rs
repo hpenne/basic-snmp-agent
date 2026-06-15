@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::types::{EncodeError, GetResponse, Varbind, VarbindValue, WireTrapPdu};
+use super::types::{EncodeError, GetResponse, MessageId, Varbind, VarbindValue, WireTrapPdu};
 use crate::codec::ber;
 use crate::codec::ber::snmp::MSG_MAX_SIZE_UDP;
 use crate::codec::{Oid, Value};
@@ -34,11 +34,11 @@ fn encode_varbinds(varbinds: &[Varbind]) -> Result<Vec<u8>, EncodeError> {
 /// # Examples
 ///
 /// ```
-/// use basic_snmp_agent::codec::{Oid, Value, ErrorStatus, GetResponse, Varbind, VarbindValue, encode_response};
+/// use basic_snmp_agent::codec::{Oid, RequestId, Value, ErrorStatus, GetResponse, Varbind, VarbindValue, encode_response};
 ///
 /// let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
 /// let pdu = GetResponse {
-///     request_id: 1,
+///     request_id: RequestId::from(1),
 ///     error_status: ErrorStatus::NoError,
 ///     error_index: 0,
 ///     varbinds: vec![Varbind { oid, value: VarbindValue::Value(Value::Integer32(42)) }],
@@ -57,7 +57,7 @@ pub fn encode_response(pdu: &GetResponse) -> Result<Vec<u8>, EncodeError> {
     })?;
     ber::pdu::encode_pdu(
         ber::TAG_RESPONSE,
-        pdu.request_id,
+        i32::from(pdu.request_id),
         error_status,
         error_index,
         &raw_varbind_list,
@@ -119,7 +119,7 @@ fn next_privacy_salt() -> [u8; 8] {
     reason = "mirrors the SNMPv3 message structure fields from RFC 3412/3414"
 )]
 fn encode_v3_envelope(
-    msg_id: i32,
+    msg_id: MessageId,
     engine_id: &[u8],
     user_name: &[u8],
     context_name: &[u8],
@@ -183,7 +183,7 @@ fn encode_v3_envelope(
         };
 
     let (mut encoded_message, auth_params_offset) = ber::snmp::encode_v3_message(
-        msg_id,
+        i32::from(msg_id),
         MSG_MAX_SIZE_UDP,
         flags_byte,
         3,
@@ -264,15 +264,15 @@ fn encode_v3_envelope(
 /// # Examples
 ///
 /// ```
-/// use basic_snmp_agent::codec::{ErrorStatus, GetResponse, encode_v3_response};
+/// use basic_snmp_agent::codec::{ErrorStatus, GetResponse, MessageId, RequestId, encode_v3_response};
 ///
 /// let pdu = GetResponse {
-///     request_id: 1,
+///     request_id: RequestId::from(1),
 ///     error_status: ErrorStatus::NoError,
 ///     error_index: 0,
 ///     varbinds: vec![],
 /// };
-/// let bytes = encode_v3_response(1, b"engine", b"user", b"", 0, 0, None, None, &pdu).unwrap();
+/// let bytes = encode_v3_response(MessageId::from(1), b"engine", b"user", b"", 0, 0, None, None, &pdu).unwrap();
 /// assert!(!bytes.is_empty());
 /// ```
 #[expect(
@@ -280,7 +280,7 @@ fn encode_v3_envelope(
     reason = "mirrors the SNMPv3 message structure fields from RFC 3412/3414"
 )]
 pub fn encode_v3_response(
-    msg_id: i32,
+    msg_id: MessageId,
     engine_id: &[u8],
     user_name: &[u8],
     context_name: &[u8],
@@ -303,7 +303,7 @@ pub fn encode_v3_response(
     })?;
     let raw_pdu_bytes = ber::pdu::encode_pdu(
         ber::TAG_RESPONSE,
-        pdu.request_id,
+        i32::from(pdu.request_id),
         error_status,
         error_index,
         &raw_varbind_list,
@@ -344,14 +344,14 @@ pub fn encode_v3_response(
 /// # Examples
 ///
 /// ```
-/// use basic_snmp_agent::codec::{Oid, Value, WireTrapPdu, Varbind, VarbindValue, encode_v3_trap};
+/// use basic_snmp_agent::codec::{Oid, Value, MessageId, RequestId, WireTrapPdu, Varbind, VarbindValue, encode_v3_trap};
 ///
 /// let oid: Oid = "1.3.6.1.6.3.1.1.4.1.0".parse().unwrap();
 /// let pdu = WireTrapPdu {
-///     request_id: 1,
+///     request_id: RequestId::from(1),
 ///     varbinds: vec![Varbind { oid, value: VarbindValue::Value(Value::TimeTicks(0)) }],
 /// };
-/// let bytes = encode_v3_trap(1, b"engine", b"user", b"", 0, 0, None, None, &pdu).unwrap();
+/// let bytes = encode_v3_trap(MessageId::from(1), b"engine", b"user", b"", 0, 0, None, None, &pdu).unwrap();
 /// assert!(!bytes.is_empty());
 /// ```
 #[expect(
@@ -359,7 +359,7 @@ pub fn encode_v3_response(
     reason = "mirrors the SNMPv3 message structure fields from RFC 3412/3414"
 )]
 pub fn encode_v3_trap(
-    msg_id: i32,
+    msg_id: MessageId,
     engine_id: &[u8],
     user_name: &[u8],
     context_name: &[u8],
@@ -373,9 +373,14 @@ pub fn encode_v3_trap(
     pdu: &WireTrapPdu,
 ) -> Result<Vec<u8>, EncodeError> {
     let raw_varbind_list = encode_varbinds(&pdu.varbinds)?;
-    let raw_pdu_bytes =
-        ber::pdu::encode_pdu(ber::TAG_TRAP, pdu.request_id, 0, 0, &raw_varbind_list)
-            .map_err(|e| EncodeError::new(format!("BER encoding of WireTrapPdu failed: {e}")))?;
+    let raw_pdu_bytes = ber::pdu::encode_pdu(
+        ber::TAG_TRAP,
+        i32::from(pdu.request_id),
+        0,
+        0,
+        &raw_varbind_list,
+    )
+    .map_err(|e| EncodeError::new(format!("BER encoding of WireTrapPdu failed: {e}")))?;
     encode_v3_envelope(
         msg_id,
         engine_id,
@@ -412,15 +417,15 @@ pub fn encode_v3_trap(
 /// # Examples
 ///
 /// ```
-/// use basic_snmp_agent::codec::{Oid, encode_v3_report};
+/// use basic_snmp_agent::codec::{MessageId, Oid, encode_v3_report};
 ///
 /// let engine_id = b"\x80\x00\x1f\x88\x04test";
 /// let oid: Oid = "1.3.6.1.6.3.15.1.1.4.0".parse().unwrap();
-/// let bytes = encode_v3_report(42, engine_id, 3, 100, &oid, 1).unwrap();
+/// let bytes = encode_v3_report(MessageId::from(42), engine_id, 3, 100, &oid, 1).unwrap();
 /// assert!(!bytes.is_empty());
 /// ```
 pub fn encode_v3_report(
-    msg_id: i32,
+    msg_id: MessageId,
     engine_id: &[u8],
     engine_boots: u32,
     engine_time: u32,
@@ -433,8 +438,9 @@ pub fn encode_v3_report(
     };
     let raw_varbind_list = encode_varbinds(&[varbind])?;
     // RFC 3412 §7.1.3(4): the Report PDU's request-id echoes the inbound msgID.
-    let raw_pdu_bytes = ber::pdu::encode_pdu(ber::TAG_REPORT, msg_id, 0, 0, &raw_varbind_list)
-        .map_err(|e| EncodeError::new(format!("BER encoding of Report PDU failed: {e}")))?;
+    let raw_pdu_bytes =
+        ber::pdu::encode_pdu(ber::TAG_REPORT, i32::from(msg_id), 0, 0, &raw_varbind_list)
+            .map_err(|e| EncodeError::new(format!("BER encoding of Report PDU failed: {e}")))?;
     // RFC 3414 §8.2.4: the report's USM security parameters carry the authoritative
     // engine state so the manager can synchronise its local copy. Reports are always
     // sent noAuthNoPriv with an empty user name and empty context name.
@@ -464,11 +470,11 @@ pub fn encode_v3_report(
 /// # Examples
 ///
 /// ```
-/// use basic_snmp_agent::codec::{Oid, Value, WireTrapPdu, Varbind, VarbindValue, encode_trap};
+/// use basic_snmp_agent::codec::{Oid, RequestId, Value, WireTrapPdu, Varbind, VarbindValue, encode_trap};
 ///
 /// let oid: Oid = "1.3.6.1.6.3.1.1.4.1.0".parse().unwrap();
 /// let pdu = WireTrapPdu {
-///     request_id: 1,
+///     request_id: RequestId::from(1),
 ///     varbinds: vec![Varbind { oid, value: VarbindValue::Value(Value::TimeTicks(0)) }],
 /// };
 /// let bytes = encode_trap(&pdu).unwrap();
@@ -476,9 +482,14 @@ pub fn encode_v3_report(
 /// ```
 pub fn encode_trap(pdu: &WireTrapPdu) -> Result<Vec<u8>, EncodeError> {
     let raw_varbind_list = encode_varbinds(&pdu.varbinds)?;
-    let raw_pdu_bytes =
-        ber::pdu::encode_pdu(ber::TAG_TRAP, pdu.request_id, 0, 0, &raw_varbind_list)
-            .map_err(|e| EncodeError::new(format!("BER encoding of WireTrapPdu failed: {e}")))?;
+    let raw_pdu_bytes = ber::pdu::encode_pdu(
+        ber::TAG_TRAP,
+        i32::from(pdu.request_id),
+        0,
+        0,
+        &raw_varbind_list,
+    )
+    .map_err(|e| EncodeError::new(format!("BER encoding of WireTrapPdu failed: {e}")))?;
     // The community string is empty because SNMPv2c traps use plain UDP delivery;
     // the authenticated path uses SNMPv3 instead.
     Ok(ber::snmp::encode_v2c_message(b"", &raw_pdu_bytes))
@@ -487,7 +498,9 @@ pub fn encode_trap(pdu: &WireTrapPdu) -> Result<Vec<u8>, EncodeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::pdu::{ErrorStatus, GetResponse, Varbind, VarbindValue, WireTrapPdu};
+    use crate::codec::pdu::{
+        ErrorStatus, GetResponse, MessageId, RequestId, Varbind, VarbindValue, WireTrapPdu,
+    };
     use crate::codec::{Oid, Value};
     use rasn_smi::v2::{ApplicationSyntax, ObjectSyntax, SimpleSyntax};
     use rasn_snmp::v2::{Pdus, Response, VarBindValue as RasnVarBindValue};
@@ -541,7 +554,7 @@ mod tests {
     fn encode_trap_produces_valid_ber() {
         let oid: Oid = "1.3.6.1.6.3.1.1.4.1.0".parse().unwrap();
         let pdu = WireTrapPdu {
-            request_id: 1,
+            request_id: RequestId::from(1),
             varbinds: vec![Varbind {
                 oid,
                 value: VarbindValue::Value(Value::TimeTicks(0)),
@@ -564,7 +577,7 @@ mod tests {
         // verify the BER round-trip is lossless.
         let oid = sysdescr_oid();
         let pdu = GetResponse {
-            request_id: 9999,
+            request_id: RequestId::from(9999),
             error_status: ErrorStatus::NoError,
             error_index: 0,
             varbinds: vec![Varbind {
@@ -593,7 +606,7 @@ mod tests {
         let trap_oid: Oid = "1.3.6.1.6.3.1.1.4.1.0".parse().unwrap();
         let sysname: Oid = "1.3.6.1.2.1.1.5.0".parse().unwrap();
         let pdu = WireTrapPdu {
-            request_id: 77,
+            request_id: RequestId::from(77),
             varbinds: vec![
                 Varbind {
                     oid: trap_oid,
@@ -640,7 +653,7 @@ mod tests {
         let oid3: Oid = "1.3.6.1.2.1.1.3.0".parse().unwrap();
 
         let pdu = GetResponse {
-            request_id: 42,
+            request_id: RequestId::from(42),
             error_status: ErrorStatus::NoError,
             error_index: 0,
             varbinds: vec![
@@ -688,7 +701,7 @@ mod tests {
         let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
         let engine_id = b"\x80\x00\x1f\x88\x04test";
         let pdu = GetResponse {
-            request_id: 99,
+            request_id: RequestId::from(99),
             error_status: ErrorStatus::NoError,
             error_index: 0,
             varbinds: vec![Varbind {
@@ -697,8 +710,18 @@ mod tests {
             }],
         };
 
-        let encoded =
-            encode_v3_response(5, engine_id, b"testuser", b"", 0, 0, None, None, &pdu).unwrap();
+        let encoded = encode_v3_response(
+            MessageId::from(5),
+            engine_id,
+            b"testuser",
+            b"",
+            0,
+            0,
+            None,
+            None,
+            &pdu,
+        )
+        .unwrap();
 
         // Decode back as a V3Message to verify structural validity.
         let decoded: V3Message = rasn::ber::decode(&encoded).expect("must decode as V3Message");
@@ -740,14 +763,14 @@ mod tests {
         let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42_u8; 32]);
         let auth_protocol = AuthProtocol::HmacSha256;
         let pdu = GetResponse {
-            request_id: 7,
+            request_id: RequestId::from(7),
             error_status: ErrorStatus::NoError,
             error_index: 0,
             varbinds: vec![],
         };
 
         let encoded = encode_v3_response(
-            3,
+            MessageId::from(3),
             engine_id,
             b"authuser",
             b"",
@@ -802,14 +825,14 @@ mod tests {
         let auth_key_for_verify = SecretKey::new_from_exposed_slice(&[0x42_u8; 64]);
         let auth_protocol = AuthProtocol::HmacSha512;
         let pdu = GetResponse {
-            request_id: 8,
+            request_id: RequestId::from(8),
             error_status: ErrorStatus::NoError,
             error_index: 0,
             varbinds: vec![],
         };
 
         let encoded = encode_v3_response(
-            4,
+            MessageId::from(4),
             engine_id,
             b"authuser512",
             b"",
@@ -854,7 +877,7 @@ mod tests {
         let auth_protocol = AuthProtocol::HmacSha256;
         // Varbind value is all-zeros with length 24, identical to the SHA-256 placeholder.
         let pdu = GetResponse {
-            request_id: 1,
+            request_id: RequestId::from(1),
             error_status: ErrorStatus::NoError,
             error_index: 0,
             varbinds: vec![Varbind {
@@ -864,7 +887,7 @@ mod tests {
         };
 
         let encoded = encode_v3_response(
-            5,
+            MessageId::from(5),
             engine_id,
             b"authuser",
             b"",
@@ -912,7 +935,7 @@ mod tests {
         let auth_protocol = AuthProtocol::HmacSha256;
         let expected_varbind_value = b"test value".to_vec();
         let pdu = GetResponse {
-            request_id: 42,
+            request_id: RequestId::from(42),
             error_status: ErrorStatus::NoError,
             error_index: 0,
             varbinds: vec![Varbind {
@@ -922,7 +945,7 @@ mod tests {
         };
 
         let encoded = encode_v3_response(
-            99,
+            MessageId::from(99),
             engine_id,
             b"testuser",
             b"",
@@ -1028,14 +1051,14 @@ mod tests {
 
         let priv_key = SecretKey::new_from_exposed_slice(&[0xBB_u8; 16]);
         let pdu = GetResponse {
-            request_id: 1,
+            request_id: RequestId::from(1),
             error_status: ErrorStatus::NoError,
             error_index: 0,
             varbinds: vec![],
         };
 
         let result = encode_v3_response(
-            1,
+            MessageId::from(1),
             b"engine",
             b"user",
             b"",
@@ -1059,7 +1082,8 @@ mod tests {
         // Verifies: REQ-0093, REQ-0099
         let engine_id = b"\x80\x00\x1f\x88\x04test";
         let counter_oid: Oid = "1.3.6.1.6.3.15.1.1.4.0".parse().unwrap();
-        let encoded = encode_v3_report(42, engine_id, 3, 100, &counter_oid, 7).unwrap();
+        let encoded =
+            encode_v3_report(MessageId::from(42), engine_id, 3, 100, &counter_oid, 7).unwrap();
 
         let decoded: rasn_snmp::v3::Message = rasn::ber::decode(&encoded).unwrap();
         let security_params: USMSecurityParameters =
@@ -1116,15 +1140,25 @@ mod tests {
         let engine_id = b"\x80\x00\x1f\x88\x04test";
         let trap_oid: Oid = "1.3.6.1.6.3.1.1.5.1".parse().unwrap();
         let pdu = WireTrapPdu {
-            request_id: 42,
+            request_id: RequestId::from(42),
             varbinds: vec![Varbind {
                 oid: trap_oid,
                 value: VarbindValue::Value(Value::TimeTicks(100)),
             }],
         };
 
-        let encoded =
-            encode_v3_trap(42, engine_id, b"trapuser", b"", 3, 500, None, None, &pdu).unwrap();
+        let encoded = encode_v3_trap(
+            MessageId::from(42),
+            engine_id,
+            b"trapuser",
+            b"",
+            3,
+            500,
+            None,
+            None,
+            &pdu,
+        )
+        .unwrap();
 
         let decoded: V3Message = rasn::ber::decode(&encoded).expect("must decode as V3Message");
 
@@ -1184,7 +1218,7 @@ mod tests {
         let auth_protocol = AuthProtocol::HmacSha256;
         let trap_oid: Oid = "1.3.6.1.6.3.1.1.5.1".parse().unwrap();
         let pdu = WireTrapPdu {
-            request_id: 7,
+            request_id: RequestId::from(7),
             varbinds: vec![Varbind {
                 oid: trap_oid,
                 value: VarbindValue::Value(Value::TimeTicks(0)),
@@ -1192,7 +1226,7 @@ mod tests {
         };
 
         let encoded = encode_v3_trap(
-            7,
+            MessageId::from(7),
             engine_id,
             b"authuser",
             b"",
@@ -1247,7 +1281,7 @@ mod tests {
         let auth_protocol = AuthProtocol::HmacSha256;
         let trap_oid: Oid = "1.3.6.1.6.3.1.1.5.1".parse().unwrap();
         let pdu = WireTrapPdu {
-            request_id: 99,
+            request_id: RequestId::from(99),
             varbinds: vec![Varbind {
                 oid: trap_oid,
                 value: VarbindValue::Value(Value::TimeTicks(12345)),
@@ -1255,7 +1289,7 @@ mod tests {
         };
 
         let encoded = encode_v3_trap(
-            99,
+            MessageId::from(99),
             engine_id,
             b"privuser",
             b"",
@@ -1332,7 +1366,7 @@ mod tests {
         let priv_key = SecretKey::new_from_exposed_slice(&[0xBB_u8; 16]);
         let trap_oid: Oid = "1.3.6.1.6.3.1.1.5.1".parse().unwrap();
         let pdu = WireTrapPdu {
-            request_id: 1,
+            request_id: RequestId::from(1),
             varbinds: vec![Varbind {
                 oid: trap_oid,
                 value: VarbindValue::Value(Value::TimeTicks(0)),
@@ -1340,7 +1374,7 @@ mod tests {
         };
 
         let result = encode_v3_trap(
-            1,
+            MessageId::from(1),
             b"engine",
             b"user",
             b"",
@@ -1376,7 +1410,7 @@ mod tests {
         let priv_key_2 = SecretKey::new_from_exposed_slice(&[0xBB_u8; 16]);
         let trap_oid: Oid = "1.3.6.1.6.3.1.1.5.1".parse().unwrap();
         let pdu = WireTrapPdu {
-            request_id: 1,
+            request_id: RequestId::from(1),
             varbinds: vec![Varbind {
                 oid: trap_oid,
                 value: VarbindValue::Value(Value::TimeTicks(0)),
@@ -1384,7 +1418,7 @@ mod tests {
         };
 
         let encoded_1 = encode_v3_trap(
-            1,
+            MessageId::from(1),
             engine_id,
             b"user",
             b"",
@@ -1397,7 +1431,7 @@ mod tests {
         .expect("first encoding must succeed");
 
         let encoded_2 = encode_v3_trap(
-            2,
+            MessageId::from(2),
             engine_id,
             b"user",
             b"",

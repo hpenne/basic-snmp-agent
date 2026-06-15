@@ -1,6 +1,8 @@
 Review and iterate on the implementation of: $ARGUMENTS
 
-This workflow takes precedence over general implementation approach guidelines.
+This workflow takes precedence and must be followed to the letter.
+If you find them ambiguous then STOP and ask.
+Do NOT make assumptions or try to be clever.
 
 Follow this loop (max 3 iterations). Skipping steps is STRICTLY PROHIBITED:
 1. Use the **implementer** subagent to write the code and tests. **Brief it with the goal and constraints, not step-by-step instructions** — it has access to CLAUDE.md and can read the codebase. Describe *what* to achieve and *why*, not *how* to write it. Do not specify line numbers, exact code snippets, or placement of functions. **Capture its agent ID** — you will resume it in later steps instead of launching a new instance.

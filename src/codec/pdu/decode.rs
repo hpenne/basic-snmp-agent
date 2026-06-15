@@ -1,10 +1,11 @@
 use super::types::{
     DecodeError, DecodeErrorKind, DecodedScopedPdu, GetBulkRequest, GetNextRequest, GetRequest,
-    InboundPdu, SecurityModel, SetRequest, UsmSecurityFields, V3InboundMessage, V3ScopedData,
-    Varbind,
+    InboundPdu, MessageId, RequestId, SecurityModel, SetRequest, UsmSecurityFields,
+    V3InboundMessage, V3ScopedData, Varbind,
 };
 use crate::codec::ber;
 use crate::codec::ber::{TAG_GET_NEXT_REQUEST, TAG_GET_REQUEST, TAG_SET_REQUEST};
+use crate::usm::security_params::{AuthenticationParams, PrivacySalt};
 
 // Implements: REQ-0021, REQ-0068
 // Converts a [`ber::pdu::DecodedPdu`] into an [`InboundPdu`].
@@ -20,7 +21,7 @@ fn decoded_pdu_to_inbound(decoded: ber::pdu::DecodedPdu) -> Result<InboundPdu, D
         } => {
             let varbinds = decode_varbind_list_to_varbinds(&raw_varbind_list)?;
             Ok(InboundPdu::GetRequest(GetRequest {
-                request_id,
+                request_id: RequestId::from(request_id),
                 varbinds,
             }))
         }
@@ -31,7 +32,7 @@ fn decoded_pdu_to_inbound(decoded: ber::pdu::DecodedPdu) -> Result<InboundPdu, D
         } => {
             let varbinds = decode_varbind_list_to_varbinds(&raw_varbind_list)?;
             Ok(InboundPdu::GetNextRequest(GetNextRequest {
-                request_id,
+                request_id: RequestId::from(request_id),
                 varbinds,
             }))
         }
@@ -42,7 +43,7 @@ fn decoded_pdu_to_inbound(decoded: ber::pdu::DecodedPdu) -> Result<InboundPdu, D
         } => {
             let varbinds = decode_varbind_list_to_varbinds(&raw_varbind_list)?;
             Ok(InboundPdu::SetRequest(SetRequest {
-                request_id,
+                request_id: RequestId::from(request_id),
                 varbinds,
             }))
         }
@@ -63,7 +64,7 @@ fn decoded_pdu_to_inbound(decoded: ber::pdu::DecodedPdu) -> Result<InboundPdu, D
             let max_repetitions_u32 = u32::try_from(max_repetitions).unwrap_or(0);
             let varbinds = decode_varbind_list_to_varbinds(&raw_varbind_list)?;
             Ok(InboundPdu::GetBulkRequest(GetBulkRequest {
-                request_id,
+                request_id: RequestId::from(request_id),
                 non_repeaters: non_repeaters_u32,
                 max_repetitions: max_repetitions_u32,
                 varbinds,
@@ -171,7 +172,7 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
         }
     })?;
 
-    let msg_id = envelope.msg_id;
+    let msg_id = MessageId::from(envelope.msg_id);
     let security_model = SecurityModel::from_wire(envelope.security_model);
     let auth_params_offset = envelope.auth_params_offset;
     let security_flags = envelope.security_flags;
@@ -197,8 +198,8 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
         auth_engine_boots,
         auth_engine_time,
         security_flags,
-        auth_params,
-        priv_params,
+        auth_params: AuthenticationParams::try_from(auth_params).ok(),
+        priv_params: PrivacySalt::try_from(priv_params).ok(),
     };
 
     let (engine_id, context_name, scoped_data) = match envelope.scoped_data {
@@ -345,7 +346,7 @@ mod tests {
 
         match decode_result {
             InboundPdu::GetRequest(req) => {
-                assert_eq!(req.request_id, 42);
+                assert_eq!(req.request_id, RequestId::from(42));
                 assert_eq!(req.varbinds.len(), 1);
                 assert_eq!(req.varbinds[0].oid, oid);
                 // Unspecified (Null) on inbound requests decodes to VarbindValue::Unspecified.
@@ -378,7 +379,7 @@ mod tests {
 
         match pdu {
             InboundPdu::GetNextRequest(req) => {
-                assert_eq!(req.request_id, 7);
+                assert_eq!(req.request_id, RequestId::from(7));
                 assert_eq!(req.varbinds.len(), 1);
                 assert_eq!(req.varbinds[0].oid, oid);
                 assert_eq!(req.varbinds[0].value, VarbindValue::Unspecified);
@@ -443,7 +444,7 @@ mod tests {
 
         match pdu {
             InboundPdu::SetRequest(set) => {
-                assert_eq!(set.request_id, 55);
+                assert_eq!(set.request_id, RequestId::from(55));
                 assert_eq!(
                     set.varbinds[0].value,
                     VarbindValue::Value(Value::OctetString(b"admin@example.com".to_vec()))
@@ -534,7 +535,11 @@ mod tests {
         );
         match decoded.pdu {
             InboundPdu::GetRequest(req) => {
-                assert_eq!(req.request_id, 42, "request_id must be preserved");
+                assert_eq!(
+                    req.request_id,
+                    RequestId::from(42),
+                    "request_id must be preserved"
+                );
                 assert_eq!(req.varbinds.len(), 1);
                 assert_eq!(req.varbinds[0].oid.as_slice(), &oid_arcs);
             }
@@ -593,12 +598,12 @@ mod tests {
 
         let msg = decode_v3_message(&encoded).unwrap();
 
-        assert_eq!(msg.msg_id, 42);
+        assert_eq!(msg.msg_id, MessageId::from(42));
         assert_eq!(msg.engine_id, engine_id);
         assert_eq!(msg.context_name, b"");
         match &msg.scoped_data {
             V3ScopedData::Plaintext(InboundPdu::GetRequest(req)) => {
-                assert_eq!(req.request_id, 7);
+                assert_eq!(req.request_id, RequestId::from(7));
             }
             other => panic!("expected Plaintext(GetRequest), got {other:?}"),
         }
@@ -736,11 +741,13 @@ mod tests {
         let msg = decode_v3_message(&encoded).expect("must decode");
 
         assert_eq!(
-            msg.msg_id, 2,
+            msg.msg_id,
+            MessageId::from(2),
             "msg_id must be decoded correctly from the header"
         );
         assert_eq!(
-            msg.usm.priv_params, expected_priv_params,
+            msg.usm.priv_params.as_ref().map(AsRef::as_ref),
+            Some(expected_priv_params.as_slice()),
             "priv_params must be preserved from msgPrivacyParameters"
         );
     }
@@ -756,8 +763,8 @@ mod tests {
         let msg = decode_v3_message(&encoded).expect("must decode");
 
         assert!(
-            msg.usm.priv_params.is_empty(),
-            "noAuthNoPriv messages must have empty priv_params"
+            msg.usm.priv_params.is_none(),
+            "noAuthNoPriv messages must have no priv_params (empty on wire)"
         );
     }
 
@@ -955,12 +962,12 @@ mod tests {
 
         let msg = decode_v3_message(&encoded).unwrap();
 
-        assert_eq!(msg.msg_id, 100);
+        assert_eq!(msg.msg_id, MessageId::from(100));
         assert_eq!(msg.engine_id, engine_id);
         assert_eq!(msg.context_name, b"ctx");
         match &msg.scoped_data {
             V3ScopedData::Plaintext(InboundPdu::GetRequest(req)) => {
-                assert_eq!(req.request_id, 200);
+                assert_eq!(req.request_id, RequestId::from(200));
                 assert_eq!(req.varbinds.len(), 1);
                 assert_eq!(req.varbinds[0].oid, oid);
             }
@@ -983,8 +990,8 @@ mod tests {
         assert_eq!(msg.usm.auth_engine_time, 0);
         assert_eq!(msg.usm.security_flags, 0x04); // reportableFlag set by encode_get_request
         assert!(
-            msg.usm.auth_params.is_empty(),
-            "noAuthNoPriv messages must have empty auth_params"
+            msg.usm.auth_params.is_none(),
+            "noAuthNoPriv messages must have no auth_params (empty on wire)"
         );
     }
 
@@ -1044,7 +1051,8 @@ mod tests {
         let msg = decode_v3_message(&encoded).unwrap();
 
         assert_eq!(
-            msg.usm.auth_params, expected_auth_params,
+            msg.usm.auth_params.as_ref().map(AsRef::as_ref),
+            Some(expected_auth_params.as_slice()),
             "auth_params must be preserved from msgAuthenticationParameters"
         );
         assert_eq!(

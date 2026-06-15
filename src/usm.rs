@@ -13,8 +13,15 @@
 pub mod auth;
 pub mod boots;
 pub mod counters;
+pub mod engine_id;
+// Kept `pub` so the out-of-workspace `fuzz` crate can construct `EngineBoots`
+// and `EngineTime` values directly; `#[doc(hidden)]` keeps them off the
+// advertised API, matching the pattern established by `dispatch_context`.
+#[doc(hidden)]
+pub mod engine_time;
 pub mod kdf;
 pub mod keys;
 pub mod privacy;
+pub mod security_params;
 pub mod time_window;
 pub mod user;

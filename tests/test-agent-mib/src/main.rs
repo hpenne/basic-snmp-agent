@@ -7,14 +7,17 @@
 //! The agent listens on port 10161 (plain TCP, no TLS) and parks the main
 //! thread forever once it has printed its ready message.
 
-use basic_snmp_agent::{AgentBuilder, SecurityConfig};
+use basic_snmp_agent::{AgentBuilder, EngineId, SecurityConfig};
 
 fn main() {
     test_agent_mib_common::init_logging();
 
     let agent = AgentBuilder::new(SecurityConfig::NoAuthNoPriv)
         .listen_addr("0.0.0.0:10161".parse().expect("listen address is valid"))
-        .engine_id(b"\x80\x00\x1f\x88\x04test-agent-mib".to_vec())
+        .engine_id(
+            EngineId::try_from(b"\x80\x00\x1f\x88\x04test-agent-mib".to_vec())
+                .expect("engine ID is 18 bytes, within the valid 5–32 octet range"),
+        )
         .build()
         .unwrap_or_else(|e| {
             eprintln!("error: failed to build agent: {e}");
