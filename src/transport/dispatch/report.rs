@@ -5,6 +5,8 @@ use std::sync::LazyLock;
 use crate::codec::Oid;
 use log::{debug, trace};
 
+use crate::usm::counters::UsmStatsCounter;
+
 use super::{DispatchContext, DispatchInputs};
 
 // Control-flow type for the validation pipeline — does not directly implement a requirement.
@@ -88,7 +90,7 @@ pub(super) static UNKNOWN_SECURITY_MODELS_OID: LazyLock<Oid> = LazyLock::new(|| 
 /// otherwise return `Reject::Discard` (silent discard per RFC 3412 §7.1.3a).
 pub(super) fn emit_report_response(
     ctx: &mut DispatchContext<'_>,
-    select_counter: impl for<'a> FnOnce(&'a mut DispatchInputs<'_>) -> &'a mut u32,
+    select_counter: impl for<'a> FnOnce(&'a mut DispatchInputs<'_>) -> &'a mut UsmStatsCounter,
     counter_oid: &Oid,
     description: &str,
     msg_id: i32,
@@ -98,8 +100,8 @@ pub(super) fn emit_report_response(
     // we read engine_id, engine_boots, and engine_time below.
     let counter_value = {
         let counter = select_counter(&mut ctx.inputs);
-        *counter = counter.saturating_add(1);
-        *counter
+        counter.saturating_increment();
+        counter.get()
     };
     if security_flags & REPORTABLE_FLAG == 0 {
         trace!("{description} with reportableFlag unset, discarding silently");

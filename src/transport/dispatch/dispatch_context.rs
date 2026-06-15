@@ -1,5 +1,6 @@
 //! Validated dispatch context and security-level policy for inbound frame processing.
 
+use crate::usm::counters::UsmStatsCounter;
 use crate::usm::engine_time::{EngineBoots, EngineTime};
 
 /// Named inputs for constructing a [`DispatchContext`].
@@ -22,25 +23,25 @@ pub struct DispatchInputs<'a> {
     /// Current `snmpEngineTime` in seconds.
     pub engine_time: EngineTime,
     /// Counter for `usmStatsUnknownEngineIDs` (REQ-0093).
-    pub unknown_engine_ids_counter: &'a mut u32,
+    pub unknown_engine_ids_counter: &'a mut UsmStatsCounter,
     /// Counter for `usmStatsUnknownUserNames` (REQ-0078).
     // Implements: REQ-0078
-    pub unknown_user_names_counter: &'a mut u32,
+    pub unknown_user_names_counter: &'a mut UsmStatsCounter,
     /// Counter for `usmStatsUnsupportedSecLevels` (REQ-0079).
     // Implements: REQ-0079
-    pub unsupported_sec_levels_counter: &'a mut u32,
+    pub unsupported_sec_levels_counter: &'a mut UsmStatsCounter,
     /// Counter for `usmStatsWrongDigests` (REQ-0100).
     // Implements: REQ-0100
-    pub wrong_digests_counter: &'a mut u32,
+    pub wrong_digests_counter: &'a mut UsmStatsCounter,
     /// Counter for `usmStatsNotInTimeWindows` (REQ-0098).
     // Implements: REQ-0098
-    pub not_in_time_windows_counter: &'a mut u32,
+    pub not_in_time_windows_counter: &'a mut UsmStatsCounter,
     /// Counter for `usmStatsDecryptionErrors` (REQ-0101).
     // Implements: REQ-0101
-    pub decryption_errors_counter: &'a mut u32,
+    pub decryption_errors_counter: &'a mut UsmStatsCounter,
     /// Counter for `snmpUnknownSecurityModels` (RFC 3412 §7.1).
     // Implements: REQ-0115
-    pub unknown_security_models_counter: &'a mut u32,
+    pub unknown_security_models_counter: &'a mut UsmStatsCounter,
     /// Optional configured USM user; `None` when no USM user is configured (REQ-0078, REQ-0079).
     // Implements: REQ-0078, REQ-0079
     pub usm_user: Option<&'a crate::usm::user::UsmUser>,

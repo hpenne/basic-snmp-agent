@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use mio::{Events, Interest, Poll, Token};
 
+use crate::usm::counters::UsmStatsCounter;
 use crate::usm::engine_time::{EngineBoots, EngineTime};
 // Implements: [[RFC-0009:C-FACADE]]
 use log::{debug, info};
@@ -309,26 +310,26 @@ pub(crate) struct EventLoop {
     engine_start: Instant,
     /// Counter for `usmStatsUnknownEngineIDs`; incremented for each discovery probe.
     // Implements: REQ-0093
-    unknown_engine_ids_counter: u32,
+    unknown_engine_ids_counter: UsmStatsCounter,
     /// Counter for `usmStatsUnknownUserNames`; incremented when user-name lookup fails.
     // Implements: REQ-0078
-    unknown_user_names_counter: u32,
+    unknown_user_names_counter: UsmStatsCounter,
     /// Counter for `usmStatsUnsupportedSecLevels`; incremented when security-level check fails.
     // Implements: REQ-0079
-    unsupported_sec_levels_counter: u32,
+    unsupported_sec_levels_counter: UsmStatsCounter,
     /// Counter for `usmStatsWrongDigests`; incremented when HMAC verification fails.
     // Implements: REQ-0100
-    wrong_digests_counter: u32,
+    wrong_digests_counter: UsmStatsCounter,
     /// Counter for `usmStatsNotInTimeWindows`; incremented when time-window check fails.
     // Implements: REQ-0098
-    not_in_time_windows_counter: u32,
+    not_in_time_windows_counter: UsmStatsCounter,
     /// Counter for `usmStatsDecryptionErrors`; incremented when decryption fails.
     // Implements: REQ-0101
-    decryption_errors_counter: u32,
+    decryption_errors_counter: UsmStatsCounter,
     /// Counter for `snmpUnknownSecurityModels`; incremented when an inbound message
     /// uses a security model other than USM (RFC 3412 §7.1).
     // Implements: REQ-0115
-    unknown_security_models_counter: u32,
+    unknown_security_models_counter: UsmStatsCounter,
     /// Configured USM user; `None` when no USM user is configured.
     // Implements: REQ-0076
     usm_user: Option<std::sync::Arc<crate::usm::user::UsmUser>>,
@@ -414,13 +415,13 @@ impl EventLoop {
             engine_id,
             engine_boots,
             engine_start: Instant::now(),
-            unknown_engine_ids_counter: 0,
-            unknown_user_names_counter: 0,
-            unsupported_sec_levels_counter: 0,
-            wrong_digests_counter: 0,
-            not_in_time_windows_counter: 0,
-            decryption_errors_counter: 0,
-            unknown_security_models_counter: 0,
+            unknown_engine_ids_counter: UsmStatsCounter::default(),
+            unknown_user_names_counter: UsmStatsCounter::default(),
+            unsupported_sec_levels_counter: UsmStatsCounter::default(),
+            wrong_digests_counter: UsmStatsCounter::default(),
+            not_in_time_windows_counter: UsmStatsCounter::default(),
+            decryption_errors_counter: UsmStatsCounter::default(),
+            unknown_security_models_counter: UsmStatsCounter::default(),
             usm_user,
             minimum_security_level,
         };
@@ -1086,13 +1087,13 @@ mod tests {
             engine_id: test_engine_id(),
             engine_boots: EngineBoots::from(1_u32),
             engine_start: Instant::now(),
-            unknown_engine_ids_counter: 0,
-            unknown_user_names_counter: 0,
-            unsupported_sec_levels_counter: 0,
-            wrong_digests_counter: 0,
-            not_in_time_windows_counter: 0,
-            decryption_errors_counter: 0,
-            unknown_security_models_counter: 0,
+            unknown_engine_ids_counter: UsmStatsCounter::default(),
+            unknown_user_names_counter: UsmStatsCounter::default(),
+            unsupported_sec_levels_counter: UsmStatsCounter::default(),
+            wrong_digests_counter: UsmStatsCounter::default(),
+            not_in_time_windows_counter: UsmStatsCounter::default(),
+            decryption_errors_counter: UsmStatsCounter::default(),
+            unknown_security_models_counter: UsmStatsCounter::default(),
             usm_user: None,
             minimum_security_level: crate::usm::user::SecurityLevel::NoAuthNoPriv,
         };

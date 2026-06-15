@@ -40,7 +40,7 @@ category = "changed"
 
 [[content.acceptance_criteria]]
 text = "UsmStatsCounter newtype with a single tested saturating increment() replaces the seven raw &mut u32 counter fields in DispatchInputs"
-status = "pending"
+status = "done"
 category = "changed"
 
 [[content.acceptance_criteria]]
