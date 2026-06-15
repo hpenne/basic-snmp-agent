@@ -195,12 +195,8 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
     let auth_engine_time = u32::try_from(engine_time).unwrap_or(u32::MAX);
     // Non-empty auth_params become Some(AuthenticationParams); empty → None (noAuthNoPriv).
     let usm_auth_params = AuthenticationParams::try_from(auth_params).ok();
-    // Non-empty, exactly-8-byte priv_params become Some(PrivacySalt); empty or malformed → None.
-    let usm_priv_params = if priv_params.is_empty() {
-        None
-    } else {
-        PrivacySalt::try_from(priv_params).ok()
-    };
+    // Exactly-8-byte priv_params become Some(PrivacySalt); empty or malformed → None.
+    let usm_priv_params = PrivacySalt::try_from(priv_params).ok();
     let usm_fields = UsmSecurityFields {
         auth_engine_id: usm_engine_id.clone(),
         auth_engine_boots,
