@@ -582,6 +582,20 @@ mod tests {
         );
     }
 
+    // Assert that every USM stats counter on `tc` is zero.
+    // A privFlag/wire-form structural mismatch (RFC 3414 §3.2 silent discard) must
+    // be caught before any counter-incrementing branch is reached, so none of the
+    // seven counters may change.
+    fn assert_no_usm_counters_incremented(tc: &TestCtx) {
+        assert_eq!(tc.unknown_engine_ids.get(), 0, "unknown_engine_ids must be zero");
+        assert_eq!(tc.unknown_user_names.get(), 0, "unknown_user_names must be zero");
+        assert_eq!(tc.unsupported_sec_levels.get(), 0, "unsupported_sec_levels must be zero");
+        assert_eq!(tc.wrong_digests.get(), 0, "wrong_digests must be zero");
+        assert_eq!(tc.not_in_time_windows.get(), 0, "not_in_time_windows must be zero");
+        assert_eq!(tc.decryption_errors.get(), 0, "decryption_errors must be zero");
+        assert_eq!(tc.unknown_security_models.get(), 0, "unknown_security_models must be zero");
+    }
+
     // Parameters for building an authPriv GetRequest frame.
     // Only the fields that vary across tests are kept here; invariant values
     // (protocol, OID, salt, flags) are constants inside build_authpriv_frame_inner.
@@ -2304,37 +2318,7 @@ mod tests {
             "privFlag/wire-form mismatch (priv set, cleartext) must be silently discarded"
         );
         // RFC 3414 §3.2: mismatch produces a silent discard with no Report and no counter change.
-        assert_eq!(
-            tc.unknown_engine_ids.get(),
-            0,
-            "unknown_engine_ids must be zero"
-        );
-        assert_eq!(
-            tc.unknown_user_names.get(),
-            0,
-            "unknown_user_names must be zero"
-        );
-        assert_eq!(
-            tc.unsupported_sec_levels.get(),
-            0,
-            "unsupported_sec_levels must be zero"
-        );
-        assert_eq!(tc.wrong_digests.get(), 0, "wrong_digests must be zero");
-        assert_eq!(
-            tc.not_in_time_windows.get(),
-            0,
-            "not_in_time_windows must be zero"
-        );
-        assert_eq!(
-            tc.decryption_errors.get(),
-            0,
-            "decryption_errors must be zero"
-        );
-        assert_eq!(
-            tc.unknown_security_models.get(),
-            0,
-            "unknown_security_models must be zero"
-        );
+        assert_no_usm_counters_incremented(&tc);
     }
 
     #[test]
@@ -2352,37 +2336,7 @@ mod tests {
             "privFlag/wire-form mismatch (priv clear, encrypted) must be silently discarded"
         );
         // RFC 3414 §3.2: mismatch produces a silent discard with no Report and no counter change.
-        assert_eq!(
-            tc.unknown_engine_ids.get(),
-            0,
-            "unknown_engine_ids must be zero"
-        );
-        assert_eq!(
-            tc.unknown_user_names.get(),
-            0,
-            "unknown_user_names must be zero"
-        );
-        assert_eq!(
-            tc.unsupported_sec_levels.get(),
-            0,
-            "unsupported_sec_levels must be zero"
-        );
-        assert_eq!(tc.wrong_digests.get(), 0, "wrong_digests must be zero");
-        assert_eq!(
-            tc.not_in_time_windows.get(),
-            0,
-            "not_in_time_windows must be zero"
-        );
-        assert_eq!(
-            tc.decryption_errors.get(),
-            0,
-            "decryption_errors must be zero"
-        );
-        assert_eq!(
-            tc.unknown_security_models.get(),
-            0,
-            "unknown_security_models must be zero"
-        );
+        assert_no_usm_counters_incremented(&tc);
     }
 
     // ── GetBulk msgMaxSize plumbing (REQ-0133) ───────────────────────────────
