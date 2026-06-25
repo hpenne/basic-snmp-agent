@@ -545,7 +545,6 @@ fn zero_auth_params_in_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use report::SNMP_UNKNOWN_SECURITY_MODELS_OID;
 
     fn test_engine_id() -> &'static [u8] {
         b"\x80\x00\x1f\x88\x04test"
@@ -1017,6 +1016,22 @@ mod tests {
         .into()
     }
 
+    // Assert that dispatch produced a Report response carrying counter OID `expected_oid`
+    // with value 1, and that the `counter` was incremented to 1.
+    // Counter and OID are adjacent so a reader can eyeball that they pair correctly.
+    // Returns the decoded v3_response so callers can perform additional assertions (e.g.
+    // assert_usm_params). The `counter_message` appears in the assertion failure output so each
+    // call site stays self-documenting about which counter it expects and why.
+    fn assert_report_and_counter_is_one(
+        counter: crate::usm::counters::UsmStatsCounter,
+        expected_oid: &str,
+        counter_message: &str,
+        response_bytes: &[u8],
+    ) -> rasn_snmp::v3::Message {
+        assert_eq!(counter.get(), 1, "{counter_message}");
+        assert_report_pdu_varbind(response_bytes, expected_oid, 1)
+    }
+
     // Decode `response_bytes` as an SNMPv3 message, assert the ScopedPDU is a cleartext
     // Report PDU, and verify that its single varbind has the expected OID and Counter32 value.
     // Returns the decoded message so callers can perform additional assertions (e.g. USM params).
@@ -1185,15 +1200,11 @@ mod tests {
         let mut tc = TestCtx::new().with_boots_time(3, 100);
         let response_bytes = run_dispatch(&mut tc, None, &frame, &mib)
             .expect("contextEngineID mismatch must produce a Report response");
-        assert_eq!(
-            tc.unknown_engine_ids.get(),
-            1,
-            "counter must be incremented on contextEngineID mismatch"
-        );
-        let v3_response = assert_report_pdu_varbind(
-            &response_bytes,
+        let v3_response = assert_report_and_counter_is_one(
+            tc.unknown_engine_ids,
             crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS,
-            1,
+            "counter must be incremented on contextEngineID mismatch",
+            &response_bytes,
         );
         assert_usm_params(&v3_response, 3, 100);
     }
@@ -1304,15 +1315,11 @@ mod tests {
         let mut tc = TestCtx::new();
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("mismatched user name must produce a Report response");
-        assert_eq!(
-            tc.unknown_user_names.get(),
-            1,
-            "counter must be incremented on mismatch"
-        );
-        let v3_response = assert_report_pdu_varbind(
-            &response_bytes,
+        let v3_response = assert_report_and_counter_is_one(
+            tc.unknown_user_names,
             crate::usm::counters::USM_STATS_UNKNOWN_USER_NAMES,
-            1,
+            "counter must be incremented on mismatch",
+            &response_bytes,
         );
         assert_usm_params(&v3_response, 1, 0);
     }
@@ -1382,15 +1389,11 @@ mod tests {
         let mut tc = TestCtx::new();
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("ceiling violation must produce a Report response");
-        assert_eq!(
-            tc.unsupported_sec_levels.get(),
-            1,
-            "counter must be incremented on ceiling violation"
-        );
-        let v3_response = assert_report_pdu_varbind(
-            &response_bytes,
+        let v3_response = assert_report_and_counter_is_one(
+            tc.unsupported_sec_levels,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
-            1,
+            "counter must be incremented on ceiling violation",
+            &response_bytes,
         );
         assert_usm_params(&v3_response, 1, 0);
     }
@@ -1436,15 +1439,11 @@ mod tests {
         let mut tc = TestCtx::new();
         let response_bytes = run_dispatch(&mut tc, None, &frame, &mib)
             .expect("authNoPriv message with reportableFlag set must produce a Report response");
-        assert_eq!(
-            tc.unsupported_sec_levels.get(),
-            1,
-            "counter must be incremented for no-user auth/priv message (fail-closed)"
-        );
-        assert_report_pdu_varbind(
-            &response_bytes,
+        assert_report_and_counter_is_one(
+            tc.unsupported_sec_levels,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
-            1,
+            "counter must be incremented for no-user auth/priv message (fail-closed)",
+            &response_bytes,
         );
     }
 
@@ -1467,15 +1466,11 @@ mod tests {
         let mut tc = TestCtx::new();
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("invalid msgFlags combination must produce a Report response");
-        assert_eq!(
-            tc.unsupported_sec_levels.get(),
-            1,
-            "counter must be incremented for invalid msgFlags"
-        );
-        assert_report_pdu_varbind(
-            &response_bytes,
+        assert_report_and_counter_is_one(
+            tc.unsupported_sec_levels,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
-            1,
+            "counter must be incremented for invalid msgFlags",
+            &response_bytes,
         );
     }
 
@@ -1497,15 +1492,11 @@ mod tests {
             TestCtx::new().with_minimum_security_level(crate::usm::user::SecurityLevel::AuthNoPriv);
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("below-floor message must produce a Report response");
-        assert_eq!(
-            tc.unsupported_sec_levels.get(),
-            1,
-            "counter must be incremented for below-floor message"
-        );
-        assert_report_pdu_varbind(
-            &response_bytes,
+        assert_report_and_counter_is_one(
+            tc.unsupported_sec_levels,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
-            1,
+            "counter must be incremented for below-floor message",
+            &response_bytes,
         );
     }
 
@@ -1529,15 +1520,11 @@ mod tests {
             TestCtx::new().with_minimum_security_level(crate::usm::user::SecurityLevel::AuthPriv);
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("below-floor authNoPriv message must produce a Report response");
-        assert_eq!(
-            tc.unsupported_sec_levels.get(),
-            1,
-            "counter must be incremented for below-floor message"
-        );
-        assert_report_pdu_varbind(
-            &response_bytes,
+        assert_report_and_counter_is_one(
+            tc.unsupported_sec_levels,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
-            1,
+            "counter must be incremented for below-floor message",
+            &response_bytes,
         );
     }
 
@@ -1589,15 +1576,11 @@ mod tests {
             TestCtx::new().with_minimum_security_level(crate::usm::user::SecurityLevel::AuthNoPriv);
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("ceiling violation must produce a Report response");
-        assert_eq!(
-            tc.unsupported_sec_levels.get(),
-            1,
-            "counter must be incremented for ceiling violation"
-        );
-        assert_report_pdu_varbind(
-            &response_bytes,
+        assert_report_and_counter_is_one(
+            tc.unsupported_sec_levels,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
-            1,
+            "counter must be incremented for ceiling violation",
+            &response_bytes,
         );
     }
 
@@ -1711,16 +1694,13 @@ mod tests {
             &[0xBB_u8; 24],
         );
         let mut tc = TestCtx::new();
-        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
-        assert_eq!(
-            tc.wrong_digests.get(),
-            1,
-            "counter must be incremented on wrong HMAC"
-        );
-        assert_report_pdu_varbind(
-            &result.expect("wrong HMAC must produce a Report response"),
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("wrong HMAC must produce a Report response");
+        assert_report_and_counter_is_one(
+            tc.wrong_digests,
             crate::usm::counters::USM_STATS_WRONG_DIGESTS,
-            1,
+            "counter must be incremented on wrong HMAC",
+            &response_bytes,
         );
     }
 
@@ -1740,16 +1720,13 @@ mod tests {
             &[],
         );
         let mut tc = TestCtx::new();
-        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
-        assert_eq!(
-            tc.wrong_digests.get(),
-            1,
-            "counter must be incremented for empty auth_params"
-        );
-        assert_report_pdu_varbind(
-            &result.expect("empty auth_params must produce a Report response"),
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("empty auth_params must produce a Report response");
+        assert_report_and_counter_is_one(
+            tc.wrong_digests,
             crate::usm::counters::USM_STATS_WRONG_DIGESTS,
-            1,
+            "counter must be incremented for empty auth_params",
+            &response_bytes,
         );
     }
 
@@ -1882,15 +1859,11 @@ mod tests {
         let mut tc = TestCtx::new().with_boots_time(1, 0);
         let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
             .expect("out-of-window message must produce a Report response");
-        assert_eq!(
-            tc.not_in_time_windows.get(),
-            1,
-            "counter must be incremented for out-of-window message"
-        );
-        let v3_response = assert_report_pdu_varbind(
-            &response_bytes,
+        let v3_response = assert_report_and_counter_is_one(
+            tc.not_in_time_windows,
             crate::usm::counters::USM_STATS_NOT_IN_TIME_WINDOWS,
-            1,
+            "counter must be incremented for out-of-window message",
+            &response_bytes,
         );
         assert_eq!(
             i32::try_from(v3_response.global_data.message_id.clone()).unwrap(),
@@ -1951,15 +1924,13 @@ mod tests {
         let frame = build_authenticated_frame_with_time(&auth_key_bytes, 1, 200);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
         let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
-        assert_eq!(
-            tc.not_in_time_windows.get(),
-            1,
-            "counter must be incremented for time-difference out-of-window message"
-        );
-        assert_report_pdu_varbind(
-            &result.expect("time-difference out-of-window message must produce a Report response"),
+        let response_bytes = result
+            .expect("time-difference out-of-window message must produce a Report response");
+        assert_report_and_counter_is_one(
+            tc.not_in_time_windows,
             crate::usm::counters::USM_STATS_NOT_IN_TIME_WINDOWS,
-            1,
+            "counter must be incremented for time-difference out-of-window message",
+            &response_bytes,
         );
     }
 
@@ -1976,17 +1947,13 @@ mod tests {
         let mib = crate::mib::Store::new();
         let encoded_frame = build_no_user_authpriv_frame();
         let mut tc = TestCtx::new();
-        let result = run_dispatch(&mut tc, None, &encoded_frame, &mib);
-        assert_eq!(
-            tc.unsupported_sec_levels.get(),
-            1,
-            "counter must be incremented for no-user authPriv message (fail-closed)"
-        );
-        assert_report_pdu_varbind(
-            &result
-                .expect("authPriv message with reportableFlag and no user must produce a Report"),
+        let response_bytes = run_dispatch(&mut tc, None, &encoded_frame, &mib)
+            .expect("authPriv message with reportableFlag and no user must produce a Report");
+        assert_report_and_counter_is_one(
+            tc.unsupported_sec_levels,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
-            1,
+            "counter must be incremented for no-user authPriv message (fail-closed)",
+            &response_bytes,
         );
     }
 
@@ -2075,16 +2042,13 @@ mod tests {
             .with_boots_time(1, 0)
             .build();
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
-        assert_eq!(
-            tc.decryption_errors.get(),
-            1,
-            "counter must be incremented on decryption failure"
-        );
-        assert_report_pdu_varbind(
-            &result.expect("decryption failure must produce a Report response"),
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("decryption failure must produce a Report response");
+        assert_report_and_counter_is_one(
+            tc.decryption_errors,
             crate::usm::counters::USM_STATS_DECRYPTION_ERRORS,
-            1,
+            "counter must be incremented on decryption failure",
+            &response_bytes,
         );
     }
 
@@ -2097,16 +2061,13 @@ mod tests {
         let alice = test_authpriv_user("alice", &auth_key_bytes);
         let frame = build_authpriv_frame_with_short_priv_params(&auth_key_bytes, 1, 0);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
-        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
-        assert_eq!(
-            tc.decryption_errors.get(),
-            1,
-            "decryption_errors counter must be incremented for invalid priv_params length"
-        );
-        assert_report_pdu_varbind(
-            &result.expect("invalid priv_params length must produce a Report response"),
+        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
+            .expect("invalid priv_params length must produce a Report response");
+        assert_report_and_counter_is_one(
+            tc.decryption_errors,
             crate::usm::counters::USM_STATS_DECRYPTION_ERRORS,
-            1,
+            "decryption_errors counter must be incremented for invalid priv_params length",
+            &response_bytes,
         );
     }
 
@@ -2134,8 +2095,12 @@ mod tests {
         let mut tc = TestCtx::new();
         let report_bytes = run_dispatch(&mut tc, None, &frame, &mib)
             .expect("should return a Report PDU for unsupported security model");
-        assert_eq!(tc.unknown_security_models.get(), 1);
-        assert_report_pdu_varbind(&report_bytes, SNMP_UNKNOWN_SECURITY_MODELS_OID, 1);
+        assert_report_and_counter_is_one(
+            tc.unknown_security_models,
+            report::SNMP_UNKNOWN_SECURITY_MODELS_OID,
+            "counter must be incremented for unsupported security model",
+            &report_bytes,
+        );
     }
 
     #[test]
