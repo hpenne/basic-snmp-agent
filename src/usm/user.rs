@@ -130,6 +130,126 @@ impl AsRef<[u8]> for UserName {
     }
 }
 
+// ── MsgFlags ──────────────────────────────────────────────────────────────────
+
+/// The `msgFlags` octet from an `SNMPv3` message header (RFC 3412 §7.3.2).
+///
+/// Wraps the raw wire byte and exposes the three defined flag bits through
+/// named methods, so bit semantics are centralised in one place instead of
+/// scattered as ad-hoc `& 0xNN` operations.
+///
+/// Only bits 0–2 carry defined semantics; bits 3–7 are reserved and ignored.
+///
+/// # Requirements
+/// Implements: REQ-0079, REQ-0093, REQ-0103, REQ-0130, REQ-0135
+///
+/// # Examples
+///
+/// ```
+/// use basic_snmp_agent::usm::user::{MsgFlags, SecurityLevel};
+///
+/// let flags: MsgFlags = 0x07_u8.into(); // authFlag + privFlag + reportableFlag
+/// assert!(flags.is_auth());
+/// assert!(flags.is_priv());
+/// assert!(flags.is_reportable());
+/// assert_eq!(flags.security_level(), Ok(SecurityLevel::AuthPriv));
+///
+/// let wire_byte: u8 = flags.into();
+/// assert_eq!(wire_byte, 0x07);
+/// ```
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MsgFlags(u8);
+
+impl MsgFlags {
+    /// `authFlag` (bit 0): messages carry a MAC (RFC 3412 §7.3.2).
+    const AUTH_BIT: u8 = 0x01;
+
+    /// `privFlag` (bit 1): the `ScopedPDU` is encrypted (RFC 3412 §7.3.2).
+    const PRIV_BIT: u8 = 0x02;
+
+    /// `reportableFlag` (bit 2): the sender requests error Report PDUs
+    /// (RFC 3412 §7.1.3a).
+    const REPORTABLE_BIT: u8 = 0x04;
+
+    /// Returns `true` when `authFlag` (bit 0) is set, meaning the message
+    /// carries a MAC.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0079, REQ-0103, REQ-0130
+    #[must_use]
+    pub fn is_auth(self) -> bool {
+        self.0 & Self::AUTH_BIT != 0
+    }
+
+    /// Returns `true` when `privFlag` (bit 1) is set, meaning the `ScopedPDU`
+    /// is encrypted.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0079, REQ-0103, REQ-0130, REQ-0135
+    #[must_use]
+    pub fn is_priv(self) -> bool {
+        self.0 & Self::PRIV_BIT != 0
+    }
+
+    /// Returns `true` when `reportableFlag` (bit 2) is set, meaning the sender
+    /// requests that error Report PDUs be returned on failure.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0093
+    #[must_use]
+    pub fn is_reportable(self) -> bool {
+        self.0 & Self::REPORTABLE_BIT != 0
+    }
+
+    /// Derive the `SecurityLevel` implied by this flags byte.
+    ///
+    /// Returns an error when `privFlag` is set without `authFlag`, which
+    /// RFC 3412 §7.1.2a forbids.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidMsgFlags`] when `privFlag` is set but `authFlag` is clear.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0079, REQ-0103, REQ-0130
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use basic_snmp_agent::usm::user::{MsgFlags, SecurityLevel, InvalidMsgFlags};
+    ///
+    /// // authPriv (authFlag + privFlag + reportableFlag)
+    /// assert_eq!(MsgFlags::from(0x07_u8).security_level(), Ok(SecurityLevel::AuthPriv));
+    /// // authNoPriv (authFlag only)
+    /// assert_eq!(MsgFlags::from(0x01_u8).security_level(), Ok(SecurityLevel::AuthNoPriv));
+    /// // privFlag set without authFlag — forbidden by RFC 3412 §7.1.2a
+    /// assert_eq!(MsgFlags::from(0x02_u8).security_level(), Err(InvalidMsgFlags(0x02)));
+    /// ```
+    pub fn security_level(self) -> Result<SecurityLevel, InvalidMsgFlags> {
+        SecurityLevel::try_from(self.0)
+    }
+}
+
+impl From<u8> for MsgFlags {
+    /// Wrap a raw `msgFlags` wire byte.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0079, REQ-0135
+    fn from(byte: u8) -> Self {
+        Self(byte)
+    }
+}
+
+impl From<MsgFlags> for u8 {
+    /// Recover the raw `msgFlags` octet for outbound wire encoding.
+    ///
+    /// # Requirements
+    /// Implements: REQ-0079, REQ-0135
+    fn from(flags: MsgFlags) -> Self {
+        flags.0
+    }
+}
+
 // ── SecurityLevel ─────────────────────────────────────────────────────────────
 
 /// The security level of a USM user, as defined in RFC 3414 §3.4.
@@ -171,15 +291,6 @@ impl fmt::Display for InvalidMsgFlags {
 }
 
 impl std::error::Error for InvalidMsgFlags {}
-
-/// The `privFlag` bit in the `msgFlags` byte (RFC 3412 §7.3.2).
-///
-/// Set when the `ScopedPDU` is encrypted. Used both here (when decoding `msgFlags`
-/// into a [`SecurityLevel`]) and in `transport::dispatch` (when validating that the
-/// flag agrees with the wire form of the `ScopedPduData`). A single definition
-/// prevents the two sites from drifting.
-// Implements: REQ-0079, REQ-0135
-pub(crate) const MSG_FLAGS_PRIV_BIT: u8 = 0x02;
 
 /// Shared error message for the no-user / security-level invariant, used by all three
 /// error-type Display impls so the message text stays consistent across layers.
@@ -229,11 +340,14 @@ impl TryFrom<u8> for SecurityLevel {
     /// assert_eq!(SecurityLevel::try_from(0x04_u8), Ok(SecurityLevel::NoAuthNoPriv));
     /// ```
     fn try_from(flags: u8) -> Result<Self, Self::Error> {
-        match flags & 0x03 {
-            0x00 => Ok(Self::NoAuthNoPriv),
-            0x01 => Ok(Self::AuthNoPriv),
-            0x03 => Ok(Self::AuthPriv),
-            _ => Err(InvalidMsgFlags(flags)), // 0x02: privFlag without authFlag — invalid per RFC 3412 §7.1.2a
+        // Delegate to MsgFlags so the bit constants live in one place.
+        let msg_flags = MsgFlags::from(flags);
+        match (msg_flags.is_auth(), msg_flags.is_priv()) {
+            (false, false) => Ok(Self::NoAuthNoPriv),
+            (true, false) => Ok(Self::AuthNoPriv),
+            (true, true) => Ok(Self::AuthPriv),
+            // privFlag without authFlag — invalid per RFC 3412 §7.1.2a
+            (false, true) => Err(InvalidMsgFlags(flags)),
         }
     }
 }
@@ -712,6 +826,105 @@ impl fmt::Debug for AuthPrivUser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── MsgFlags ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn given_zero_flags_when_inspect_bits_then_all_false() {
+        // Verifies: REQ-0079, REQ-0093, REQ-0135
+        let flags = MsgFlags::from(0x00_u8);
+        assert!(!flags.is_auth(), "authFlag must be clear");
+        assert!(!flags.is_priv(), "privFlag must be clear");
+        assert!(!flags.is_reportable(), "reportableFlag must be clear");
+    }
+
+    #[test]
+    fn given_auth_flag_only_when_inspect_bits_then_only_auth_true() {
+        // Verifies: REQ-0079, REQ-0103, REQ-0130
+        let flags = MsgFlags::from(0x01_u8);
+        assert!(flags.is_auth(), "authFlag must be set");
+        assert!(!flags.is_priv(), "privFlag must be clear");
+        assert!(!flags.is_reportable(), "reportableFlag must be clear");
+    }
+
+    #[test]
+    fn given_priv_flag_only_when_inspect_bits_then_only_priv_true() {
+        // Verifies: REQ-0079, REQ-0135
+        let flags = MsgFlags::from(0x02_u8);
+        assert!(!flags.is_auth(), "authFlag must be clear");
+        assert!(flags.is_priv(), "privFlag must be set");
+        assert!(!flags.is_reportable(), "reportableFlag must be clear");
+    }
+
+    #[test]
+    fn given_reportable_flag_only_when_inspect_bits_then_only_reportable_true() {
+        // Verifies: REQ-0093
+        let flags = MsgFlags::from(0x04_u8);
+        assert!(!flags.is_auth(), "authFlag must be clear");
+        assert!(!flags.is_priv(), "privFlag must be clear");
+        assert!(flags.is_reportable(), "reportableFlag must be set");
+    }
+
+    #[test]
+    fn given_all_three_flags_when_inspect_bits_then_all_true() {
+        // Verifies: REQ-0079, REQ-0093, REQ-0135
+        let flags = MsgFlags::from(0x07_u8);
+        assert!(flags.is_auth());
+        assert!(flags.is_priv());
+        assert!(flags.is_reportable());
+    }
+
+    #[test]
+    fn given_reserved_high_bits_when_inspect_bits_then_only_low_three_matter() {
+        // Verifies: REQ-0079 — bits 3-7 are reserved and must not affect flag tests
+        let flags = MsgFlags::from(0xF8_u8); // bits 3-7 set, bits 0-2 clear
+        assert!(
+            !flags.is_auth(),
+            "reserved bits must not be interpreted as authFlag"
+        );
+        assert!(
+            !flags.is_priv(),
+            "reserved bits must not be interpreted as privFlag"
+        );
+        assert!(
+            !flags.is_reportable(),
+            "reserved bits must not be interpreted as reportableFlag"
+        );
+    }
+
+    #[test]
+    fn given_flags_when_security_level_then_derives_correctly() {
+        // Verifies: REQ-0079, REQ-0103, REQ-0130
+        let cases: &[(u8, Result<SecurityLevel, InvalidMsgFlags>)] = &[
+            (0x00, Ok(SecurityLevel::NoAuthNoPriv)),
+            (0x01, Ok(SecurityLevel::AuthNoPriv)),
+            (0x03, Ok(SecurityLevel::AuthPriv)),
+            (0x02, Err(InvalidMsgFlags(0x02))), // privFlag without authFlag
+            (0x04, Ok(SecurityLevel::NoAuthNoPriv)), // reportableFlag only
+            (0x07, Ok(SecurityLevel::AuthPriv)), // all three flags
+        ];
+        for &(byte, ref expected) in cases {
+            let flags = MsgFlags::from(byte);
+            assert_eq!(flags.security_level(), *expected, "byte=0x{byte:02x}");
+        }
+    }
+
+    #[test]
+    fn given_flags_byte_when_into_msg_flags_then_round_trips_via_u8() {
+        // Verifies: REQ-0079, REQ-0135 — From<u8> and From<MsgFlags> for u8 must round-trip
+        for byte in 0_u8..=0xFF {
+            let flags: MsgFlags = byte.into();
+            let recovered: u8 = flags.into();
+            assert_eq!(recovered, byte, "round-trip failed for byte=0x{byte:02x}");
+        }
+    }
+
+    #[test]
+    fn given_msg_flags_when_debug_then_shows_exact_derived_form() {
+        // Verifies: REQ-0079 — Debug output includes the type name and raw byte for diagnostics
+        let flags = MsgFlags::from(0x05_u8);
+        assert_eq!(format!("{flags:?}"), "MsgFlags(5)");
+    }
 
     #[test]
     fn security_level_requires_user_predicate() {

@@ -29,9 +29,6 @@ impl From<Reject> for Option<Vec<u8>> {
     }
 }
 
-/// Bit mask for the `reportableFlag` in `msgFlags` (RFC 3412 §7.1.3a).
-pub(super) const REPORTABLE_FLAG: u8 = 0x04;
-
 // Implements: REQ-0093, REQ-0104
 pub(super) static UNKNOWN_ENGINE_IDS_OID: LazyLock<Oid> = LazyLock::new(|| {
     crate::usm::counters::USM_STATS_UNKNOWN_ENGINE_IDS
@@ -88,13 +85,16 @@ pub(super) static UNKNOWN_SECURITY_MODELS_OID: LazyLock<Oid> = LazyLock::new(|| 
 /// Increment the counter selected by `select_counter`, and if `reportableFlag` is set in
 /// `security_flags`, encode and return a `Reject::Report` carrying the encoded PDU;
 /// otherwise return `Reject::Discard` (silent discard per RFC 3412 §7.1.3a).
+///
+/// # Requirements
+/// Implements: REQ-0093
 pub(super) fn emit_report_response(
     ctx: &mut DispatchContext<'_>,
     select_counter: impl for<'a> FnOnce(&'a mut DispatchInputs<'_>) -> &'a mut UsmStatsCounter,
     counter_oid: &Oid,
     description: &str,
     msg_id: crate::codec::MessageId,
-    security_flags: u8,
+    security_flags: crate::usm::user::MsgFlags,
 ) -> Reject {
     // Scope the closure call so the mutable borrow of ctx.inputs ends before
     // we read engine_id, engine_boots, and engine_time below.
@@ -103,7 +103,7 @@ pub(super) fn emit_report_response(
         counter.saturating_increment();
         counter.get()
     };
-    if security_flags & REPORTABLE_FLAG == 0 {
+    if !security_flags.is_reportable() {
         trace!("{description} with reportableFlag unset, discarding silently");
         return Reject::Discard;
     }

@@ -175,7 +175,8 @@ pub fn decode_v3_message(bytes: &[u8]) -> Result<V3InboundMessage<'_>, DecodeErr
     let msg_id = MessageId::from(envelope.msg_id);
     let security_model = SecurityModel::from_wire(envelope.security_model);
     let auth_params_offset = envelope.auth_params_offset;
-    let security_flags = envelope.security_flags;
+    // Convert the raw BER wire byte to a MsgFlags newtype at the codec boundary.
+    let security_flags = crate::usm::user::MsgFlags::from(envelope.security_flags);
 
     // Destructure the entire UsmFields struct upfront to avoid a partial-move
     // error: priv_params would be moved into usm_fields while engine_id is also
@@ -988,7 +989,10 @@ mod tests {
         assert_eq!(msg.usm.auth_engine_id, engine_id);
         assert_eq!(msg.usm.auth_engine_boots, 0);
         assert_eq!(msg.usm.auth_engine_time, 0);
-        assert_eq!(msg.usm.security_flags, 0x04); // reportableFlag set by encode_get_request
+        assert_eq!(
+            msg.usm.security_flags,
+            crate::usm::user::MsgFlags::from(0x04_u8)
+        ); // reportableFlag set by encode_get_request
         assert!(
             msg.usm.auth_params.is_none(),
             "noAuthNoPriv messages must have no auth_params (empty on wire)"

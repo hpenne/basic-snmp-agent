@@ -406,8 +406,9 @@ pub struct UsmSecurityFields {
     pub auth_engine_boots: u32,
     /// `msgAuthoritativeEngineTime` from USM security parameters.
     pub auth_engine_time: u32,
-    /// Message flags byte: bit 0 = authFlag, bit 1 = privFlag, bit 2 = reportableFlag.
-    pub security_flags: u8,
+    /// `msgFlags` byte: bit 0 = authFlag, bit 1 = privFlag, bit 2 = reportableFlag
+    /// (RFC 3412 §7.3.2). Use [`MsgFlags`](crate::usm::user::MsgFlags) methods to inspect individual bits.
+    pub security_flags: crate::usm::user::MsgFlags,
     /// `msgAuthenticationParameters` from the USM security parameters.
     ///
     /// `Some` for authenticated messages (MAC bytes, 24 bytes for SHA-256 or

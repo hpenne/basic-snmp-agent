@@ -185,7 +185,7 @@ fn check_security_level(
     v3_msg: &crate::codec::V3InboundMessage<'_>,
     ctx: &mut DispatchContext<'_>,
 ) -> Result<(), Reject> {
-    let msg_level = crate::usm::user::SecurityLevel::try_from(v3_msg.usm.security_flags);
+    let msg_level = v3_msg.usm.security_flags.security_level();
     if ctx.inputs.should_reject_security_level(msg_level) {
         return Err(emit_report_response(
             ctx,
@@ -206,7 +206,7 @@ fn check_security_level(
 // must agree with the privFlag in msgFlags per RFC 3412 §7.3.2).
 // Implements: REQ-0135
 fn check_priv_flag_agreement(v3_msg: &crate::codec::V3InboundMessage<'_>) -> Result<(), Reject> {
-    let priv_flag_set = v3_msg.usm.security_flags & crate::usm::user::MSG_FLAGS_PRIV_BIT != 0;
+    let priv_flag_set = v3_msg.usm.security_flags.is_priv();
     let payload_is_encrypted =
         matches!(v3_msg.scoped_data, crate::codec::V3ScopedData::Encrypted(_));
     if priv_flag_set == payload_is_encrypted {
@@ -405,7 +405,7 @@ fn verify_hmac(
 #[derive(Debug)]
 struct DecryptionParams<'a> {
     msg_id: crate::codec::MessageId,
-    security_flags: u8,
+    security_flags: crate::usm::user::MsgFlags,
     // None when the wire value was empty or had a wrong length.
     // Checked in decrypt_scoped_pdu; None → decryption-error Report PDU.
     priv_params: Option<&'a crate::usm::security_params::PrivacySalt>,
@@ -586,13 +586,37 @@ mod tests {
     // be caught before any counter-incrementing branch is reached, so none of the
     // seven counters may change.
     fn assert_no_usm_counters_incremented(tc: &TestCtx) {
-        assert_eq!(tc.unknown_engine_ids.get(), 0, "unknown_engine_ids must be zero");
-        assert_eq!(tc.unknown_user_names.get(), 0, "unknown_user_names must be zero");
-        assert_eq!(tc.unsupported_sec_levels.get(), 0, "unsupported_sec_levels must be zero");
+        assert_eq!(
+            tc.unknown_engine_ids.get(),
+            0,
+            "unknown_engine_ids must be zero"
+        );
+        assert_eq!(
+            tc.unknown_user_names.get(),
+            0,
+            "unknown_user_names must be zero"
+        );
+        assert_eq!(
+            tc.unsupported_sec_levels.get(),
+            0,
+            "unsupported_sec_levels must be zero"
+        );
         assert_eq!(tc.wrong_digests.get(), 0, "wrong_digests must be zero");
-        assert_eq!(tc.not_in_time_windows.get(), 0, "not_in_time_windows must be zero");
-        assert_eq!(tc.decryption_errors.get(), 0, "decryption_errors must be zero");
-        assert_eq!(tc.unknown_security_models.get(), 0, "unknown_security_models must be zero");
+        assert_eq!(
+            tc.not_in_time_windows.get(),
+            0,
+            "not_in_time_windows must be zero"
+        );
+        assert_eq!(
+            tc.decryption_errors.get(),
+            0,
+            "decryption_errors must be zero"
+        );
+        assert_eq!(
+            tc.unknown_security_models.get(),
+            0,
+            "unknown_security_models must be zero"
+        );
     }
 
     // Parameters for building an authPriv GetRequest frame.
@@ -871,7 +895,9 @@ mod tests {
     // Build an unauthenticated SNMPv3 frame carrying an EncryptedPdu with no HMAC.
     // authentication_parameters is always empty because these frames are used to exercise
     // checks (security-level, privFlag) that run before authentication in the pipeline.
-    fn build_unauthenticated_encrypted_frame(params: &UnauthenticatedEncryptedFrameParams<'_>) -> Vec<u8> {
+    fn build_unauthenticated_encrypted_frame(
+        params: &UnauthenticatedEncryptedFrameParams<'_>,
+    ) -> Vec<u8> {
         use rasn_snmp::v3::{
             HeaderData, Message as V3Message, ScopedPduData, USMSecurityParameters,
         };
@@ -1924,8 +1950,8 @@ mod tests {
         let frame = build_authenticated_frame_with_time(&auth_key_bytes, 1, 200);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
         let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
-        let response_bytes = result
-            .expect("time-difference out-of-window message must produce a Report response");
+        let response_bytes =
+            result.expect("time-difference out-of-window message must produce a Report response");
         assert_report_and_counter_is_one(
             tc.not_in_time_windows,
             crate::usm::counters::USM_STATS_NOT_IN_TIME_WINDOWS,
