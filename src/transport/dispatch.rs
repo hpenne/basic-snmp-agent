@@ -858,8 +858,21 @@ mod tests {
         )
     }
 
-    // Build a no-user authPriv frame (flags 0x07) carrying fake ciphertext.
-    fn build_no_user_authpriv_frame() -> Vec<u8> {
+    // Parameters for building an unauthenticated SNMPv3 frame carrying an EncryptedPdu.
+    // Used when the test only needs to exercise a check that runs before authentication
+    // (e.g. security-level rejection or privFlag/wire-form mismatch), so no HMAC is spliced in.
+    struct UnauthenticatedEncryptedFrameParams<'a> {
+        message_id: u32,
+        user_name: &'a [u8],
+        msg_flags_byte: u8,
+        privacy_parameters: &'a [u8],
+        ciphertext: &'a [u8],
+    }
+
+    // Build an unauthenticated SNMPv3 frame carrying an EncryptedPdu with no HMAC.
+    // authentication_parameters is always empty because these frames are used to exercise
+    // checks (security-level, privFlag) that run before authentication in the pipeline.
+    fn build_unauthenticated_encrypted_frame(params: &UnauthenticatedEncryptedFrameParams<'_>) -> Vec<u8> {
         use rasn_snmp::v3::{
             HeaderData, Message as V3Message, ScopedPduData, USMSecurityParameters,
         };
@@ -867,24 +880,35 @@ mod tests {
             authoritative_engine_id: test_engine_id().to_vec().into(),
             authoritative_engine_boots: 1.into(),
             authoritative_engine_time: 0.into(),
-            user_name: rasn::types::OctetString::from(vec![]),
+            user_name: params.user_name.to_vec().into(),
             authentication_parameters: rasn::types::OctetString::from(vec![]),
-            privacy_parameters: rasn::types::OctetString::from(vec![0xAA_u8; 8]),
+            privacy_parameters: rasn::types::OctetString::from(params.privacy_parameters.to_vec()),
         };
         rasn::ber::encode(&V3Message {
             version: 3.into(),
             global_data: HeaderData {
-                message_id: 5.into(),
+                message_id: params.message_id.into(),
                 max_size: 0xFFFF.into(),
-                flags: rasn::types::OctetString::from(vec![0x07_u8]),
+                flags: rasn::types::OctetString::from(vec![params.msg_flags_byte]),
                 security_model: 3.into(),
             },
             security_parameters: rasn::ber::encode(&usm_params).unwrap().into(),
             scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(
-                b"fake-ciphertext-bytes".to_vec(),
+                params.ciphertext.to_vec(),
             )),
         })
         .unwrap()
+    }
+
+    // Build a no-user authPriv frame (flags 0x07) carrying fake ciphertext.
+    fn build_no_user_authpriv_frame() -> Vec<u8> {
+        build_unauthenticated_encrypted_frame(&UnauthenticatedEncryptedFrameParams {
+            message_id: 5,
+            user_name: b"",
+            msg_flags_byte: 0x07,
+            privacy_parameters: &[0xAA_u8; 8],
+            ciphertext: b"fake-ciphertext-bytes",
+        })
     }
 
     // Test helper that owns counter storage and produces a DispatchContext,
@@ -2171,33 +2195,14 @@ mod tests {
     // This produces a structurally inconsistent message where privFlag is absent in flags
     // but the wire form is Encrypted, for testing mismatch detection.
     fn build_frame_with_priv_flag_clear_but_encrypted_payload() -> Vec<u8> {
-        use rasn_snmp::v3::{
-            HeaderData, Message as V3Message, ScopedPduData, USMSecurityParameters,
-        };
-
-        let usm_params = USMSecurityParameters {
-            authoritative_engine_id: test_engine_id().to_vec().into(),
-            authoritative_engine_boots: 1.into(),
-            authoritative_engine_time: 0.into(),
-            user_name: b"alice".to_vec().into(),
-            authentication_parameters: rasn::types::OctetString::from(vec![]),
-            privacy_parameters: rasn::types::OctetString::from(vec![0x01_u8; 8]),
-        };
         // flags=0x04: reportableFlag only → noAuthNoPriv, but payload is EncryptedPdu
-        rasn::ber::encode(&V3Message {
-            version: 3.into(),
-            global_data: HeaderData {
-                message_id: 7.into(),
-                max_size: 0xFFFF.into(),
-                flags: rasn::types::OctetString::from(vec![0x04_u8]),
-                security_model: 3.into(),
-            },
-            security_parameters: rasn::ber::encode(&usm_params).unwrap().into(),
-            scoped_data: ScopedPduData::EncryptedPdu(rasn::types::OctetString::from(
-                b"fake-encrypted-content".to_vec(),
-            )),
+        build_unauthenticated_encrypted_frame(&UnauthenticatedEncryptedFrameParams {
+            message_id: 7,
+            user_name: b"alice",
+            msg_flags_byte: 0x04,
+            privacy_parameters: &[0x01_u8; 8],
+            ciphertext: b"fake-encrypted-content",
         })
-        .unwrap()
     }
 
     // Build a frame with flags=0x07 (authPriv) but a CleartextPdu payload.
