@@ -567,20 +567,6 @@ mod tests {
         process_snmpv3_request(frame, &mut ctx, mib)
     }
 
-    // Assert that a dispatch result was silently discarded (None) and that the
-    // named counter was incremented by exactly one from zero.
-    fn assert_discarded_and_counter_incremented(
-        result: Option<&Vec<u8>>,
-        counter: crate::usm::counters::UsmStatsCounter,
-    ) {
-        assert!(result.is_none(), "must be silently discarded");
-        assert_eq!(
-            counter.get(),
-            1,
-            "counter must be incremented even when no Report is sent"
-        );
-    }
-
     // Assert that every USM stats counter on `tc` is zero.
     // A privFlag/wire-form structural mismatch (RFC 3414 §3.2 silent discard) must
     // be caught before any counter-incrementing branch is reached, so none of the
@@ -1042,6 +1028,45 @@ mod tests {
         .into()
     }
 
+    // Assert that dispatch silently discarded the request (result is None), that the
+    // named counter (`active_counter_name`) was incremented to 1, and that every other
+    // USM counter is still 0. This is the single strong assertion for all "no Report, but
+    // counter incremented" paths: it rules out both "wrong counter incremented" and
+    // "extra counter also incremented" mutations without any weaker variant remaining.
+    fn assert_discarded_with_only_counter_incremented(
+        result: Option<&Vec<u8>>,
+        tc: &TestCtx,
+        active_counter: crate::usm::counters::UsmStatsCounter,
+        active_counter_name: &str,
+    ) {
+        assert!(result.is_none(), "must be silently discarded");
+        assert_eq!(
+            active_counter.get(),
+            1,
+            "{active_counter_name} must be incremented to 1 even when no Report is sent"
+        );
+        // Verify every other counter is still zero. Because UsmStatsCounter is Copy,
+        // we compare by value: a value of 0 means the counter was not touched.
+        let all_counters: &[(&str, crate::usm::counters::UsmStatsCounter)] = &[
+            ("unknown_engine_ids", tc.unknown_engine_ids),
+            ("unknown_user_names", tc.unknown_user_names),
+            ("unsupported_sec_levels", tc.unsupported_sec_levels),
+            ("wrong_digests", tc.wrong_digests),
+            ("not_in_time_windows", tc.not_in_time_windows),
+            ("decryption_errors", tc.decryption_errors),
+            ("unknown_security_models", tc.unknown_security_models),
+        ];
+        for (name, counter) in all_counters {
+            if *name != active_counter_name {
+                assert_eq!(
+                    counter.get(),
+                    0,
+                    "{name} must be zero when only {active_counter_name} should be incremented"
+                );
+            }
+        }
+    }
+
     // Assert that dispatch produced a Report response carrying counter OID `expected_oid`
     // with value 1, and that the `counter` was incremented to 1.
     // Counter and OID are adjacent so a reader can eyeball that they pair correctly.
@@ -1251,7 +1276,12 @@ mod tests {
         );
         let mut tc = TestCtx::new();
         let result = run_dispatch(&mut tc, None, &frame, &mib);
-        assert_discarded_and_counter_incremented(result.as_ref(), tc.unknown_engine_ids);
+        assert_discarded_with_only_counter_incremented(
+            result.as_ref(),
+            &tc,
+            tc.unknown_engine_ids,
+            "unknown_engine_ids",
+        );
     }
 
     #[test]
@@ -1367,7 +1397,12 @@ mod tests {
         );
         let mut tc = TestCtx::new();
         let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
-        assert_discarded_and_counter_incremented(result.as_ref(), tc.unknown_user_names);
+        assert_discarded_with_only_counter_incremented(
+            result.as_ref(),
+            &tc,
+            tc.unknown_user_names,
+            "unknown_user_names",
+        );
     }
 
     // ── Security-level enforcement (REQ-0077, REQ-0079, REQ-0103, REQ-0130) ───
@@ -1403,18 +1438,17 @@ mod tests {
         let mib = crate::mib::Store::new();
         let alice = test_no_auth_user("alice");
         // flags 0x05 = authFlag + reportableFlag → authNoPriv; configured user is noAuthNoPriv
-        let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
-            test_engine_id(),
-            b"alice",
-            b"",
-            1,
-            2,
-            test_oid_arcs(),
-            0x05,
-        );
         let mut tc = TestCtx::new();
-        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
-            .expect("ceiling violation must produce a Report response");
+        let response_bytes = run_flagged_get_request(
+            &mut tc,
+            &FlaggedGetRequest {
+                usm_user: Some(&alice),
+                user_name: b"alice",
+                msg_flags_byte: 0x05,
+            },
+            &mib,
+        )
+        .expect("ceiling violation must produce a Report response");
         let v3_response = assert_report_and_counter_is_one(
             tc.unsupported_sec_levels,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
@@ -1431,18 +1465,22 @@ mod tests {
         let mib = crate::mib::Store::new();
         let alice = test_no_auth_user("alice");
         // flags 0x01 = authFlag only (no reportableFlag) → authNoPriv, not reportable
-        let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
-            test_engine_id(),
-            b"alice",
-            b"",
-            1,
-            2,
-            test_oid_arcs(),
-            0x01,
-        );
         let mut tc = TestCtx::new();
-        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
-        assert_discarded_and_counter_incremented(result.as_ref(), tc.unsupported_sec_levels);
+        let result = run_flagged_get_request(
+            &mut tc,
+            &FlaggedGetRequest {
+                usm_user: Some(&alice),
+                user_name: b"alice",
+                msg_flags_byte: 0x01,
+            },
+            &mib,
+        );
+        assert_discarded_with_only_counter_incremented(
+            result.as_ref(),
+            &tc,
+            tc.unsupported_sec_levels,
+            "unsupported_sec_levels",
+        );
     }
 
     #[test]
@@ -1453,18 +1491,18 @@ mod tests {
         // (flags 0x05 has reportableFlag set) must be rejected with a Report PDU carrying
         // usmStatsUnsupportedSecLevels rather than being served as if authenticated.
         let mib = crate::mib::Store::new();
-        let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
-            test_engine_id(),
-            b"",
-            b"",
-            1,
-            2,
-            test_oid_arcs(),
-            0x05,
-        );
+        // Empty user name — no USM user configured
         let mut tc = TestCtx::new();
-        let response_bytes = run_dispatch(&mut tc, None, &frame, &mib)
-            .expect("authNoPriv message with reportableFlag set must produce a Report response");
+        let response_bytes = run_flagged_get_request(
+            &mut tc,
+            &FlaggedGetRequest {
+                usm_user: None,
+                user_name: b"",
+                msg_flags_byte: 0x05,
+            },
+            &mib,
+        )
+        .expect("authNoPriv message with reportableFlag set must produce a Report response");
         assert_report_and_counter_is_one(
             tc.unsupported_sec_levels,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
@@ -1480,18 +1518,17 @@ mod tests {
         let mib = crate::mib::Store::new();
         let alice = test_no_auth_user("alice");
         // flags 0x06 = privFlag set, reportableFlag set, authFlag clear → invalid combination
-        let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
-            test_engine_id(),
-            b"alice",
-            b"",
-            1,
-            2,
-            test_oid_arcs(),
-            0x06,
-        );
         let mut tc = TestCtx::new();
-        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
-            .expect("invalid msgFlags combination must produce a Report response");
+        let response_bytes = run_flagged_get_request(
+            &mut tc,
+            &FlaggedGetRequest {
+                usm_user: Some(&alice),
+                user_name: b"alice",
+                msg_flags_byte: 0x06,
+            },
+            &mib,
+        )
+        .expect("invalid msgFlags combination must produce a Report response");
         assert_report_and_counter_is_one(
             tc.unsupported_sec_levels,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
@@ -1533,19 +1570,18 @@ mod tests {
         let alice = test_authpriv_user("alice", &[0x42_u8; 32]);
         // authNoPriv message (flags 0x05) but floor is AuthPriv — rejected at floor check
         // before HMAC verification
-        let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
-            test_engine_id(),
-            b"alice",
-            b"",
-            1,
-            2,
-            test_oid_arcs(),
-            0x05,
-        );
         let mut tc =
             TestCtx::new().with_minimum_security_level(crate::usm::user::SecurityLevel::AuthPriv);
-        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
-            .expect("below-floor authNoPriv message must produce a Report response");
+        let response_bytes = run_flagged_get_request(
+            &mut tc,
+            &FlaggedGetRequest {
+                usm_user: Some(&alice),
+                user_name: b"alice",
+                msg_flags_byte: 0x05,
+            },
+            &mib,
+        )
+        .expect("below-floor authNoPriv message must produce a Report response");
         assert_report_and_counter_is_one(
             tc.unsupported_sec_levels,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
@@ -1589,19 +1625,18 @@ mod tests {
         let alice = test_auth_user("alice", &[0x42_u8; 32]);
         // authPriv message (flags 0x07) but user only has authNoPriv capabilities
         // Passes floor (authPriv >= authNoPriv) but fails ceiling (authPriv > authNoPriv)
-        let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
-            test_engine_id(),
-            b"alice",
-            b"",
-            1,
-            2,
-            test_oid_arcs(),
-            0x07,
-        );
         let mut tc =
             TestCtx::new().with_minimum_security_level(crate::usm::user::SecurityLevel::AuthNoPriv);
-        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
-            .expect("ceiling violation must produce a Report response");
+        let response_bytes = run_flagged_get_request(
+            &mut tc,
+            &FlaggedGetRequest {
+                usm_user: Some(&alice),
+                user_name: b"alice",
+                msg_flags_byte: 0x07,
+            },
+            &mib,
+        )
+        .expect("ceiling violation must produce a Report response");
         assert_report_and_counter_is_one(
             tc.unsupported_sec_levels,
             crate::usm::counters::USM_STATS_UNSUPPORTED_SEC_LEVELS,
@@ -1686,6 +1721,62 @@ mod tests {
         build_authenticated_frame_with_time(auth_key_bytes, 1, 0)
     }
 
+    // Bundles the per-test varying inputs for cleartext GetRequest dispatch scenarios.
+    // Named fields replace the positional soup of the 7-arg `encode_get_request_with_user_and_flags`.
+    // msg_id=1 and request_id=2 are invariant across this family so they live in the helper, not here.
+    struct FlaggedGetRequest<'a> {
+        usm_user: Option<&'a crate::usm::user::UsmUser>,
+        user_name: &'a [u8],
+        msg_flags_byte: u8,
+    }
+
+    // Build a cleartext GetRequest from `req` and run dispatch through `tc`.
+    fn run_flagged_get_request(
+        tc: &mut TestCtx,
+        req: &FlaggedGetRequest<'_>,
+        mib: &crate::mib::Store,
+    ) -> Option<Vec<u8>> {
+        let frame = snmpv3_frames::encode_get_request_with_user_and_flags(
+            test_engine_id(),
+            req.user_name,
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+            req.msg_flags_byte,
+        );
+        run_dispatch(tc, req.usm_user, &frame, mib)
+    }
+
+    // Bundles the per-test varying inputs for auth-params GetRequest dispatch scenarios.
+    // Named fields replace the positional soup of the 8-arg `encode_get_request_with_auth_params`.
+    // msg_id=1 and request_id=2 are invariant across this family so they live in the helper, not here.
+    // user_name is fixed to "alice" for this family — all auth-params tests use the same named user.
+    struct AuthParamsGetRequest<'a> {
+        usm_user: Option<&'a crate::usm::user::UsmUser>,
+        msg_flags_byte: u8,
+        auth_params: &'a [u8],
+    }
+
+    // Build a GetRequest with explicit auth params from `req` and run dispatch through `tc`.
+    fn run_auth_params_get_request(
+        tc: &mut TestCtx,
+        req: &AuthParamsGetRequest<'_>,
+        mib: &crate::mib::Store,
+    ) -> Option<Vec<u8>> {
+        let frame = snmpv3_frames::encode_get_request_with_auth_params(
+            test_engine_id(),
+            b"alice",
+            b"",
+            1,
+            2,
+            test_oid_arcs(),
+            req.msg_flags_byte,
+            req.auth_params,
+        );
+        run_dispatch(tc, req.usm_user, &frame, mib)
+    }
+
     #[test]
     fn given_correct_hmac_when_process_then_proceeds() {
         // Verifies: REQ-0100, REQ-0102, REQ-0107
@@ -1709,19 +1800,18 @@ mod tests {
         // Verifies: REQ-0100, REQ-0102
         let mib = crate::mib::Store::new();
         let alice = test_auth_user("alice", &[0x42_u8; 32]);
-        let frame = snmpv3_frames::encode_get_request_with_auth_params(
-            test_engine_id(),
-            b"alice",
-            b"",
-            1,
-            2,
-            test_oid_arcs(),
-            0x05,
-            &[0xBB_u8; 24],
-        );
+        // flags 0x05 = authNoPriv + reportableFlag; 24 wrong MAC bytes
         let mut tc = TestCtx::new();
-        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
-            .expect("wrong HMAC must produce a Report response");
+        let response_bytes = run_auth_params_get_request(
+            &mut tc,
+            &AuthParamsGetRequest {
+                usm_user: Some(&alice),
+                msg_flags_byte: 0x05,
+                auth_params: &[0xBB_u8; 24],
+            },
+            &mib,
+        )
+        .expect("wrong HMAC must produce a Report response");
         assert_report_and_counter_is_one(
             tc.wrong_digests,
             crate::usm::counters::USM_STATS_WRONG_DIGESTS,
@@ -1735,19 +1825,18 @@ mod tests {
         // Verifies: REQ-0100 — empty auth_params for an authenticated user is rejected
         let mib = crate::mib::Store::new();
         let alice = test_auth_user("alice", &[0x42_u8; 32]);
-        let frame = snmpv3_frames::encode_get_request_with_auth_params(
-            test_engine_id(),
-            b"alice",
-            b"",
-            1,
-            2,
-            test_oid_arcs(),
-            0x05,
-            &[],
-        );
+        // flags 0x05 = authNoPriv + reportableFlag; empty auth_params treated as wrong MAC
         let mut tc = TestCtx::new();
-        let response_bytes = run_dispatch(&mut tc, Some(&alice), &frame, &mib)
-            .expect("empty auth_params must produce a Report response");
+        let response_bytes = run_auth_params_get_request(
+            &mut tc,
+            &AuthParamsGetRequest {
+                usm_user: Some(&alice),
+                msg_flags_byte: 0x05,
+                auth_params: &[],
+            },
+            &mib,
+        )
+        .expect("empty auth_params must produce a Report response");
         assert_report_and_counter_is_one(
             tc.wrong_digests,
             crate::usm::counters::USM_STATS_WRONG_DIGESTS,
@@ -1763,19 +1852,22 @@ mod tests {
         let mib = crate::mib::Store::new();
         let alice = test_auth_user("alice", &[0x42_u8; 32]);
         // flags 0x01 = authFlag only (no reportableFlag)
-        let frame = snmpv3_frames::encode_get_request_with_auth_params(
-            test_engine_id(),
-            b"alice",
-            b"",
-            1,
-            2,
-            test_oid_arcs(),
-            0x01,
-            &[0xBB_u8; 24],
-        );
         let mut tc = TestCtx::new();
-        let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
-        assert_discarded_and_counter_incremented(result.as_ref(), tc.wrong_digests);
+        let result = run_auth_params_get_request(
+            &mut tc,
+            &AuthParamsGetRequest {
+                usm_user: Some(&alice),
+                msg_flags_byte: 0x01,
+                auth_params: &[0xBB_u8; 24],
+            },
+            &mib,
+        );
+        assert_discarded_with_only_counter_incremented(
+            result.as_ref(),
+            &tc,
+            tc.wrong_digests,
+            "wrong_digests",
+        );
     }
 
     // ── zero_auth_params_in_message ──────────────────────────────────────────────
@@ -1911,7 +2003,12 @@ mod tests {
         let frame = build_authenticated_frame_with_time_and_flags(&auth_key_bytes, 2, 0, 0x01);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
         let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
-        assert_discarded_and_counter_incremented(result.as_ref(), tc.not_in_time_windows);
+        assert_discarded_with_only_counter_incremented(
+            result.as_ref(),
+            &tc,
+            tc.not_in_time_windows,
+            "not_in_time_windows",
+        );
     }
 
     #[test]
@@ -2110,7 +2207,12 @@ mod tests {
         let frame = build_authpriv_frame_no_report_corrupted_ciphertext(&auth_key_bytes);
         let mut tc = TestCtx::new().with_boots_time(1, 0);
         let result = run_dispatch(&mut tc, Some(&alice), &frame, &mib);
-        assert_discarded_and_counter_incremented(result.as_ref(), tc.decryption_errors);
+        assert_discarded_with_only_counter_incremented(
+            result.as_ref(),
+            &tc,
+            tc.decryption_errors,
+            "decryption_errors",
+        );
     }
 
     #[test]
