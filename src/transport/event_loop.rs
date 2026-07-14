@@ -490,9 +490,10 @@ impl EventLoop {
     ///
     /// When the connection limit is reached, the accept loop stops processing
     /// new connections for this poll cycle. Transient accept errors (e.g.
-    /// `EMFILE`, `ENFILE`, `ECONNABORTED`) are logged and skipped rather than
-    /// killing the event loop, because a single resource-exhaustion moment
-    /// should not bring down the agent.
+    /// `EMFILE`, `ENFILE`, `ECONNABORTED`) are logged and the accept loop stops
+    /// for the current poll cycle rather than killing the event loop; remaining
+    /// connections stay in the kernel backlog and are accepted on the next poll
+    /// wakeup.
     // Implements: REQ-0051, REQ-0120, REQ-0121
     fn accept_connections(&mut self) {
         loop {
@@ -509,25 +510,8 @@ impl EventLoop {
             }
 
             match self.listener.accept() {
-                Ok((mut stream, peer_addr)) => {
-                    let token = self.next_connection_token();
-                    if let Err(e) =
-                        self.poll
-                            .registry()
-                            .register(&mut stream, token, Interest::READABLE)
-                    {
-                        debug!("failed to register connection from {peer_addr}: {e}");
-                        continue;
-                    }
-                    info!("accepted connection from {peer_addr} (token {token:?})");
-                    self.connections.insert(
-                        token,
-                        ConnectionState {
-                            stream,
-                            read_buf: Vec::new(),
-                            last_activity: Instant::now(),
-                        },
-                    );
+                Ok((stream, peer_addr)) => {
+                    self.register_and_insert_connection(stream, peer_addr);
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) => {
@@ -541,6 +525,36 @@ impl EventLoop {
                 }
             }
         }
+    }
+
+    /// Register a newly accepted TCP stream with the poll registry and insert
+    /// it into the connection table.
+    ///
+    /// On poll registration failure the stream is dropped and not inserted;
+    /// the accept loop naturally continues to the next iteration.
+    fn register_and_insert_connection(
+        &mut self,
+        mut stream: mio::net::TcpStream,
+        peer_addr: SocketAddr,
+    ) {
+        let token = self.next_connection_token();
+        if let Err(e) = self
+            .poll
+            .registry()
+            .register(&mut stream, token, Interest::READABLE)
+        {
+            debug!("failed to register connection from {peer_addr}: {e}");
+            return;
+        }
+        info!("accepted connection from {peer_addr} (token {token:?})");
+        self.connections.insert(
+            token,
+            ConnectionState {
+                stream,
+                read_buf: Vec::new(),
+                last_activity: Instant::now(),
+            },
+        );
     }
 
     /// Drain all pending commands from the mpsc channel.
