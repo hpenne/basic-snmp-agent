@@ -12,7 +12,11 @@ Make the /implement-and-review procedure mechanically reliable instead of prose-
 
 Three improvements, plus a cleanup pass:
 
-1. Workflow-script orchestration. Rewrite .claude/skills/implement-and-review so the implement -> review -> fix loop runs as a deterministic Workflow script (JavaScript) rather than model-followed prose. The script hard-codes: implementer agent for implementation passes; reviewer agent (opus) after EVERY implementation pass, including fix passes triggered by mid-loop user feedback; loop until the reviewer returns no findings or 3 complete implement+review cycles; structured reviewer output (findings with MUST FIX / SHOULD FIX / SUGGESTION) so loop termination is data-driven, not judgement-driven. The skill prose shrinks to: gather the task brief, invoke the workflow, run the gates (make pre-commit, make behave-test), report results including any unresolved findings.
+1. Workflow-script orchestration. Rewrite .claude/skills/implement-and-review so the implement -> review -> fix loop runs as a deterministic Workflow script (JavaScript) rather than model-followed prose. The script hard-codes: a planning agent that analyses the task and produces the implementer's brief, retaining context across all iterations so it can re-brief the implementer in light of each review pass; implementer agent for implementation passes; reviewer agent (opus) after EVERY implementation pass, including fix passes triggered by mid-loop user feedback; loop until the reviewer returns no findings or 3 complete implement+review cycles; structured reviewer output (findings with MUST FIX / SHOULD FIX / SUGGESTION) so loop termination is data-driven, not judgement-driven. The skill prose shrinks to: hand the raw task to the workflow, run the gates (make pre-commit, make behave-test), report results including any unresolved findings.
+
+Clarification (2026-06-16): the parent agent must NOT perform per-iteration analysis or compose the implementer's instructions. That work belongs to the in-workflow planning agent, which retains context across iterations. The purpose of this WI is to stop the parent playing fast and loose with the loop; leaving analysis and briefing in the parent's hands would reintroduce exactly the probabilistic deviation being eliminated. The parent's role reduces to handing the task to the workflow, running the gates, and reporting. The mechanism for the planning agent's cross-iteration persistence is an implementation detail for the /gov phase.
+
+Addition (2026-06-16) — orchestration step 2 of 2, parallel code-health review. Alongside the reviewer agent, the workflow's review stage runs a second review agent in parallel: a code-health reviewer that invokes CodeScene's pre_commit_code_health_safeguard (MCP) on the working tree. Because the loop commits nothing mid-iteration, git HEAD stays pinned at the pre-loop state for the loop's duration, so CodeScene compares the accumulated change against the original automatically — no separate baseline run. Gating is on CodeScene's own quality_gates outcome and per-file verdicts (improved/degraded/stable), NOT on raw numeric score deltas. Code-health findings are ADVISORY: they do NOT drive loop termination and do NOT block completion (they are not treated as MUST FIX / SHOULD FIX). However, the CodeScene result — the quality_gates pass/fail outcome and per-file verdicts — MUST ALWAYS appear in the end-of-run summary the parent reports, whether or not the gates passed. The two review agents run in parallel so wall-clock cost is max(reviewer, code-health), not the sum. Dirty-tree baseline precision (a working tree already modified at loop entry) is out of scope for now; the loop is assumed to start from a clean tree.
 
 2. Commit-gating attestation hook. Add a PreToolUse hook (JavaScript, command hook) on git commit that blocks the commit unless a review attestation exists and is current: the workflow's final reviewer pass writes a marker (verdict plus a hash of the reviewed tree state); the hook rejects the commit if the marker is missing, the verdict is not clean, or the tree hash no longer matches (i.e. code changed after the last review). This enforces the invariant "no unreviewed code is committed" outside the model entirely, alongside the existing clippy-on-commit hook. Must not block governance-only commits (gov/, .claude/, docs) — define the trigger precisely (e.g. only when staged changes touch src/ or tests/).
 
@@ -20,9 +24,9 @@ Three improvements, plus a cleanup pass:
 
 4. Superfluous-instruction cleanup. Once the attestation hook enforces review-before-commit mechanically, remove or simplify instructions that exist only to police that invariant by prose: audit CLAUDE.md, the implement-and-review skill text, and the gov/commit skills for wording made redundant by the hook (e.g. exhortations to never commit unreviewed work), and trim them so the remaining prose states intent while the machinery enforces it. The same audit should check the existing clippy-on-commit hook's overlap with CLAUDE.md's clippy instructions and align the wording.
 
-Out of scope: changes to Rust production code; changes to governance artefact content beyond this work item; external Claude Agent SDK orchestration (rejected as out-of-session and heavier than needed).
+Out of scope: changes to Rust production code; changes to governance artefact content beyond this work item; external Claude Agent SDK orchestration (rejected as out-of-session and heavier than needed); dirty-tree CodeScene baseline precision.
 
-Verification: deliberately attempt the two observed deviations against the new machinery — (a) a commit of changed src/ code without a fresh review attestation must be blocked by the hook; (b) the workflow script structurally cannot skip the post-fix review (demonstrated by reading the script and by a dry run on a trivial change). Existing hooks (clippy-on-commit) must continue to work; a normal compliant cycle must pass end to end on a trivial change."""
+Verification: deliberately attempt the two observed deviations against the new machinery — (a) a commit of changed src/ code without a fresh review attestation must be blocked by the hook; (b) the workflow script structurally cannot skip the post-fix review (demonstrated by reading the script and by a dry run on a trivial change). The parallel code-health reviewer runs on a trivial change and its CodeScene quality_gates outcome appears in the end-of-run summary even when the gates pass. Existing hooks (clippy-on-commit) must continue to work; a normal compliant cycle must pass end to end on a trivial change."""
 
 [[content.acceptance_criteria]]
 text = "implement-and-review loop runs as a deterministic Workflow script (JS) with reviewer (opus) structurally unskippable after every implementation pass and a data-driven termination condition"
@@ -58,3 +62,13 @@ category = "chore"
 text = "govctl check passes"
 status = "pending"
 category = "chore"
+
+[[content.acceptance_criteria]]
+text = "workflow review stage runs a parallel code-health review agent invoking CodeScene quality_gates against the pre-loop HEAD baseline; advisory only — does not drive loop termination or block completion"
+status = "pending"
+category = "added"
+
+[[content.acceptance_criteria]]
+text = "end-of-run summary ALWAYS reports the CodeScene quality_gates outcome and per-file verdicts, whether or not the gates passed"
+status = "pending"
+category = "added"
