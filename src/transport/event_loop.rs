@@ -490,9 +490,10 @@ impl EventLoop {
     ///
     /// When the connection limit is reached, the accept loop stops processing
     /// new connections for this poll cycle. Transient accept errors (e.g.
-    /// `EMFILE`, `ENFILE`, `ECONNABORTED`) are logged and skipped rather than
-    /// killing the event loop, because a single resource-exhaustion moment
-    /// should not bring down the agent.
+    /// `EMFILE`, `ENFILE`, `ECONNABORTED`) are logged and the accept loop stops
+    /// for the current poll cycle rather than killing the event loop; remaining
+    /// connections stay in the kernel backlog and are accepted on the next poll
+    /// wakeup.
     // Implements: REQ-0051, REQ-0120, REQ-0121
     fn accept_connections(&mut self) {
         loop {
@@ -509,25 +510,8 @@ impl EventLoop {
             }
 
             match self.listener.accept() {
-                Ok((mut stream, peer_addr)) => {
-                    let token = self.next_connection_token();
-                    if let Err(e) =
-                        self.poll
-                            .registry()
-                            .register(&mut stream, token, Interest::READABLE)
-                    {
-                        debug!("failed to register connection from {peer_addr}: {e}");
-                        continue;
-                    }
-                    info!("accepted connection from {peer_addr} (token {token:?})");
-                    self.connections.insert(
-                        token,
-                        ConnectionState {
-                            stream,
-                            read_buf: Vec::new(),
-                            last_activity: Instant::now(),
-                        },
-                    );
+                Ok((stream, peer_addr)) => {
+                    self.register_and_insert_connection(stream, peer_addr);
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) => {
@@ -541,6 +525,36 @@ impl EventLoop {
                 }
             }
         }
+    }
+
+    /// Register a newly accepted TCP stream with the poll registry and insert
+    /// it into the connection table.
+    ///
+    /// On poll registration failure the stream is dropped and not inserted;
+    /// the accept loop naturally continues to the next iteration.
+    fn register_and_insert_connection(
+        &mut self,
+        mut stream: mio::net::TcpStream,
+        peer_addr: SocketAddr,
+    ) {
+        let token = self.next_connection_token();
+        if let Err(e) = self
+            .poll
+            .registry()
+            .register(&mut stream, token, Interest::READABLE)
+        {
+            debug!("failed to register connection from {peer_addr}: {e}");
+            return;
+        }
+        info!("accepted connection from {peer_addr} (token {token:?})");
+        self.connections.insert(
+            token,
+            ConnectionState {
+                stream,
+                read_buf: Vec::new(),
+                last_activity: Instant::now(),
+            },
+        );
     }
 
     /// Drain all pending commands from the mpsc channel.
@@ -582,9 +596,6 @@ impl EventLoop {
     /// Connection-level I/O errors (e.g. `ConnectionReset`) close and remove
     /// the connection but do not propagate to the caller — a single misbehaving
     /// client must not bring down the entire event loop.
-    ///
-    /// # Requirements
-    /// Implements: REQ-0058, REQ-0068, REQ-0071, REQ-0073, REQ-0104
     fn handle_connection_event(&mut self, token: Token) {
         // Extract engine state before borrowing the connection map.
         // `engine_time_seconds()` takes `&self`; calling it after `connections.get_mut()`
@@ -594,20 +605,34 @@ impl EventLoop {
         let engine_boots = self.engine_boots;
         let engine_time = self.engine_time_seconds();
 
+        let closed_during_drain = self.drain_connection_read_buffer(token);
+        let closed_during_dispatch =
+            self.dispatch_buffered_frames(token, engine_boots, engine_time);
+
+        if closed_during_drain || closed_during_dispatch {
+            self.close_and_deregister_connection(token);
+        }
+    }
+
+    /// Drain all immediately available bytes from the connection's TCP stream
+    /// into the per-connection read buffer.
+    ///
+    /// Returns `true` if the connection was closed (EOF) or errored during the
+    /// drain; `false` if the drain completed normally (`WouldBlock`).
+    ///
+    /// Even when this returns `true`, any bytes already in the read buffer are
+    /// still valid and the caller should attempt to parse and dispatch complete
+    /// frames before tearing down the connection.
+    // Implements: REQ-0068
+    fn drain_connection_read_buffer(&mut self, token: Token) -> bool {
         let Some(conn) = self.connections.get_mut(&token) else {
-            return;
+            return false;
         };
 
         let mut chunk = [0_u8; 4096];
-        let mut closed = false;
-
-        // Drain all immediately available bytes into the per-connection buffer.
         loop {
             match conn.stream.read(&mut chunk) {
-                Ok(0) => {
-                    closed = true;
-                    break;
-                }
+                Ok(0) => return true,
                 Ok(bytes_read) => {
                     // bytes_read <= chunk.len() is guaranteed by Read::read contract
                     let (received, _) = chunk.split_at(bytes_read);
@@ -616,98 +641,101 @@ impl EventLoop {
                     // evict a connection that is actively receiving data.
                     conn.last_activity = Instant::now();
                 }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => return false,
                 Err(e) => {
                     // Non-WouldBlock errors (e.g. ConnectionReset) mean the
                     // connection is broken; close it rather than killing the loop.
                     debug!("connection error (token {token:?}): {e}");
-                    closed = true;
-                    break;
+                    return true;
                 }
             }
         }
+    }
 
+    /// Parse all complete RFC 3430 BER frames from the connection's read buffer
+    /// and dispatch each to the request handler, writing responses back.
+    ///
+    /// Each frame starts with tag 0x30 (SEQUENCE); a different tag indicates a
+    /// corrupt or non-SNMP stream and causes the connection to be closed.
+    ///
+    /// Returns `true` if the connection should be closed (framing or write error),
+    /// `false` if all buffered frames were processed without error (or the buffer
+    /// holds only a partial frame, which is normal).
+    ///
+    /// The `engine_boots` and `engine_time` parameters must be pre-read from
+    /// `&self` by the caller before the connection map is mutably borrowed, to
+    /// satisfy the borrow checker (see [`handle_connection_event`]).
+    // Implements: REQ-0058, REQ-0073, REQ-0104
+    fn dispatch_buffered_frames(
+        &mut self,
+        token: Token,
+        engine_boots: EngineBoots,
+        engine_time: EngineTime,
+    ) -> bool {
         // Process all complete RFC 3430 BER frames from the buffer.
-        // Each frame starts with tag 0x30 (SEQUENCE); a different tag indicates
-        // a corrupt or non-SNMP stream.
-        while let Some((&tag_byte, after_tag)) = conn.read_buf.split_first() {
-            if tag_byte != 0x30 {
-                debug!("non-SEQUENCE tag {tag_byte:#04x} on token {token:?}, closing");
-                closed = true;
-                break;
-            }
+        // Each iteration removes exactly one frame from the front of read_buf.
+        loop {
+            // Re-borrow the connection on each iteration; this is necessary because
+            // later in the loop we need disjoint borrows of `conn` fields and
+            // `self` fields (counters, store) for the dispatch call.
+            let Some(conn) = self.connections.get_mut(&token) else {
+                return false;
+            };
 
-            // Distinguish incomplete data (wait for more) from invalid encoding (close).
-            let (content_length, length_field_bytes) = match parse_ber_length(after_tag) {
-                Ok(Some(parsed)) => parsed,
-                Ok(None) => break,
-                Err(_) => {
-                    // Invalid BER length encoding (e.g., indefinite-length form 0x80).
-                    // The stream is unrecoverable; close the connection.
-                    debug!("invalid BER length encoding on token {token:?}, closing");
-                    closed = true;
-                    break;
+            match next_complete_frame(&mut conn.read_buf) {
+                FrameOutcome::Incomplete => return false,
+                FrameOutcome::Close(reason) => {
+                    debug!("{reason} on token {token:?}, closing");
+                    return true;
                 }
-            };
+                FrameOutcome::Complete(ber_frame) => {
+                    // EventLoop::new already enforced the no-user/security-level invariant,
+                    // so the unchecked variant is safe here and carries no Result or panic site.
+                    let mut dispatch_ctx =
+                        crate::transport::dispatch::DispatchContext::new_unchecked(
+                            crate::transport::dispatch::DispatchInputs {
+                                engine_id: self.engine_id.as_ref(),
+                                engine_boots,
+                                engine_time,
+                                unknown_engine_ids_counter: &mut self.unknown_engine_ids_counter,
+                                unknown_user_names_counter: &mut self.unknown_user_names_counter,
+                                unsupported_sec_levels_counter: &mut self
+                                    .unsupported_sec_levels_counter,
+                                wrong_digests_counter: &mut self.wrong_digests_counter,
+                                not_in_time_windows_counter: &mut self.not_in_time_windows_counter,
+                                decryption_errors_counter: &mut self.decryption_errors_counter,
+                                unknown_security_models_counter: &mut self
+                                    .unknown_security_models_counter,
+                                usm_user: self.usm_user.as_deref(),
+                                minimum_security_level: self.minimum_security_level,
+                            },
+                        );
+                    let Some(encoded_response) =
+                        Self::dispatch_snmpv3_frame(&ber_frame, &mut dispatch_ctx, &self.store)
+                    else {
+                        continue;
+                    };
 
-            // Implements: REQ-0117
-            let Some(total_frame_bytes) = total_frame_size(length_field_bytes, content_length)
-            else {
-                debug!("frame size overflows usize on token {token:?}, closing");
-                closed = true;
-                break;
-            };
-            if total_frame_bytes > MAX_FRAME_SIZE {
-                // Reject oversized frames to prevent memory exhaustion.
-                debug!("oversized frame ({total_frame_bytes} bytes) on token {token:?}, closing");
-                closed = true;
-                break;
-            }
-
-            // The full BER frame (tag + length field + content) is the payload.
-            let Some(frame_bytes) = conn.read_buf.get(..total_frame_bytes) else {
-                // Frame is incomplete; wait for more data on the next read event.
-                break;
-            };
-            let ber_frame: Vec<u8> = frame_bytes.to_vec();
-            conn.read_buf.drain(..total_frame_bytes);
-
-            // EventLoop::new already enforced the no-user/security-level invariant,
-            // so the unchecked variant is safe here and carries no Result or panic site.
-            let mut dispatch_ctx = crate::transport::dispatch::DispatchContext::new_unchecked(
-                crate::transport::dispatch::DispatchInputs {
-                    engine_id: self.engine_id.as_ref(),
-                    engine_boots,
-                    engine_time,
-                    unknown_engine_ids_counter: &mut self.unknown_engine_ids_counter,
-                    unknown_user_names_counter: &mut self.unknown_user_names_counter,
-                    unsupported_sec_levels_counter: &mut self.unsupported_sec_levels_counter,
-                    wrong_digests_counter: &mut self.wrong_digests_counter,
-                    not_in_time_windows_counter: &mut self.not_in_time_windows_counter,
-                    decryption_errors_counter: &mut self.decryption_errors_counter,
-                    unknown_security_models_counter: &mut self.unknown_security_models_counter,
-                    usm_user: self.usm_user.as_deref(),
-                    minimum_security_level: self.minimum_security_level,
-                },
-            );
-            let Some(encoded_response) =
-                Self::dispatch_snmpv3_frame(&ber_frame, &mut dispatch_ctx, &self.store)
-            else {
-                continue;
-            };
-
-            if let Err(write_error) = conn.stream.write_all(&encoded_response) {
-                // Close the connection on any write error, including WouldBlock.
-                // write_all on a non-blocking socket may have written a partial
-                // response before returning WouldBlock, leaving the framing stream
-                // in a corrupt state. Closing is the only safe option.
-                debug!("write error (token {token:?}): {write_error}, closing");
-                closed = true;
-                break;
+                    // Re-borrow after the dispatch call (which consumed the disjoint borrows above).
+                    let Some(conn) = self.connections.get_mut(&token) else {
+                        return false;
+                    };
+                    if let Err(write_error) = conn.stream.write_all(&encoded_response) {
+                        // Close the connection on any write error, including WouldBlock.
+                        // write_all on a non-blocking socket may have written a partial
+                        // response before returning WouldBlock, leaving the framing stream
+                        // in a corrupt state. Closing is the only safe option.
+                        debug!("write error (token {token:?}): {write_error}, closing");
+                        return true;
+                    }
+                }
             }
         }
+    }
 
-        if closed && let Some(mut conn) = self.connections.remove(&token) {
+    /// Remove a connection from the map and deregister it from the mio poll registry.
+    fn close_and_deregister_connection(&mut self, token: Token) {
+        if let Some(mut conn) = self.connections.remove(&token) {
             if let Err(e) = self.poll.registry().deregister(&mut conn.stream) {
                 debug!("deregister error (token {token:?}): {e}");
             }
@@ -780,6 +808,77 @@ impl EventLoop {
             }
         }
     }
+}
+
+// ── FrameOutcome ─────────────────────────────────────────────────────────────
+
+/// The result of inspecting the front of a connection's read buffer for one
+/// complete RFC 3430 BER frame.
+///
+/// Returned by [`next_complete_frame`] so the dispatch loop can match on a
+/// self-documenting enum rather than interpreting a boolean-pair protocol.
+// Implements: REQ-0071, REQ-0117
+enum FrameOutcome {
+    /// A complete, size-validated BER frame has been extracted and drained from
+    /// the buffer. The contained bytes are ready for dispatch.
+    Complete(Vec<u8>),
+    /// The buffer does not yet hold a full frame. The caller should stop the
+    /// dispatch loop and wait for the next read event.
+    Incomplete,
+    /// The stream is unrecoverable (wrong tag, invalid BER length encoding, or
+    /// oversized frame). The caller should close the connection.
+    Close(&'static str),
+}
+
+/// Attempt to extract one complete RFC 3430 BER frame from the front of
+/// `read_buf`.
+///
+/// On `Complete`, the frame bytes are drained from `read_buf` before returning.
+/// On `Incomplete` or `Close`, `read_buf` is not modified.
+///
+/// Frame validation steps (in order):
+/// 1. Tag check: the first byte must be `0x30` (SEQUENCE).
+/// 2. BER length parse: must be a valid short- or long-form encoding.
+/// 3. Size guard: the total frame byte count must not exceed [`MAX_FRAME_SIZE`].
+/// 4. Completeness check: all frame bytes must already be in the buffer.
+// Implements: REQ-0071, REQ-0117
+fn next_complete_frame(read_buf: &mut Vec<u8>) -> FrameOutcome {
+    let Some((&tag_byte, after_tag)) = read_buf.split_first() else {
+        return FrameOutcome::Incomplete;
+    };
+
+    if tag_byte != 0x30 {
+        return FrameOutcome::Close("non-SEQUENCE tag");
+    }
+
+    // Distinguish incomplete data (wait for more) from invalid encoding (close).
+    // Implements: REQ-0071
+    let (content_length, length_field_bytes) = match parse_ber_length(after_tag) {
+        Ok(Some(parsed)) => parsed,
+        Ok(None) => return FrameOutcome::Incomplete,
+        Err(_) => {
+            // Invalid BER length encoding (e.g., indefinite-length form 0x80).
+            // The stream is unrecoverable.
+            return FrameOutcome::Close("invalid BER length encoding");
+        }
+    };
+
+    // Implements: REQ-0117
+    let Some(total_frame_bytes) = total_frame_size(length_field_bytes, content_length) else {
+        return FrameOutcome::Close("frame size overflows usize");
+    };
+    if total_frame_bytes > MAX_FRAME_SIZE {
+        // Reject oversized frames to prevent memory exhaustion.
+        return FrameOutcome::Close("oversized frame");
+    }
+
+    let Some(frame_bytes) = read_buf.get(..total_frame_bytes) else {
+        // Frame is incomplete; wait for more data on the next read event.
+        return FrameOutcome::Incomplete;
+    };
+    let ber_frame = frame_bytes.to_vec();
+    read_buf.drain(..total_frame_bytes);
+    FrameOutcome::Complete(ber_frame)
 }
 
 /// Compute the total byte count of a BER frame: 1 (tag) + `length_field_bytes` + `content_length`.
