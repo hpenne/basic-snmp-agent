@@ -1,0 +1,10 @@
+{
+  "rule_sets" : [ {
+    "matching_content_path" : "**/codec/ber.rs",
+    "rules" : [ {
+      "name" : "Low Cohesion",
+      "weight" : 0.0,
+      "comment" : "Suppressed 2026-07-15. ber.rs is a hand-written BER codec whose encoder (BerWriter + encode_* helpers) and decoder (BerReader + decode_* helpers) are mutually-defining halves of one wire format; several tests assert encode->decode round-trip identity. Keeping both halves and their round-trip tests co-located in one module is a deliberate design choice that outweighs the LCOM4 cohesion signal."
+    } ]
+  } ]
+}
