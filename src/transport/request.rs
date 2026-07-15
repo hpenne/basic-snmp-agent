@@ -98,16 +98,7 @@ pub fn handle_get_next(req: &GetNextRequest, store: &Store) -> GetResponse {
     let varbinds = req
         .varbinds
         .iter()
-        .map(|vb| match store.next(&vb.oid) {
-            Some((next_oid, next_val)) => Varbind {
-                oid: next_oid.clone(),
-                value: VarbindValue::Value(next_val.clone()),
-            },
-            None => Varbind {
-                oid: vb.oid.clone(),
-                value: VarbindValue::EndOfMibView,
-            },
-        })
+        .map(|vb| resolve_get_next_varbind(store, &vb.oid))
         .collect();
 
     GetResponse {
@@ -165,16 +156,7 @@ pub fn handle_get_bulk(
     // Non-repeating section: resolved exactly once each, like GETNEXT.
     let (non_repeating_varbinds, repeating_varbinds) = req.varbinds.split_at(non_repeaters);
     for vb in non_repeating_varbinds {
-        let resolved = match store.next(&vb.oid) {
-            Some((next_oid, next_val)) => Varbind {
-                oid: next_oid.clone(),
-                value: VarbindValue::Value(next_val.clone()),
-            },
-            None => Varbind {
-                oid: vb.oid.clone(),
-                value: VarbindValue::EndOfMibView,
-            },
-        };
+        let resolved = resolve_get_next_varbind(store, &vb.oid);
         estimated_response_size += estimated_varbind_wire_size(&resolved);
         response_varbinds.push(resolved);
     }
@@ -190,40 +172,18 @@ pub fn handle_get_bulk(
         for _ in 0..max_repetitions {
             // Collect the entire row before committing any of it, so truncation
             // always falls on a complete row boundary (REQ-0134).
-            let mut row_varbinds: Vec<Varbind> = Vec::with_capacity(current_oids.len());
-            let mut row_estimated_size: usize = 0;
-            let mut all_end_of_mib = true;
-
-            for current_oid in &mut current_oids {
-                let varbind = match store.next(current_oid) {
-                    Some((next_oid, next_val)) => {
-                        all_end_of_mib = false;
-                        let vb = Varbind {
-                            oid: next_oid.clone(),
-                            value: VarbindValue::Value(next_val.clone()),
-                        };
-                        *current_oid = next_oid.clone();
-                        vb
-                    }
-                    None => Varbind {
-                        oid: current_oid.clone(),
-                        value: VarbindValue::EndOfMibView,
-                    },
-                };
-                row_estimated_size += estimated_varbind_wire_size(&varbind);
-                row_varbinds.push(varbind);
-            }
+            let row = build_repeating_row(store, &mut current_oids);
 
             // REQ-0133, REQ-0134: check size budget before committing this row.
-            if estimated_response_size + row_estimated_size > varbind_budget {
+            if estimated_response_size + row.estimated_size > varbind_budget {
                 break;
             }
 
-            estimated_response_size += row_estimated_size;
-            response_varbinds.extend(row_varbinds);
+            estimated_response_size += row.estimated_size;
+            response_varbinds.extend(row.varbinds);
 
             // RFC 3416 §4.2.3: stop early once all columns have reached end of MIB.
-            if all_end_of_mib {
+            if row.all_end_of_mib {
                 break;
             }
         }
@@ -234,6 +194,69 @@ pub fn handle_get_bulk(
         error_status: ErrorStatus::NoError,
         error_index: 0,
         varbinds: response_varbinds,
+    }
+}
+
+/// One row of a `GetBulkRequest` repeating section: the varbinds produced by
+/// advancing every repeating column one step, their combined estimated wire
+/// size, and whether every column has reached `EndOfMibView`.
+///
+/// Bundled into one type because `handle_get_bulk` always needs all three
+/// together: the size to weigh against the budget, the varbinds to commit if
+/// it fits, and the early-exit signal once nothing more can be produced.
+// Implements: REQ-0133, REQ-0134
+struct RepeatingRow {
+    varbinds: Vec<Varbind>,
+    estimated_size: usize,
+    all_end_of_mib: bool,
+}
+
+/// Advances every repeating column in `current_oids` one step forward and
+/// builds the resulting row, mutating `current_oids` in place to the new
+/// positions.
+///
+/// A column that has already reached `EndOfMibView` is left unchanged, since
+/// `Store::next` on a terminal OID keeps returning `None`.
+// Implements: REQ-0024, REQ-0025, REQ-0026, REQ-0066, REQ-0133, REQ-0134
+fn build_repeating_row(store: &Store, current_oids: &mut [Oid]) -> RepeatingRow {
+    let mut row_varbinds: Vec<Varbind> = Vec::with_capacity(current_oids.len());
+    let mut row_estimated_size: usize = 0;
+    let mut all_end_of_mib = true;
+
+    for current_oid in current_oids {
+        let resolved = resolve_get_next_varbind(store, current_oid);
+        if let VarbindValue::Value(_) = &resolved.value {
+            all_end_of_mib = false;
+            *current_oid = resolved.oid.clone();
+        }
+        row_estimated_size += estimated_varbind_wire_size(&resolved);
+        row_varbinds.push(resolved);
+    }
+
+    RepeatingRow {
+        varbinds: row_varbinds,
+        estimated_size: row_estimated_size,
+        all_end_of_mib,
+    }
+}
+
+/// Resolves a single OID to its GETNEXT-style successor varbind: the
+/// lexicographic next OID and value if one exists, or `EndOfMibView` if
+/// `oid` is the last OID in the store.
+///
+/// Shared by the non-repeating section and each row of the repeating section
+/// of `handle_get_bulk`, both of which perform exactly this per-OID step.
+// Implements: REQ-0021, REQ-0024, REQ-0025, REQ-0066
+fn resolve_get_next_varbind(store: &Store, oid: &Oid) -> Varbind {
+    match store.next(oid) {
+        Some((next_oid, next_value)) => Varbind {
+            oid: next_oid.clone(),
+            value: VarbindValue::Value(next_value.clone()),
+        },
+        None => Varbind {
+            oid: oid.clone(),
+            value: VarbindValue::EndOfMibView,
+        },
     }
 }
 
