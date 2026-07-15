@@ -1007,6 +1007,43 @@ mod tests {
         );
     }
 
+    // ── Helpers: minimal noAuthNoPriv V3 message varying msg_id/max_size/user_name ──
+    //
+    // The boundary-value tests that vary a single HeaderData or USM field
+    // (e.g. msgID, maxSize, msgUserName length) reuse this helper; every
+    // other field sits at its engine-ID-discovery default (RFC 3414 §4).
+    // Extracting the encode call keeps the varied value visible at each
+    // call site while removing the ~11-argument boilerplate.
+
+    /// Encodes a minimal noAuthNoPriv `SNMPv3` message, varying only `msg_id`,
+    /// `max_size`, and `user_name`; all other fields are engine-ID-discovery
+    /// defaults (empty engine ID, zero boots/time, no auth/priv params).
+    fn encode_minimal_v3_noauth(msg_id: i32, max_size: i32, user_name: &[u8]) -> Vec<u8> {
+        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
+        let (encoded, _) = encode_v3_message(
+            msg_id,
+            max_size,
+            0x04, // flags_byte (reportable, noAuth, noPriv)
+            3,    // security_model (USM)
+            &[],  // engine_id
+            0,    // engine_boots
+            0,    // engine_time
+            user_name,
+            &[], // auth_params
+            &[], // priv_params
+            &scoped_pdu,
+            false, // not encrypted
+        )
+        .expect("encode_v3_message does not validate msg_id/max_size/user_name");
+        encoded
+    }
+
+    /// Decodes `encoded` and returns the resulting `BerError`'s message,
+    /// panicking if decode unexpectedly succeeds.
+    fn decode_error_message(encoded: &[u8]) -> String {
+        decode_v3_envelope(encoded).unwrap_err().to_string()
+    }
+
     // ── Test 11b: Negative msgID is rejected by decode_v3_envelope ───────────
 
     #[test]
@@ -1015,25 +1052,9 @@ mod tests {
         // §6.4 msgID range [0, 2^31-1]
         // encode_v3_message happily encodes any i32 including -1; the decoder
         // must then reject it because msgID must be non-negative.
-        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
-        let (encoded, _) = encode_v3_message(
-            -1,               // msg_id: negative — invalid per RFC 3412 §6.4
-            MSG_MAX_SIZE_UDP, // max_size
-            0x04,             // flags_byte (reportable, noAuth, noPriv)
-            3,                // security_model (USM)
-            &[],              // engine_id
-            0,                // engine_boots
-            0,                // engine_time
-            &[],              // user_name
-            &[],              // auth_params
-            &[],              // priv_params
-            &scoped_pdu,
-            false, // not encrypted
-        )
-        .expect("encoding a negative msgID must succeed (encoder does not validate)");
+        let encoded = encode_minimal_v3_noauth(-1, MSG_MAX_SIZE_UDP, &[]);
 
-        let ber_error = decode_v3_envelope(&encoded).unwrap_err();
-        let error_message = ber_error.to_string();
+        let error_message = decode_error_message(&encoded);
         assert!(
             error_message.contains("msgID"),
             "error must mention msgID, got: {error_message}"
@@ -1052,25 +1073,9 @@ mod tests {
         // §6.6 msgMaxSize minimum value 484 — encode_v3_message encodes any i32
         // for max_size; the decoder must reject 0 because msgMaxSize must be at
         // least 484.
-        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
-        let (encoded, _) = encode_v3_message(
-            1,    // msg_id
-            0,    // max_size: 0 — invalid per RFC 3412 §6.6
-            0x04, // flags_byte (reportable, noAuth, noPriv)
-            3,    // security_model (USM)
-            &[],  // engine_id
-            0,    // engine_boots
-            0,    // engine_time
-            &[],  // user_name
-            &[],  // auth_params
-            &[],  // priv_params
-            &scoped_pdu,
-            false, // not encrypted
-        )
-        .expect("encoding max_size=0 must succeed (encoder does not validate)");
+        let encoded = encode_minimal_v3_noauth(1, 0, &[]);
 
-        let ber_error = decode_v3_envelope(&encoded).unwrap_err();
-        let error_message = ber_error.to_string();
+        let error_message = decode_error_message(&encoded);
         assert!(
             error_message.contains("msgMaxSize"),
             "error must mention msgMaxSize, got: {error_message}"
@@ -1086,25 +1091,9 @@ mod tests {
         // Verifies: REQ-0119
         // §6.6 msgMaxSize minimum value 484 — 483 is one below the minimum; the
         // decoder must reject it.
-        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
-        let (encoded, _) = encode_v3_message(
-            1,    // msg_id
-            483,  // max_size: 483 — one below the minimum per RFC 3412 §6.6
-            0x04, // flags_byte (reportable, noAuth, noPriv)
-            3,    // security_model (USM)
-            &[],  // engine_id
-            0,    // engine_boots
-            0,    // engine_time
-            &[],  // user_name
-            &[],  // auth_params
-            &[],  // priv_params
-            &scoped_pdu,
-            false, // not encrypted
-        )
-        .expect("encoding max_size=483 must succeed (encoder does not validate)");
+        let encoded = encode_minimal_v3_noauth(1, 483, &[]);
 
-        let ber_error = decode_v3_envelope(&encoded).unwrap_err();
-        let error_message = ber_error.to_string();
+        let error_message = decode_error_message(&encoded);
         assert!(
             error_message.contains("msgMaxSize"),
             "error must mention msgMaxSize, got: {error_message}"
@@ -1121,22 +1110,7 @@ mod tests {
         // §6.6 msgMaxSize minimum value 484 — 484 is the minimum allowed value;
         // the decoder must not reject it
         // for the max_size check (it may succeed fully or fail for other reasons).
-        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
-        let (encoded, _) = encode_v3_message(
-            1,    // msg_id
-            484,  // max_size: exactly the minimum per RFC 3412 §6.6
-            0x04, // flags_byte (reportable, noAuth, noPriv)
-            3,    // security_model (USM)
-            &[],  // engine_id
-            0,    // engine_boots
-            0,    // engine_time
-            &[],  // user_name
-            &[],  // auth_params
-            &[],  // priv_params
-            &scoped_pdu,
-            false, // not encrypted
-        )
-        .expect("encode must succeed");
+        let encoded = encode_minimal_v3_noauth(1, 484, &[]);
 
         // The decode must either succeed completely or fail for a reason other
         // than the max_size check — never with an error mentioning msgMaxSize.
@@ -1293,26 +1267,11 @@ mod tests {
         // A msgUserName exceeding 32 octets must be rejected as a malformed
         // UsmSecurityParameters structure per RFC 3414 §2.4.
         let long_user_name = vec![b'a'; 33];
-        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
-        let (encoded, _) = encode_v3_message(
-            1,
-            MSG_MAX_SIZE_UDP,
-            0x04,
-            3,
-            &[],
-            0,
-            0,
-            &long_user_name,
-            &[],
-            &[],
-            &scoped_pdu,
-            false,
-        )
-        .expect("encoding must succeed regardless of user name length");
+        let encoded = encode_minimal_v3_noauth(1, MSG_MAX_SIZE_UDP, &long_user_name);
 
-        let ber_error = decode_v3_envelope(&encoded).unwrap_err();
+        let error_message = decode_error_message(&encoded);
         assert_eq!(
-            ber_error.to_string(),
+            error_message,
             "BER: msgUserName length 33 exceeds RFC 3414 §2.4 maximum of 32 octets"
         );
     }
@@ -1322,22 +1281,7 @@ mod tests {
         // Verifies: REQ-0132
         // Wire-level constraint is SIZE(0..32): an empty msgUserName is valid and
         // is used in engine-ID discovery probes (RFC 3414 §4).
-        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
-        let (encoded, _) = encode_v3_message(
-            1,
-            MSG_MAX_SIZE_UDP,
-            0x04,
-            3,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &scoped_pdu,
-            false,
-        )
-        .expect("encoding must succeed");
+        let encoded = encode_minimal_v3_noauth(1, MSG_MAX_SIZE_UDP, &[]);
 
         let envelope = decode_v3_envelope(&encoded)
             .expect("empty msgUserName is valid per RFC 3414 §2.4 and must decode");
@@ -1349,22 +1293,7 @@ mod tests {
         // Verifies: REQ-0132
         // A msgUserName of exactly 32 octets is at the upper boundary and must be accepted.
         let boundary_user_name = vec![b'a'; 32];
-        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
-        let (encoded, _) = encode_v3_message(
-            1,
-            MSG_MAX_SIZE_UDP,
-            0x04,
-            3,
-            &[],
-            0,
-            0,
-            &boundary_user_name,
-            &[],
-            &[],
-            &scoped_pdu,
-            false,
-        )
-        .expect("encoding must succeed");
+        let encoded = encode_minimal_v3_noauth(1, MSG_MAX_SIZE_UDP, &boundary_user_name);
 
         let envelope = decode_v3_envelope(&encoded)
             .expect("msgUserName of 32 bytes is at the valid boundary and must decode");
@@ -1378,22 +1307,7 @@ mod tests {
         // Verifies: REQ-0118
         // RFC 3412 §6.4: msgID is in [0, 2^31-1]. The boundary value 0 must be
         // accepted. The mutant `<` -> `<=` in `if msg_id < 0` would reject it.
-        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
-        let (encoded, _) = encode_v3_message(
-            0, // msg_id = 0: lower boundary of the valid range
-            MSG_MAX_SIZE_UDP,
-            0x04,
-            3,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &scoped_pdu,
-            false,
-        )
-        .expect("encoding msg_id 0 must succeed");
+        let encoded = encode_minimal_v3_noauth(0, MSG_MAX_SIZE_UDP, &[]);
 
         let envelope = decode_v3_envelope(&encoded)
             .expect("msg_id 0 is valid per RFC 3412 §6.4 and must decode without error");
