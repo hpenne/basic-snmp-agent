@@ -375,6 +375,13 @@ impl<'a> BerReader<'a> {
             return Ok(usize::from(first_byte));
         }
 
+        self.read_long_form_length(first_byte)
+    }
+
+    /// Decodes the long-form definite-length encoding that follows an initial
+    /// length byte with the high bit set (X.690 §8.1.3.5).
+    // Implements: REQ-0126, REQ-0127
+    fn read_long_form_length(&mut self, first_byte: u8) -> Result<usize, BerError> {
         // X.690 §8.1.3.5: 0xFF is a reserved value and must never appear as the
         // initial length octet.
         if first_byte == 0xFF {
@@ -416,6 +423,11 @@ impl<'a> BerReader<'a> {
         self.position += extra_byte_count;
 
         // Accumulate into usize; reject values that overflow the platform word.
+        // This guard is unreachable in practice: extra_byte_count is capped at
+        // size_of::<usize>() above, so at most usize-width bytes are ever
+        // accumulated here, which cannot overflow usize. It is kept as
+        // defence-in-depth against a future change to the cap above that would
+        // otherwise silently reintroduce an overflow.
         let mut length: usize = 0;
         for &length_byte in length_bytes {
             length = length
@@ -1126,6 +1138,7 @@ mod tests {
 
     #[test]
     fn given_reserved_0xff_length_byte_when_read_length_then_returns_error() {
+        // Verifies: REQ-0126
         // X.690 §8.1.3.5 reserves 0xFF as a length-byte value; it must never be used.
         let reserved = [0xFF];
         let mut reader = BerReader::new(&reserved);
@@ -1138,6 +1151,7 @@ mod tests {
 
     #[test]
     fn given_extra_byte_count_exceeds_usize_width_when_read_length_then_returns_error() {
+        // Verifies: REQ-0127
         // On a 64-bit platform size_of::<usize>() == 8, so 0x89 (9 extra bytes) exceeds it.
         // We use size_of::<usize>() + 1 to remain platform-independent.
         let byte_count = u8::try_from(std::mem::size_of::<usize>() + 1)
@@ -1156,6 +1170,7 @@ mod tests {
 
     #[test]
     fn given_extra_byte_count_equals_usize_width_when_read_length_then_succeeds() {
+        // Verifies: REQ-0127
         // Exactly size_of::<usize>() extra bytes is the maximum accepted; verify it decodes.
         let width = std::mem::size_of::<usize>();
         let mut input = vec![0x80 | u8::try_from(width).unwrap()];
