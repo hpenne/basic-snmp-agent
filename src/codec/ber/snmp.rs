@@ -108,6 +108,29 @@ pub struct DecodedScopedPduFields {
     pub raw_pdu: Vec<u8>,
 }
 
+/// Decoded `HeaderData` SEQUENCE fields (RFC 3412 §6.4, §6.6).
+///
+/// Purely an internal decomposition seam for [`decode_v3_envelope`]; it is
+/// not exposed outside this module.
+#[derive(Debug)]
+struct HeaderData {
+    msg_id: i32,
+    max_size: i32,
+    security_flags: u8,
+    security_model: i32,
+}
+
+/// Decoded USM security parameters together with the `auth_params` offset.
+///
+/// Purely an internal decomposition seam for [`decode_v3_envelope`]; it is
+/// not exposed outside this module.
+#[derive(Debug)]
+struct DecodedUsm {
+    fields: UsmFields,
+    /// See [`V3MessageEnvelope::auth_params_offset`] for the offset invariant.
+    auth_params_offset: Option<usize>,
+}
+
 // ── Decode functions ──────────────────────────────────────────────────────────
 
 /// Decodes an `SNMPv3` message envelope from raw BER bytes.
@@ -128,9 +151,6 @@ pub struct DecodedScopedPduFields {
 /// - `bytes` is not a valid BER-encoded `SNMPv3` SEQUENCE.
 /// - The `msgVersion` field is not 3.
 /// - Any mandatory field is absent, truncated, or has the wrong tag.
-///
-/// # Requirements
-/// Implements: REQ-0118, REQ-0119
 pub fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, BerError> {
     let mut outer_reader = BerReader::new(bytes);
     let mut msg_reader = outer_reader.read_sequence()?;
@@ -142,6 +162,28 @@ pub fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, BerErro
         )));
     }
 
+    let header = decode_header_data(&mut msg_reader)?;
+    let decoded_usm = decode_usm_security_parameters(&mut msg_reader)?;
+    let scoped_data = decode_scoped_pdu_data(&mut msg_reader)?;
+
+    Ok(V3MessageEnvelope {
+        msg_id: header.msg_id,
+        max_size: header.max_size,
+        security_flags: header.security_flags,
+        security_model: header.security_model,
+        usm: decoded_usm.fields,
+        scoped_data,
+        raw_message: bytes,
+        auth_params_offset: decoded_usm.auth_params_offset,
+    })
+}
+
+/// Decodes and validates the `HeaderData` SEQUENCE (RFC 3412 §6.4, §6.6).
+///
+/// `msg_reader` must be positioned at the start of the `HeaderData` element
+/// within the `SNMPv3Message` SEQUENCE.
+// Implements: REQ-0118, REQ-0119
+fn decode_header_data(msg_reader: &mut BerReader<'_>) -> Result<HeaderData, BerError> {
     let mut header_reader = msg_reader.read_sequence()?;
     let msg_id = header_reader.read_integer()?;
     // RFC 3412 §6.4: msgID is in the range [0, 2^31-1].
@@ -167,20 +209,35 @@ pub fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, BerErro
     };
     let security_model = header_reader.read_integer()?;
 
+    Ok(HeaderData {
+        msg_id,
+        max_size,
+        security_flags,
+        security_model,
+    })
+}
+
+/// Decodes the USM security parameters SEQUENCE (RFC 3414 §2.4).
+///
+/// `msg_reader` must be positioned at the `msgSecurityParameters` OCTET
+/// STRING within the `SNMPv3Message` SEQUENCE. See
+/// [`V3MessageEnvelope::auth_params_offset`] for how the offset is derived
+/// and why it is safe against attacker-controlled data.
+// Implements: REQ-0132
+fn decode_usm_security_parameters(msg_reader: &mut BerReader<'_>) -> Result<DecodedUsm, BerError> {
     // Read the security_parameters OCTET STRING and track the absolute offset
     // of its VALUE bytes so we can hand off a correctly-offset USM reader.
-    let usm_raw = msg_reader.read_octet_string()?;
-    // The offset *after* reading usm_raw is the absolute end of the USM VALUE;
-    // subtracting the value length gives the start of the VALUE bytes.
-    let usm_value_offset = msg_reader.offset() - usm_raw.len();
+    let usm_params_bytes = msg_reader.read_octet_string()?;
+    // The offset *after* reading usm_params_bytes is the absolute end of the
+    // USM VALUE; subtracting the value length gives the start of the VALUE bytes.
+    let usm_value_offset = msg_reader.offset() - usm_params_bytes.len();
 
-    let mut usm_outer_reader = BerReader::new_with_offset(usm_raw, usm_value_offset);
+    let mut usm_outer_reader = BerReader::new_with_offset(usm_params_bytes, usm_value_offset);
     let mut usm_reader = usm_outer_reader.read_sequence()?;
     let engine_id = usm_reader.read_octet_string()?.to_vec();
     let engine_boots = usm_reader.read_integer()?;
     let engine_time = usm_reader.read_integer()?;
     let user_name = usm_reader.read_octet_string()?.to_vec();
-    // Implements: REQ-0132
     if user_name.len() > MSG_USER_NAME_MAX_LENGTH {
         return Err(BerError::new(format!(
             "BER: msgUserName length {} exceeds RFC 3414 §2.4 maximum of {MSG_USER_NAME_MAX_LENGTH} octets",
@@ -197,37 +254,8 @@ pub fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, BerErro
     };
     let priv_params = usm_reader.read_octet_string()?.to_vec();
 
-    // Peek at the tag of the next element to decide whether we have a plaintext
-    // ScopedPDU (SEQUENCE, 0x30) or encrypted ciphertext (OCTET STRING, 0x04).
-    let scoped_data_tag = msg_reader.peek_tag()?;
-    let scoped_data = if scoped_data_tag == TAG_SEQUENCE {
-        let mut scoped_reader = msg_reader.read_sequence()?;
-        let context_engine_id = scoped_reader.read_octet_string()?.to_vec();
-        let context_name = scoped_reader.read_octet_string()?.to_vec();
-        // Everything remaining in the ScopedPdu after the two OCTET STRINGs is
-        // the raw TLV of the context-tagged inner PDU.
-        let raw_pdu = scoped_reader.remaining().to_vec();
-        ScopedData::Plaintext {
-            context_engine_id,
-            context_name,
-            raw_pdu,
-        }
-    } else if scoped_data_tag == TAG_OCTET_STRING {
-        let ciphertext = msg_reader.read_octet_string()?.to_vec();
-        ScopedData::Encrypted(ciphertext)
-    } else {
-        return Err(BerError::new(format!(
-            "BER: expected ScopedPduData as SEQUENCE (0x30) or OCTET STRING (0x04), \
-             got tag 0x{scoped_data_tag:02X}"
-        )));
-    };
-
-    Ok(V3MessageEnvelope {
-        msg_id,
-        max_size,
-        security_flags,
-        security_model,
-        usm: UsmFields {
+    Ok(DecodedUsm {
+        fields: UsmFields {
             engine_id,
             engine_boots,
             engine_time,
@@ -235,10 +263,40 @@ pub fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, BerErro
             auth_params,
             priv_params,
         },
-        scoped_data,
-        raw_message: bytes,
         auth_params_offset,
     })
+}
+
+/// Decodes `ScopedPduData` (RFC 3412 §6.4) — either a plaintext `ScopedPDU`
+/// SEQUENCE or an encrypted OCTET STRING ciphertext.
+///
+/// `msg_reader` must be positioned at the `ScopedPduData` CHOICE within the
+/// `SNMPv3Message` SEQUENCE.
+fn decode_scoped_pdu_data(msg_reader: &mut BerReader<'_>) -> Result<ScopedData, BerError> {
+    // Peek at the tag of the next element to decide whether we have a plaintext
+    // ScopedPDU (SEQUENCE, 0x30) or encrypted ciphertext (OCTET STRING, 0x04).
+    let scoped_data_tag = msg_reader.peek_tag()?;
+    if scoped_data_tag == TAG_SEQUENCE {
+        let mut scoped_reader = msg_reader.read_sequence()?;
+        let context_engine_id = scoped_reader.read_octet_string()?.to_vec();
+        let context_name = scoped_reader.read_octet_string()?.to_vec();
+        // Everything remaining in the ScopedPdu after the two OCTET STRINGs is
+        // the raw TLV of the context-tagged inner PDU.
+        let raw_pdu = scoped_reader.remaining().to_vec();
+        return Ok(ScopedData::Plaintext {
+            context_engine_id,
+            context_name,
+            raw_pdu,
+        });
+    }
+    if scoped_data_tag == TAG_OCTET_STRING {
+        let ciphertext = msg_reader.read_octet_string()?.to_vec();
+        return Ok(ScopedData::Encrypted(ciphertext));
+    }
+    Err(BerError::new(format!(
+        "BER: expected ScopedPduData as SEQUENCE (0x30) or OCTET STRING (0x04), \
+         got tag 0x{scoped_data_tag:02X}"
+    )))
 }
 
 /// Decodes a `ScopedPdu` from raw BER bytes (used after AES decryption).
@@ -430,11 +488,11 @@ fn find_auth_params_offset(
     // entire SEQUENCE TLV (tag + length + value) and returns a sub-reader
     // that we discard since we only need to advance past it.
     let _ = msg_reader.read_sequence()?;
-    let usm_raw = msg_reader.read_octet_string()?;
+    let usm_params_bytes = msg_reader.read_octet_string()?;
     // Absolute offset of the USM VALUE bytes (first byte of the USM SEQUENCE).
-    let usm_value_offset = msg_reader.offset() - usm_raw.len();
+    let usm_value_offset = msg_reader.offset() - usm_params_bytes.len();
 
-    let mut usm_outer_reader = BerReader::new_with_offset(usm_raw, usm_value_offset);
+    let mut usm_outer_reader = BerReader::new_with_offset(usm_params_bytes, usm_value_offset);
     let mut usm_reader = usm_outer_reader.read_sequence()?;
     // Skip each USM field ahead of auth_params: read_octet_string / read_integer
     // advances the reader past the entire TLV; the returned slice is discarded.
