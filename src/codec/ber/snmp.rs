@@ -108,6 +108,29 @@ pub struct DecodedScopedPduFields {
     pub raw_pdu: Vec<u8>,
 }
 
+/// Decoded `HeaderData` SEQUENCE fields (RFC 3412 §6.4, §6.6).
+///
+/// Purely an internal decomposition seam for [`decode_v3_envelope`]; it is
+/// not exposed outside this module.
+#[derive(Debug)]
+struct HeaderData {
+    msg_id: i32,
+    max_size: i32,
+    security_flags: u8,
+    security_model: i32,
+}
+
+/// Decoded USM security parameters together with the `auth_params` offset.
+///
+/// Purely an internal decomposition seam for [`decode_v3_envelope`]; it is
+/// not exposed outside this module.
+#[derive(Debug)]
+struct DecodedUsm {
+    fields: UsmFields,
+    /// See [`V3MessageEnvelope::auth_params_offset`] for the offset invariant.
+    auth_params_offset: Option<usize>,
+}
+
 // ── Decode functions ──────────────────────────────────────────────────────────
 
 /// Decodes an `SNMPv3` message envelope from raw BER bytes.
@@ -128,9 +151,6 @@ pub struct DecodedScopedPduFields {
 /// - `bytes` is not a valid BER-encoded `SNMPv3` SEQUENCE.
 /// - The `msgVersion` field is not 3.
 /// - Any mandatory field is absent, truncated, or has the wrong tag.
-///
-/// # Requirements
-/// Implements: REQ-0118, REQ-0119
 pub fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, BerError> {
     let mut outer_reader = BerReader::new(bytes);
     let mut msg_reader = outer_reader.read_sequence()?;
@@ -142,6 +162,28 @@ pub fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, BerErro
         )));
     }
 
+    let header = decode_header_data(&mut msg_reader)?;
+    let decoded_usm = decode_usm_security_parameters(&mut msg_reader)?;
+    let scoped_data = decode_scoped_pdu_data(&mut msg_reader)?;
+
+    Ok(V3MessageEnvelope {
+        msg_id: header.msg_id,
+        max_size: header.max_size,
+        security_flags: header.security_flags,
+        security_model: header.security_model,
+        usm: decoded_usm.fields,
+        scoped_data,
+        raw_message: bytes,
+        auth_params_offset: decoded_usm.auth_params_offset,
+    })
+}
+
+/// Decodes and validates the `HeaderData` SEQUENCE (RFC 3412 §6.4, §6.6).
+///
+/// `msg_reader` must be positioned at the start of the `HeaderData` element
+/// within the `SNMPv3Message` SEQUENCE.
+// Implements: REQ-0118, REQ-0119
+fn decode_header_data(msg_reader: &mut BerReader<'_>) -> Result<HeaderData, BerError> {
     let mut header_reader = msg_reader.read_sequence()?;
     let msg_id = header_reader.read_integer()?;
     // RFC 3412 §6.4: msgID is in the range [0, 2^31-1].
@@ -167,20 +209,35 @@ pub fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, BerErro
     };
     let security_model = header_reader.read_integer()?;
 
+    Ok(HeaderData {
+        msg_id,
+        max_size,
+        security_flags,
+        security_model,
+    })
+}
+
+/// Decodes the USM security parameters SEQUENCE (RFC 3414 §2.4).
+///
+/// `msg_reader` must be positioned at the `msgSecurityParameters` OCTET
+/// STRING within the `SNMPv3Message` SEQUENCE. See
+/// [`V3MessageEnvelope::auth_params_offset`] for how the offset is derived
+/// and why it is safe against attacker-controlled data.
+// Implements: REQ-0132
+fn decode_usm_security_parameters(msg_reader: &mut BerReader<'_>) -> Result<DecodedUsm, BerError> {
     // Read the security_parameters OCTET STRING and track the absolute offset
     // of its VALUE bytes so we can hand off a correctly-offset USM reader.
-    let usm_raw = msg_reader.read_octet_string()?;
-    // The offset *after* reading usm_raw is the absolute end of the USM VALUE;
-    // subtracting the value length gives the start of the VALUE bytes.
-    let usm_value_offset = msg_reader.offset() - usm_raw.len();
+    let usm_params_bytes = msg_reader.read_octet_string()?;
+    // The offset *after* reading usm_params_bytes is the absolute end of the
+    // USM VALUE; subtracting the value length gives the start of the VALUE bytes.
+    let usm_value_offset = msg_reader.offset() - usm_params_bytes.len();
 
-    let mut usm_outer_reader = BerReader::new_with_offset(usm_raw, usm_value_offset);
+    let mut usm_outer_reader = BerReader::new_with_offset(usm_params_bytes, usm_value_offset);
     let mut usm_reader = usm_outer_reader.read_sequence()?;
     let engine_id = usm_reader.read_octet_string()?.to_vec();
     let engine_boots = usm_reader.read_integer()?;
     let engine_time = usm_reader.read_integer()?;
     let user_name = usm_reader.read_octet_string()?.to_vec();
-    // Implements: REQ-0132
     if user_name.len() > MSG_USER_NAME_MAX_LENGTH {
         return Err(BerError::new(format!(
             "BER: msgUserName length {} exceeds RFC 3414 §2.4 maximum of {MSG_USER_NAME_MAX_LENGTH} octets",
@@ -197,37 +254,8 @@ pub fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, BerErro
     };
     let priv_params = usm_reader.read_octet_string()?.to_vec();
 
-    // Peek at the tag of the next element to decide whether we have a plaintext
-    // ScopedPDU (SEQUENCE, 0x30) or encrypted ciphertext (OCTET STRING, 0x04).
-    let scoped_data_tag = msg_reader.peek_tag()?;
-    let scoped_data = if scoped_data_tag == TAG_SEQUENCE {
-        let mut scoped_reader = msg_reader.read_sequence()?;
-        let context_engine_id = scoped_reader.read_octet_string()?.to_vec();
-        let context_name = scoped_reader.read_octet_string()?.to_vec();
-        // Everything remaining in the ScopedPdu after the two OCTET STRINGs is
-        // the raw TLV of the context-tagged inner PDU.
-        let raw_pdu = scoped_reader.remaining().to_vec();
-        ScopedData::Plaintext {
-            context_engine_id,
-            context_name,
-            raw_pdu,
-        }
-    } else if scoped_data_tag == TAG_OCTET_STRING {
-        let ciphertext = msg_reader.read_octet_string()?.to_vec();
-        ScopedData::Encrypted(ciphertext)
-    } else {
-        return Err(BerError::new(format!(
-            "BER: expected ScopedPduData as SEQUENCE (0x30) or OCTET STRING (0x04), \
-             got tag 0x{scoped_data_tag:02X}"
-        )));
-    };
-
-    Ok(V3MessageEnvelope {
-        msg_id,
-        max_size,
-        security_flags,
-        security_model,
-        usm: UsmFields {
+    Ok(DecodedUsm {
+        fields: UsmFields {
             engine_id,
             engine_boots,
             engine_time,
@@ -235,10 +263,40 @@ pub fn decode_v3_envelope(bytes: &[u8]) -> Result<V3MessageEnvelope<'_>, BerErro
             auth_params,
             priv_params,
         },
-        scoped_data,
-        raw_message: bytes,
         auth_params_offset,
     })
+}
+
+/// Decodes `ScopedPduData` (RFC 3412 §6.4) — either a plaintext `ScopedPDU`
+/// SEQUENCE or an encrypted OCTET STRING ciphertext.
+///
+/// `msg_reader` must be positioned at the `ScopedPduData` CHOICE within the
+/// `SNMPv3Message` SEQUENCE.
+fn decode_scoped_pdu_data(msg_reader: &mut BerReader<'_>) -> Result<ScopedData, BerError> {
+    // Peek at the tag of the next element to decide whether we have a plaintext
+    // ScopedPDU (SEQUENCE, 0x30) or encrypted ciphertext (OCTET STRING, 0x04).
+    let scoped_data_tag = msg_reader.peek_tag()?;
+    if scoped_data_tag == TAG_SEQUENCE {
+        let mut scoped_reader = msg_reader.read_sequence()?;
+        let context_engine_id = scoped_reader.read_octet_string()?.to_vec();
+        let context_name = scoped_reader.read_octet_string()?.to_vec();
+        // Everything remaining in the ScopedPdu after the two OCTET STRINGs is
+        // the raw TLV of the context-tagged inner PDU.
+        let raw_pdu = scoped_reader.remaining().to_vec();
+        return Ok(ScopedData::Plaintext {
+            context_engine_id,
+            context_name,
+            raw_pdu,
+        });
+    }
+    if scoped_data_tag == TAG_OCTET_STRING {
+        let ciphertext = msg_reader.read_octet_string()?.to_vec();
+        return Ok(ScopedData::Encrypted(ciphertext));
+    }
+    Err(BerError::new(format!(
+        "BER: expected ScopedPduData as SEQUENCE (0x30) or OCTET STRING (0x04), \
+         got tag 0x{scoped_data_tag:02X}"
+    )))
 }
 
 /// Decodes a `ScopedPdu` from raw BER bytes (used after AES decryption).
@@ -277,9 +335,7 @@ pub fn encode_scoped_pdu(
     inner.write_octet_string(context_name);
     inner.write_raw(raw_pdu_bytes);
 
-    let mut outer = BerWriter::new();
-    outer.write_sequence(inner.as_bytes());
-    outer.into_vec()
+    wrap_in_outer_sequence(inner.as_bytes())
 }
 
 /// Encodes USM security parameters as a BER SEQUENCE (RFC 3414 §2.4).
@@ -299,9 +355,7 @@ pub fn encode_usm_params(
     inner.write_octet_string(auth_params);
     inner.write_octet_string(priv_params);
 
-    let mut outer = BerWriter::new();
-    outer.write_sequence(inner.as_bytes());
-    outer.into_vec()
+    wrap_in_outer_sequence(inner.as_bytes())
 }
 
 /// Encodes a `HeaderData` SEQUENCE (RFC 3412 §6).
@@ -318,9 +372,7 @@ pub fn encode_header_data(
     inner.write_octet_string(&[flags_byte]);
     inner.write_integer(security_model);
 
-    let mut outer = BerWriter::new();
-    outer.write_sequence(inner.as_bytes());
-    outer.into_vec()
+    wrap_in_outer_sequence(inner.as_bytes())
 }
 
 /// Encodes a complete `SNMPv3` message.
@@ -380,9 +432,7 @@ pub fn encode_v3_message(
         msg_inner.write_raw(scoped_pdu_or_ciphertext);
     }
 
-    let mut outer = BerWriter::new();
-    outer.write_sequence(msg_inner.as_bytes());
-    let encoded_message = outer.into_vec();
+    let encoded_message = wrap_in_outer_sequence(msg_inner.as_bytes());
 
     let auth_params_offset = find_auth_params_offset(&encoded_message, auth_params.len())?;
     Ok((encoded_message, auth_params_offset))
@@ -400,8 +450,18 @@ pub fn encode_v2c_message(community: &[u8], raw_pdu_tlv: &[u8]) -> Vec<u8> {
     inner.write_octet_string(community);
     inner.write_raw(raw_pdu_tlv);
 
+    wrap_in_outer_sequence(inner.as_bytes())
+}
+
+/// Wraps `inner_bytes` (the TLVs already written into an inner [`BerWriter`])
+/// in an outer BER SEQUENCE and returns the encoded bytes.
+///
+/// Shared by every message/PDU-envelope encoder in this module, all of which
+/// follow the same "populate an inner writer, then wrap it in one outer
+/// SEQUENCE" shape.
+fn wrap_in_outer_sequence(inner_bytes: &[u8]) -> Vec<u8> {
     let mut outer = BerWriter::new();
-    outer.write_sequence(inner.as_bytes());
+    outer.write_sequence(inner_bytes);
     outer.into_vec()
 }
 
@@ -430,11 +490,11 @@ fn find_auth_params_offset(
     // entire SEQUENCE TLV (tag + length + value) and returns a sub-reader
     // that we discard since we only need to advance past it.
     let _ = msg_reader.read_sequence()?;
-    let usm_raw = msg_reader.read_octet_string()?;
+    let usm_params_bytes = msg_reader.read_octet_string()?;
     // Absolute offset of the USM VALUE bytes (first byte of the USM SEQUENCE).
-    let usm_value_offset = msg_reader.offset() - usm_raw.len();
+    let usm_value_offset = msg_reader.offset() - usm_params_bytes.len();
 
-    let mut usm_outer_reader = BerReader::new_with_offset(usm_raw, usm_value_offset);
+    let mut usm_outer_reader = BerReader::new_with_offset(usm_params_bytes, usm_value_offset);
     let mut usm_reader = usm_outer_reader.read_sequence()?;
     // Skip each USM field ahead of auth_params: read_octet_string / read_integer
     // advances the reader past the entire TLV; the returned slice is discarded.
@@ -949,6 +1009,43 @@ mod tests {
         );
     }
 
+    // ── Helpers: minimal noAuthNoPriv V3 message varying msg_id/max_size/user_name ──
+    //
+    // The boundary-value tests that vary a single HeaderData or USM field
+    // (e.g. msgID, maxSize, msgUserName length) reuse this helper; every
+    // other field sits at its engine-ID-discovery default (RFC 3414 §4).
+    // Extracting the encode call keeps the varied value visible at each
+    // call site while removing the ~11-argument boilerplate.
+
+    /// Encodes a minimal noAuthNoPriv `SNMPv3` message, varying only `msg_id`,
+    /// `max_size`, and `user_name`; all other fields are engine-ID-discovery
+    /// defaults (empty engine ID, zero boots/time, no auth/priv params).
+    fn encode_minimal_v3_noauth(msg_id: i32, max_size: i32, user_name: &[u8]) -> Vec<u8> {
+        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
+        let (encoded, _) = encode_v3_message(
+            msg_id,
+            max_size,
+            0x04, // flags_byte (reportable, noAuth, noPriv)
+            3,    // security_model (USM)
+            &[],  // engine_id
+            0,    // engine_boots
+            0,    // engine_time
+            user_name,
+            &[], // auth_params
+            &[], // priv_params
+            &scoped_pdu,
+            false, // not encrypted
+        )
+        .expect("encode_v3_message does not validate msg_id/max_size/user_name");
+        encoded
+    }
+
+    /// Decodes `encoded` and returns the resulting `BerError`'s message,
+    /// panicking if decode unexpectedly succeeds.
+    fn decode_error_message(encoded: &[u8]) -> String {
+        decode_v3_envelope(encoded).unwrap_err().to_string()
+    }
+
     // ── Test 11b: Negative msgID is rejected by decode_v3_envelope ───────────
 
     #[test]
@@ -957,25 +1054,9 @@ mod tests {
         // §6.4 msgID range [0, 2^31-1]
         // encode_v3_message happily encodes any i32 including -1; the decoder
         // must then reject it because msgID must be non-negative.
-        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
-        let (encoded, _) = encode_v3_message(
-            -1,               // msg_id: negative — invalid per RFC 3412 §6.4
-            MSG_MAX_SIZE_UDP, // max_size
-            0x04,             // flags_byte (reportable, noAuth, noPriv)
-            3,                // security_model (USM)
-            &[],              // engine_id
-            0,                // engine_boots
-            0,                // engine_time
-            &[],              // user_name
-            &[],              // auth_params
-            &[],              // priv_params
-            &scoped_pdu,
-            false, // not encrypted
-        )
-        .expect("encoding a negative msgID must succeed (encoder does not validate)");
+        let encoded = encode_minimal_v3_noauth(-1, MSG_MAX_SIZE_UDP, &[]);
 
-        let ber_error = decode_v3_envelope(&encoded).unwrap_err();
-        let error_message = ber_error.to_string();
+        let error_message = decode_error_message(&encoded);
         assert!(
             error_message.contains("msgID"),
             "error must mention msgID, got: {error_message}"
@@ -994,25 +1075,9 @@ mod tests {
         // §6.6 msgMaxSize minimum value 484 — encode_v3_message encodes any i32
         // for max_size; the decoder must reject 0 because msgMaxSize must be at
         // least 484.
-        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
-        let (encoded, _) = encode_v3_message(
-            1,    // msg_id
-            0,    // max_size: 0 — invalid per RFC 3412 §6.6
-            0x04, // flags_byte (reportable, noAuth, noPriv)
-            3,    // security_model (USM)
-            &[],  // engine_id
-            0,    // engine_boots
-            0,    // engine_time
-            &[],  // user_name
-            &[],  // auth_params
-            &[],  // priv_params
-            &scoped_pdu,
-            false, // not encrypted
-        )
-        .expect("encoding max_size=0 must succeed (encoder does not validate)");
+        let encoded = encode_minimal_v3_noauth(1, 0, &[]);
 
-        let ber_error = decode_v3_envelope(&encoded).unwrap_err();
-        let error_message = ber_error.to_string();
+        let error_message = decode_error_message(&encoded);
         assert!(
             error_message.contains("msgMaxSize"),
             "error must mention msgMaxSize, got: {error_message}"
@@ -1028,25 +1093,9 @@ mod tests {
         // Verifies: REQ-0119
         // §6.6 msgMaxSize minimum value 484 — 483 is one below the minimum; the
         // decoder must reject it.
-        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
-        let (encoded, _) = encode_v3_message(
-            1,    // msg_id
-            483,  // max_size: 483 — one below the minimum per RFC 3412 §6.6
-            0x04, // flags_byte (reportable, noAuth, noPriv)
-            3,    // security_model (USM)
-            &[],  // engine_id
-            0,    // engine_boots
-            0,    // engine_time
-            &[],  // user_name
-            &[],  // auth_params
-            &[],  // priv_params
-            &scoped_pdu,
-            false, // not encrypted
-        )
-        .expect("encoding max_size=483 must succeed (encoder does not validate)");
+        let encoded = encode_minimal_v3_noauth(1, 483, &[]);
 
-        let ber_error = decode_v3_envelope(&encoded).unwrap_err();
-        let error_message = ber_error.to_string();
+        let error_message = decode_error_message(&encoded);
         assert!(
             error_message.contains("msgMaxSize"),
             "error must mention msgMaxSize, got: {error_message}"
@@ -1063,22 +1112,7 @@ mod tests {
         // §6.6 msgMaxSize minimum value 484 — 484 is the minimum allowed value;
         // the decoder must not reject it
         // for the max_size check (it may succeed fully or fail for other reasons).
-        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
-        let (encoded, _) = encode_v3_message(
-            1,    // msg_id
-            484,  // max_size: exactly the minimum per RFC 3412 §6.6
-            0x04, // flags_byte (reportable, noAuth, noPriv)
-            3,    // security_model (USM)
-            &[],  // engine_id
-            0,    // engine_boots
-            0,    // engine_time
-            &[],  // user_name
-            &[],  // auth_params
-            &[],  // priv_params
-            &scoped_pdu,
-            false, // not encrypted
-        )
-        .expect("encode must succeed");
+        let encoded = encode_minimal_v3_noauth(1, 484, &[]);
 
         // The decode must either succeed completely or fail for a reason other
         // than the max_size check — never with an error mentioning msgMaxSize.
@@ -1105,9 +1139,7 @@ mod tests {
         inner.write_octet_string(&[0x04, 0x00]); // msgFlags: 2 bytes — invalid
         inner.write_integer(3); // securityModel
 
-        let mut header_outer = BerWriter::new();
-        header_outer.write_sequence(inner.as_bytes());
-        let header_bytes = header_outer.into_vec();
+        let header_bytes = wrap_in_outer_sequence(inner.as_bytes());
 
         let usm_bytes = encode_usm_params(&[], 0, 0, &[], &[], &[]);
         let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
@@ -1118,9 +1150,7 @@ mod tests {
         msg_inner.write_octet_string(&usm_bytes);
         msg_inner.write_raw(&scoped_pdu);
 
-        let mut outer = BerWriter::new();
-        outer.write_sequence(msg_inner.as_bytes());
-        let bad_message = outer.into_vec();
+        let bad_message = wrap_in_outer_sequence(msg_inner.as_bytes());
 
         let ber_error = decode_v3_envelope(&bad_message).unwrap_err();
         assert!(
@@ -1235,26 +1265,11 @@ mod tests {
         // A msgUserName exceeding 32 octets must be rejected as a malformed
         // UsmSecurityParameters structure per RFC 3414 §2.4.
         let long_user_name = vec![b'a'; 33];
-        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
-        let (encoded, _) = encode_v3_message(
-            1,
-            MSG_MAX_SIZE_UDP,
-            0x04,
-            3,
-            &[],
-            0,
-            0,
-            &long_user_name,
-            &[],
-            &[],
-            &scoped_pdu,
-            false,
-        )
-        .expect("encoding must succeed regardless of user name length");
+        let encoded = encode_minimal_v3_noauth(1, MSG_MAX_SIZE_UDP, &long_user_name);
 
-        let ber_error = decode_v3_envelope(&encoded).unwrap_err();
+        let error_message = decode_error_message(&encoded);
         assert_eq!(
-            ber_error.to_string(),
+            error_message,
             "BER: msgUserName length 33 exceeds RFC 3414 §2.4 maximum of 32 octets"
         );
     }
@@ -1264,22 +1279,7 @@ mod tests {
         // Verifies: REQ-0132
         // Wire-level constraint is SIZE(0..32): an empty msgUserName is valid and
         // is used in engine-ID discovery probes (RFC 3414 §4).
-        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
-        let (encoded, _) = encode_v3_message(
-            1,
-            MSG_MAX_SIZE_UDP,
-            0x04,
-            3,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &scoped_pdu,
-            false,
-        )
-        .expect("encoding must succeed");
+        let encoded = encode_minimal_v3_noauth(1, MSG_MAX_SIZE_UDP, &[]);
 
         let envelope = decode_v3_envelope(&encoded)
             .expect("empty msgUserName is valid per RFC 3414 §2.4 and must decode");
@@ -1291,22 +1291,7 @@ mod tests {
         // Verifies: REQ-0132
         // A msgUserName of exactly 32 octets is at the upper boundary and must be accepted.
         let boundary_user_name = vec![b'a'; 32];
-        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
-        let (encoded, _) = encode_v3_message(
-            1,
-            MSG_MAX_SIZE_UDP,
-            0x04,
-            3,
-            &[],
-            0,
-            0,
-            &boundary_user_name,
-            &[],
-            &[],
-            &scoped_pdu,
-            false,
-        )
-        .expect("encoding must succeed");
+        let encoded = encode_minimal_v3_noauth(1, MSG_MAX_SIZE_UDP, &boundary_user_name);
 
         let envelope = decode_v3_envelope(&encoded)
             .expect("msgUserName of 32 bytes is at the valid boundary and must decode");
@@ -1320,22 +1305,7 @@ mod tests {
         // Verifies: REQ-0118
         // RFC 3412 §6.4: msgID is in [0, 2^31-1]. The boundary value 0 must be
         // accepted. The mutant `<` -> `<=` in `if msg_id < 0` would reject it.
-        let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
-        let (encoded, _) = encode_v3_message(
-            0, // msg_id = 0: lower boundary of the valid range
-            MSG_MAX_SIZE_UDP,
-            0x04,
-            3,
-            &[],
-            0,
-            0,
-            &[],
-            &[],
-            &[],
-            &scoped_pdu,
-            false,
-        )
-        .expect("encoding msg_id 0 must succeed");
+        let encoded = encode_minimal_v3_noauth(0, MSG_MAX_SIZE_UDP, &[]);
 
         let envelope = decode_v3_envelope(&encoded)
             .expect("msg_id 0 is valid per RFC 3412 §6.4 and must decode without error");
