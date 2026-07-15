@@ -765,16 +765,18 @@ fn decode_signed_i32(integer_bytes: &[u8], error_offset: usize) -> Result<i32, B
     Ok(i32::from_be_bytes(word))
 }
 
-/// Shared unsigned INTEGER decoder for up to `max_width` significant bytes.
+/// Shared unsigned INTEGER decoder for up to `N` significant bytes.
 ///
 /// Non-minimal encodings (redundant leading zero bytes) are accepted. BER permits
 /// them; only DER requires minimal encoding. SNMP uses BER, so interoperability
 /// demands that we tolerate any number of leading zeroes from peer implementations.
 ///
+/// `N` is a compile-time byte-width bound (4 or 8): a type-level parameter that
+/// cannot be accidentally swapped with the runtime `error_offset` argument.
+///
 /// Returns the decoded value as `u64`; callers narrow to the target type.
-fn decode_unsigned(
+fn decode_unsigned<const N: usize>(
     integer_bytes: &[u8],
-    max_width: usize,
     error_offset: usize,
 ) -> Result<u64, BerError> {
     match integer_bytes.first() {
@@ -805,26 +807,26 @@ fn decode_unsigned(
     } else {
         integer_bytes
     };
-    if significant.len() > max_width {
+    if significant.len() > N {
         return Err(BerError::new(format!(
             "BER: INTEGER value too large for u{} ({} bytes) at offset {error_offset}",
-            max_width * 8,
+            N * 8,
             significant.len()
         )));
     }
     let mut word = [0_u8; 8];
     let start = 8 - significant.len();
     word.get_mut(start..)
-        .expect("significant.len() <= max_width <= 8 so start is within word bounds")
+        .expect("significant.len() <= N <= 8 so start is within word bounds")
         .copy_from_slice(significant);
     Ok(u64::from_be_bytes(word))
 }
 
 /// Decodes a BER-encoded unsigned INTEGER into a `u32`.
 fn decode_unsigned_u32(integer_bytes: &[u8], error_offset: usize) -> Result<u32, BerError> {
-    let value = decode_unsigned(integer_bytes, 4, error_offset)?;
-    // decode_unsigned with max_width=4 bounds the result to <= u32::MAX; the map_err
-    // is a defensive fallback that is never reached in practice.
+    let value = decode_unsigned::<4>(integer_bytes, error_offset)?;
+    // decode_unsigned::<4> bounds the result to <= u32::MAX; the map_err is a
+    // defensive fallback that is never reached in practice.
     u32::try_from(value).map_err(|_| {
         BerError::new(format!(
             "BER: decoded unsigned value {value} exceeds u32 range at offset {error_offset}"
@@ -834,7 +836,7 @@ fn decode_unsigned_u32(integer_bytes: &[u8], error_offset: usize) -> Result<u32,
 
 /// Decodes a BER-encoded unsigned INTEGER into a `u64`.
 fn decode_unsigned_u64(integer_bytes: &[u8], error_offset: usize) -> Result<u64, BerError> {
-    decode_unsigned(integer_bytes, 8, error_offset)
+    decode_unsigned::<8>(integer_bytes, error_offset)
 }
 
 // ----- OID encoding/decoding helpers ----------------------------------------
@@ -1960,7 +1962,7 @@ mod tests {
     #[test]
     fn given_single_zero_byte_when_decoded_as_unsigned_then_returns_zero() {
         // Verifies: REQ-0021
-        let result = decode_unsigned(&[0x00], 4, 0).expect("single zero byte should decode");
+        let result = decode_unsigned::<4>(&[0x00], 0).expect("single zero byte should decode");
         assert_eq!(result, 0);
     }
 
@@ -1968,7 +1970,7 @@ mod tests {
     fn given_two_byte_unsigned_with_sign_padding_when_decoded_then_strips_leading_zero() {
         // Verifies: REQ-0021
         // [0x00, 0x80] has leading 0x00 sign byte; significant bytes = [0x80] → value 128
-        let result = decode_unsigned(&[0x00, 0x80], 4, 0)
+        let result = decode_unsigned::<4>(&[0x00, 0x80], 0)
             .expect("two-byte unsigned with sign padding should decode");
         assert_eq!(result, 128);
     }
@@ -1994,7 +1996,7 @@ mod tests {
         // Without the None match arm in decode_unsigned, an empty slice would skip
         // the error guard and return Ok(0) instead of an error.
         let ber_error =
-            decode_unsigned(&[], 4, 0).expect_err("empty byte slice must not decode as unsigned");
+            decode_unsigned::<4>(&[], 0).expect_err("empty byte slice must not decode as unsigned");
         assert!(
             ber_error.to_string().contains("zero length"),
             "error must report zero length, got: {ber_error}"
@@ -2005,30 +2007,45 @@ mod tests {
     fn given_multiple_redundant_leading_zeroes_when_decoded_as_unsigned_then_strips_all() {
         // Verifies: REQ-0021
         // [0x00, 0x00, 0x00, 0x01] → 1 (three redundant sign bytes)
-        let result = decode_unsigned(&[0x00, 0x00, 0x00, 0x01], 4, 0)
+        let result = decode_unsigned::<4>(&[0x00, 0x00, 0x00, 0x01], 0)
             .expect("three leading zeroes before 0x01 should decode");
         assert_eq!(result, 1);
 
         // [0x00, 0x00, 0x00, 0x00, 0x00, 0x80] → 128 (five leading zeroes, one significant byte)
-        let result = decode_unsigned(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x80], 4, 0)
+        let result = decode_unsigned::<4>(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x80], 0)
             .expect("five leading zeroes before 0x80 should decode");
         assert_eq!(result, 128);
 
         // [0x00, 0x00, 0x00, 0x00, 0x00] → 0 (all zeroes; last byte preserved as value)
-        let result = decode_unsigned(&[0x00, 0x00, 0x00, 0x00, 0x00], 4, 0)
+        let result = decode_unsigned::<4>(&[0x00, 0x00, 0x00, 0x00, 0x00], 0)
             .expect("all-zero bytes should decode as 0");
         assert_eq!(result, 0);
 
         // [0x00, 0x00, 0x01, 0x02, 0x03, 0x04]: two leading zeroes then four significant
-        // bytes; must succeed for max_width=4.
-        let result = decode_unsigned(&[0x00, 0x00, 0x01, 0x02, 0x03, 0x04], 4, 0)
+        // bytes; must succeed for N=4.
+        let result = decode_unsigned::<4>(&[0x00, 0x00, 0x01, 0x02, 0x03, 0x04], 0)
             .expect("two leading zeroes before four significant bytes should decode");
         assert_eq!(result, 0x0102_0304);
 
         // [0x00, 0x01, 0x02, 0x03, 0x04, 0x05]: one leading zero then five significant
-        // bytes; must fail for max_width=4.
-        decode_unsigned(&[0x00, 0x01, 0x02, 0x03, 0x04, 0x05], 4, 0)
-            .expect_err("five significant bytes must exceed max_width=4");
+        // bytes; must fail for N=4.
+        decode_unsigned::<4>(&[0x00, 0x01, 0x02, 0x03, 0x04, 0x05], 0)
+            .expect_err("five significant bytes must exceed N=4");
+    }
+
+    #[test]
+    fn given_unsigned_too_large_for_u64_when_decoded_then_returns_error() {
+        // Verifies: REQ-0021
+        // 9 significant bytes exceed the N=8 bound for u64; confirms the "u{N*8}"
+        // message derives "u64" (not "u32") and that the boundary is significant.len() > 8.
+        const NINE_SIGNIFICANT_BYTES: &[u8] =
+            &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09];
+        let ber_error = decode_unsigned::<8>(NINE_SIGNIFICANT_BYTES, 0)
+            .expect_err("nine significant bytes must exceed N=8");
+        assert_eq!(
+            ber_error.to_string(),
+            "BER: INTEGER value too large for u64 (9 bytes) at offset 0"
+        );
     }
 
     #[test]
