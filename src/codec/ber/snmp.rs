@@ -335,9 +335,7 @@ pub fn encode_scoped_pdu(
     inner.write_octet_string(context_name);
     inner.write_raw(raw_pdu_bytes);
 
-    let mut outer = BerWriter::new();
-    outer.write_sequence(inner.as_bytes());
-    outer.into_vec()
+    wrap_in_outer_sequence(inner.as_bytes())
 }
 
 /// Encodes USM security parameters as a BER SEQUENCE (RFC 3414 §2.4).
@@ -357,9 +355,7 @@ pub fn encode_usm_params(
     inner.write_octet_string(auth_params);
     inner.write_octet_string(priv_params);
 
-    let mut outer = BerWriter::new();
-    outer.write_sequence(inner.as_bytes());
-    outer.into_vec()
+    wrap_in_outer_sequence(inner.as_bytes())
 }
 
 /// Encodes a `HeaderData` SEQUENCE (RFC 3412 §6).
@@ -376,9 +372,7 @@ pub fn encode_header_data(
     inner.write_octet_string(&[flags_byte]);
     inner.write_integer(security_model);
 
-    let mut outer = BerWriter::new();
-    outer.write_sequence(inner.as_bytes());
-    outer.into_vec()
+    wrap_in_outer_sequence(inner.as_bytes())
 }
 
 /// Encodes a complete `SNMPv3` message.
@@ -438,9 +432,7 @@ pub fn encode_v3_message(
         msg_inner.write_raw(scoped_pdu_or_ciphertext);
     }
 
-    let mut outer = BerWriter::new();
-    outer.write_sequence(msg_inner.as_bytes());
-    let encoded_message = outer.into_vec();
+    let encoded_message = wrap_in_outer_sequence(msg_inner.as_bytes());
 
     let auth_params_offset = find_auth_params_offset(&encoded_message, auth_params.len())?;
     Ok((encoded_message, auth_params_offset))
@@ -458,8 +450,18 @@ pub fn encode_v2c_message(community: &[u8], raw_pdu_tlv: &[u8]) -> Vec<u8> {
     inner.write_octet_string(community);
     inner.write_raw(raw_pdu_tlv);
 
+    wrap_in_outer_sequence(inner.as_bytes())
+}
+
+/// Wraps `inner_bytes` (the TLVs already written into an inner [`BerWriter`])
+/// in an outer BER SEQUENCE and returns the encoded bytes.
+///
+/// Shared by every message/PDU-envelope encoder in this module, all of which
+/// follow the same "populate an inner writer, then wrap it in one outer
+/// SEQUENCE" shape.
+fn wrap_in_outer_sequence(inner_bytes: &[u8]) -> Vec<u8> {
     let mut outer = BerWriter::new();
-    outer.write_sequence(inner.as_bytes());
+    outer.write_sequence(inner_bytes);
     outer.into_vec()
 }
 
@@ -1137,9 +1139,7 @@ mod tests {
         inner.write_octet_string(&[0x04, 0x00]); // msgFlags: 2 bytes — invalid
         inner.write_integer(3); // securityModel
 
-        let mut header_outer = BerWriter::new();
-        header_outer.write_sequence(inner.as_bytes());
-        let header_bytes = header_outer.into_vec();
+        let header_bytes = wrap_in_outer_sequence(inner.as_bytes());
 
         let usm_bytes = encode_usm_params(&[], 0, 0, &[], &[], &[]);
         let scoped_pdu = encode_scoped_pdu(&[], &[], &[0xA0, 0x00]);
@@ -1150,9 +1150,7 @@ mod tests {
         msg_inner.write_octet_string(&usm_bytes);
         msg_inner.write_raw(&scoped_pdu);
 
-        let mut outer = BerWriter::new();
-        outer.write_sequence(msg_inner.as_bytes());
-        let bad_message = outer.into_vec();
+        let bad_message = wrap_in_outer_sequence(msg_inner.as_bytes());
 
         let ber_error = decode_v3_envelope(&bad_message).unwrap_err();
         assert!(
